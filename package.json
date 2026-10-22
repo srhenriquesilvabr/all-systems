@@ -1,0 +1,24 @@
+{
+  "name": "all-systems",
+  "private": true,
+  "packageManager": "pnpm@10.18.0",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "check:boundaries": "node scripts/check-boundaries.mjs",
+    "infra:up": "docker compose up -d",
+    "infra:down": "docker compose down",
+    "db:generate": "turbo run build --filter=@all/db... && pnpm --filter @all/db generate",
+    "db:migrate": "turbo run build --filter=@all/db && pnpm --filter @all/db migrate",
+    "db:seed": "turbo run build --filter=@all/api && pnpm --filter @all/api cli seed-demo"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.4",
+    "typescript": "^5.8.3"
+  }
+}

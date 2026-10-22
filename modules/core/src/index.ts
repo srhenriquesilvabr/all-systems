@@ -1,0 +1,18 @@
+export { CoreModule, configureHttp, type CoreModuleOptions } from './core.module';
+export { CoreConfig } from './config';
+export { TenantDb } from './db/tenant-db';
+export { AuditService, type AuditEntry } from './audit/audit.service';
+export { MailService, type MailMessage } from './mail/mail.service';
+export { TenancyService, type CreateTenantInput } from './tenancy/tenancy.service';
+export { ModuleHooks, type ModuleLifecycle } from './tenancy/module-hooks';
+export { OutboxService, OutboxHandlers, OutboxRelay, type OutboxEvent } from './events/outbox';
+export { CustomersService, type CustomerInput, type TimelineEntry } from './customers/customers.service';
+export { CustomerDataRegistry, type CustomerDataProvider } from './customers/customer-data.registry';
+export { FinanceService, type SourcedEntryInput } from './finance/finance.service';
+export { ZodPipe } from './common/zod.pipe';
+export { nextSequence } from './common/sequence';
+export { toCents, centsToDecimal, centsToNumber } from './common/money';
+export { coreManifests, OWNER_ROLE } from './manifests';
+export * as coreSchema from './db/schema';
+export * as customersSchema from './customers/schema';
+export * as financeSchema from './finance/schema';

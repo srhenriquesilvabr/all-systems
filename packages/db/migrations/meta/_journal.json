@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1792626361155,
+      "tag": "0000_app_user_grants",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792626371921,
+      "tag": "0001_core_and_laundry",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792627890647,
+      "tag": "0002_customers_finance_orders",
+      "breakpoints": true
+    }
+  ]
+}

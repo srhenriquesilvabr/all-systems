@@ -1,0 +1,16 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": ["node"]
+  },
+  "include": ["src"],
+  "exclude": ["src/web"],
+  "references": [
+    { "path": "../../../packages/db" },
+    { "path": "../../../packages/module-sdk" },
+    { "path": "../../core" },
+    { "path": "../notifications" }
+  ]
+}

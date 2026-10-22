@@ -1,0 +1,33 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "src"
+  ],
+  "references": [
+    {
+      "path": "../../packages/db"
+    },
+    {
+      "path": "../../packages/module-sdk"
+    },
+    {
+      "path": "../../modules/core"
+    },
+    {
+      "path": "../../modules/shared/notifications"
+    },
+    {
+      "path": "../../modules/shared/service-orders"
+    },
+    {
+      "path": "../../modules/verticals/laundry"
+    }
+  ]
+}

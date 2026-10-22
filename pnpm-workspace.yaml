@@ -1,0 +1,11 @@
+packages:
+  - apps/*
+  - packages/*
+  - modules/core
+  - modules/shared/*
+  - modules/integrations/*
+  - modules/verticals/*
+
+onlyBuiltDependencies:
+  - '@swc/core'
+  - esbuild

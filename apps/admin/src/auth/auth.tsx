@@ -1,0 +1,106 @@
+import { api, configureApi, SessionContext, type SessionInfo } from '@all/module-sdk/web';
+import { useQueryClient } from '@tanstack/react-query';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+
+type Status = 'loading' | 'anonymous' | 'authenticated';
+
+export interface TenantOption {
+  id: string;
+  name: string;
+}
+
+type LoginResponse =
+  | { accessToken: string; tenant: TenantOption }
+  | { selectTenant: true; selectionToken: string; tenants: TenantOption[] };
+
+export type LoginResult = { kind: 'done' } | { kind: 'select-tenant'; selectionToken: string; tenants: TenantOption[] };
+
+interface AuthApi {
+  status: Status;
+  login(email: string, password: string): Promise<LoginResult>;
+  selectTenant(selectionToken: string, tenantId: string): Promise<void>;
+  switchTenant(tenantId: string): Promise<void>;
+  logout(): Promise<void>;
+}
+
+const AuthContext = createContext<AuthApi | null>(null);
+
+/**
+ * Sessão do admin. O access token fica só em memória; ao recarregar a página, a sessão é
+ * restaurada pelo cookie de refresh (httpOnly, inacessível ao JavaScript).
+ */
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
+  const token = useRef<string | null>(null);
+  const [status, setStatus] = useState<Status>('loading');
+  const [session, setSession] = useState<SessionInfo | null>(null);
+
+  const reset = useCallback(() => {
+    token.current = null;
+    setSession(null);
+    setStatus('anonymous');
+    queryClient.clear();
+  }, [queryClient]);
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await api<{ accessToken: string }>('/auth/refresh', { method: 'POST' });
+      token.current = res.accessToken;
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const start = useCallback(
+    async (accessToken: string) => {
+      token.current = accessToken;
+      queryClient.clear();
+      setSession(await api<SessionInfo>('/me'));
+      setStatus('authenticated');
+    },
+    [queryClient],
+  );
+
+  useEffect(() => {
+    configureApi({ getToken: () => token.current, refresh, onUnauthorized: reset });
+    refresh().then((ok) => (ok && token.current ? start(token.current).catch(reset) : reset()));
+  }, [refresh, reset, start]);
+
+  const value = useMemo<AuthApi>(
+    () => ({
+      status,
+      async login(email, password) {
+        const res = await api<LoginResponse>('/auth/login', { method: 'POST', body: { email, password } });
+        if ('selectTenant' in res) return { kind: 'select-tenant', selectionToken: res.selectionToken, tenants: res.tenants };
+        await start(res.accessToken);
+        return { kind: 'done' };
+      },
+      async selectTenant(selectionToken, tenantId) {
+        const res = await api<{ accessToken: string }>('/auth/select-tenant', { method: 'POST', body: { selectionToken, tenantId } });
+        await start(res.accessToken);
+      },
+      async switchTenant(tenantId) {
+        const res = await api<{ accessToken: string }>('/auth/switch-tenant', { method: 'POST', body: { tenantId } });
+        await start(res.accessToken);
+      },
+      async logout() {
+        await api('/auth/logout', { method: 'POST' }).catch(() => {});
+        reset();
+      },
+    }),
+    [status, start, reset],
+  );
+
+  return (
+    <AuthContext.Provider value={value}>
+      <SessionContext.Provider value={session}>{children}</SessionContext.Provider>
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth(): AuthApi {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth fora do AuthProvider');
+  return ctx;
+}
