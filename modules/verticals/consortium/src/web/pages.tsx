@@ -1,22 +1,16 @@
 import { api, ApiError, CustomerSearch, formatDate, formatMoney, parseMoney, useCan, useSession, type CustomerOption } from '@all/module-sdk/web';
-import { Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th, Textarea } from '@all/ui';
+import { Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
-import { assetTypeLabel, assetTypes, quotaStatuses, quotaStatusLabel, type Assembly, type Plan, type Quota, type QuotasSummary, type QuotaStatus } from '../contracts';
-
-const key = ['consortium'] as const;
+import { assetTypeLabel, assetTypes, quotaStatuses, quotaStatusLabel, type Plan, type Quota, type QuotasSummary } from '../contracts';
+import { key, pct, quotaTone, useTeam } from './common';
 const thisMonth = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date()).slice(0, 7);
 const monthBounds = (ym: string) => {
   const [y, m] = ym.split('-').map(Number) as [number, number];
   return { from: `${ym}-01`, to: new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10) };
 };
 
-function useTeam() {
-  return useQuery({ queryKey: [...key, 'team'], queryFn: () => api<{ id: string; name: string }[]>('/users/team'), staleTime: 5 * 60_000 });
-}
-const quotaTone: Record<QuotaStatus, 'brand' | 'success' | 'warning' | 'danger' | 'neutral'> = { proposal: 'warning', active: 'brand', contemplated: 'success', rejected: 'danger', cancelled: 'neutral' };
-const pct = (n: number) => `${n.toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%`;
 
 /** Simulador: compara planos das administradoras pela parcela e pelo custo total. */
 export function SimulatorPage() {
@@ -296,7 +290,11 @@ function QuotasTable({ quotas, showCustomer = true }: { quotas: Quota[]; showCus
         <tbody>
           {quotas.map((q) => (
             <tr key={q.id}>
-              <Td className="tabular-nums">{q.number}</Td>
+              <Td className="tabular-nums">
+                <Link to={`/consorcio/cotas/${q.id}`} className="text-brand-700 hover:underline">
+                  {q.number}
+                </Link>
+              </Td>
               {showCustomer && (
                 <Td>
                   <Link to={`/clientes/${q.customer.id}`} className="text-brand-700 hover:underline">
@@ -378,116 +376,6 @@ function SellerModal({ quota, onClose }: { quota: Quota; onClose: () => void }) 
           </Select>
         )}
       </Field>
-    </Modal>
-  );
-}
-
-export function AssembliesPage() {
-  const canManage = useCan('consortium.manage');
-  const list = useQuery({ queryKey: [...key, 'assemblies'], queryFn: () => api<Assembly[]>('/consortium/assemblies') });
-  const [adding, setAdding] = useState(false);
-  return (
-    <>
-      <PageHeader title="Assembleias" description="Lance o resultado de cada assembleia: as cotas da carteira contempladas são marcadas e o cliente é avisado." actions={canManage && <Button onClick={() => setAdding(true)}>Lançar resultado</Button>} />
-      {list.isPending ? (
-        <Spinner />
-      ) : list.isError ? (
-        <Alert>{list.error.message}</Alert>
-      ) : list.data.length === 0 ? (
-        <Card>
-          <EmptyState title="Nenhuma assembleia lançada" />
-        </Card>
-      ) : (
-        <div className="space-y-3">
-          {list.data.map((a) => (
-            <Card key={a.id} className="p-4 text-sm">
-              <div className="flex flex-wrap justify-between gap-2">
-                <span className="font-medium">
-                  Grupo {a.groupCode} · {formatDate(a.heldOn)}
-                </span>
-                <span className="text-fg-muted">
-                  Sorteio: {a.drawn.join(', ') || '—'} · Lance: {a.bids.map((b) => `${b.quotaNumber} (${pct(b.percent)})`).join(', ') || '—'}
-                </span>
-              </div>
-              {a.ourWinners.length > 0 && (
-                <ul className="mt-2 space-y-1">
-                  {a.ourWinners.map((w) => (
-                    <li key={w.quotaId}>
-                      <Badge tone="success">Contemplada</Badge> {w.customer} — cota {w.quotaNumber} ({w.type === 'draw' ? 'sorteio' : 'lance'})
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {a.notes && <p className="mt-2 text-fg-muted">{a.notes}</p>}
-            </Card>
-          ))}
-        </div>
-      )}
-      {adding && <AssemblyModal onClose={() => setAdding(false)} />}
-    </>
-  );
-}
-
-function AssemblyModal({ onClose }: { onClose: () => void }) {
-  const queryClient = useQueryClient();
-  const [form, setForm] = useState({ groupCode: '', heldOn: new Date().toISOString().slice(0, 10), drawn: '', bids: '', notes: '' });
-  const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
-  const split = (s: string) => s.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean);
-  const save = useMutation({
-    mutationFn: () =>
-      api('/consortium/assemblies', {
-        method: 'POST',
-        body: {
-          groupCode: form.groupCode,
-          heldOn: form.heldOn,
-          drawn: split(form.drawn),
-          // "045:32,5" = cota 045 com lance de 32,5%.
-          bids: split(form.bids).map((b) => {
-            const [quotaNumber, percent] = b.split(':');
-            return { quotaNumber, percent: Number((percent ?? '0').replace(',', '.')) };
-          }),
-          notes: form.notes || null,
-        },
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: key });
-      onClose();
-    },
-  });
-  function submit(e: FormEvent) {
-    e.preventDefault();
-    save.mutate();
-  }
-  return (
-    <Modal
-      open
-      title="Resultado da assembleia"
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose}>
-            Cancelar
-          </Button>
-          <Button type="submit" form="cons-assembly-form" loading={save.isPending}>
-            Lançar
-          </Button>
-        </>
-      }
-    >
-      <form id="cons-assembly-form" onSubmit={submit} className="space-y-4">
-        {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao lançar'}</Alert>}
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Grupo">{(id) => <Input id={id} required value={form.groupCode} onChange={(e) => set({ groupCode: e.target.value.toUpperCase() })} autoFocus />}</Field>
-          <Field label="Data">{(id) => <Input id={id} type="date" required value={form.heldOn} onChange={(e) => set({ heldOn: e.target.value })} />}</Field>
-        </div>
-        <Field label="Cotas sorteadas" hint="Separe por vírgula. Ex.: 012, 145">
-          {(id) => <Input id={id} value={form.drawn} onChange={(e) => set({ drawn: e.target.value })} />}
-        </Field>
-        <Field label="Lances vencedores" hint="cota:percentual, separados por vírgula. Ex.: 045:32,5, 210:28">
-          {(id) => <Input id={id} value={form.bids} onChange={(e) => set({ bids: e.target.value })} />}
-        </Field>
-        <Field label="Observações">{(id) => <Textarea id={id} rows={2} value={form.notes} onChange={(e) => set({ notes: e.target.value })} />}</Field>
-      </form>
     </Modal>
   );
 }

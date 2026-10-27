@@ -127,6 +127,13 @@
       "when": 1793136325454,
       "tag": "0017_vendedor_agenda_datas",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1793138680670,
+      "tag": "0018_fluxos_caixa_logistica_locacao_consorcio_rh",
+      "breakpoints": true
     }
   ]
 }

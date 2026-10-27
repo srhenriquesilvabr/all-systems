@@ -18,6 +18,8 @@ import {
   type StockMoveInput,
 } from '../contracts';
 import { salesItems, salesPayments, salesProducts, salesSales, salesStockMoves } from '../db/schema';
+import { dayEnd, dayStart, localDay } from './dates';
+import { RegistersService } from './registers.service';
 
 const MODULE = 'shared.sales';
 const SOURCE = 'sale';
@@ -26,10 +28,6 @@ type ProductRow = typeof salesProducts.$inferSelect;
 type MoveKind = (typeof salesStockMoves.$inferInsert)['kind'];
 
 const badRequest = (code: string, message: string) => new BadRequestException({ code, message });
-/** Dia (YYYY-MM-DD) de um momento no fuso do negócio. */
-const localDay = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(d);
-const dayStart = (date: string) => sql`(${date}::date)::timestamp at time zone 'America/Sao_Paulo'`;
-const dayEnd = (date: string) => sql`((${date}::date + 1)::timestamp at time zone 'America/Sao_Paulo')`;
 
 @Injectable()
 export class SalesService {
@@ -39,6 +37,7 @@ export class SalesService {
     private readonly customers: CustomersService,
     private readonly settings: ModuleSettingsService,
     private readonly audit: AuditService,
+    private readonly registers: RegistersService,
   ) {}
 
   // ---- Produtos -------------------------------------------------------------------------------
@@ -137,6 +136,11 @@ export class SalesService {
       const customer = input.customerId ? await this.customers.findInTx(tx, input.customerId) : undefined;
       if (input.customerId && (!customer || customer.anonymizedAt)) throw badRequest('CUSTOMER_NOT_FOUND', 'Cliente não encontrado');
 
+      // Venda anterior (migração, caixa sem sistema): relatórios e financeiro usam a data informada.
+      const soldAt = input.soldAt ?? new Date();
+      // Venda no caixa entra na sessão aberta do terminal (a sessão fica travada contra o fechamento até o commit).
+      const registerSessionId = await this.registers.sessionForSaleInTx(tx, { registerId: input.registerId ?? null, required: settings.requireRegisterSession, soldAt });
+
       // Mesma mercadoria em duas linhas vira uma só.
       const merged = new Map<string, number>();
       for (const item of input.items) merged.set(item.productId, Math.round(((merged.get(item.productId) ?? 0) + item.quantity) * 1000) / 1000);
@@ -161,8 +165,6 @@ export class SalesService {
       if (change > cash) throw badRequest('PAYMENT_OVER', 'Só pagamento em dinheiro pode ter troco');
       if (input.payments.some((p) => p.method === 'on_account') && !customer) throw badRequest('CUSTOMER_REQUIRED', 'Venda fiado precisa de cliente');
 
-      // Venda anterior (migração, caixa sem sistema): relatórios e financeiro usam a data informada.
-      const soldAt = input.soldAt ?? new Date();
       const number = await nextSequence(tx, tenantId, 'sale');
       const [sale] = await tx
         .insert(salesSales)
@@ -176,6 +178,7 @@ export class SalesService {
           change: centsToDecimal(change),
           notes: input.notes ?? null,
           sellerId: userId ?? null,
+          registerSessionId,
           soldAt,
         })
         .returning();
@@ -391,6 +394,7 @@ export class SalesService {
         notes: s.notes,
         sellerName,
         cancelReason: s.cancelReason,
+        registerSessionId: s.registerSessionId,
         soldAt: s.soldAt.toISOString(),
         createdAt: s.createdAt.toISOString(),
       }));

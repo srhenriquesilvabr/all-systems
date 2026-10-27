@@ -17,6 +17,7 @@ import {
 } from '../contracts';
 import { laundryGarmentTypes, laundryItemDetails, laundryPieceEvents, laundryServices } from '../db/schema';
 import { LaundryCatalogService } from './catalog.service';
+import { LaundryLogisticsService } from './logistics.service';
 import { LAUNDRY_WORKFLOW, laundryWorkflow } from './workflow';
 
 const PHOTO_OWNER = 'laundry_item';
@@ -44,14 +45,18 @@ export class LaundryOrdersService implements OnModuleInit {
     private readonly settings: ModuleSettingsService,
     private readonly audit: AuditService,
     private readonly customerData: CustomerDataRegistry,
+    private readonly logistics: LaundryLogisticsService,
   ) {}
 
   onModuleInit() {
     this.workflows.register(laundryWorkflow);
     this.customerData.register({
       moduleKey: 'laundry',
-      export: async (tx, customerId) =>
-        (await this.piecesWhere(tx, eq(soOrders.customerId, customerId))).map(({ photos, ...p }) => ({ ...p, photos: photos.length })),
+      export: async (tx, customerId) => ({
+        pieces: (await this.piecesWhere(tx, eq(soOrders.customerId, customerId))).map(({ photos, ...p }) => ({ ...p, photos: photos.length })),
+        logistics: await this.logistics.exportFor(tx, customerId),
+      }),
+      anonymize: (tx, customerId) => this.logistics.anonymizeFor(tx, customerId),
     });
   }
 
@@ -126,7 +131,8 @@ export class LaundryOrdersService implements OnModuleInit {
           statusChangedAt: receivedAt,
         })),
       );
-      await this.audit.log(tx, { action: 'laundry.order.created', entity: 'service_order', entityId: order.id, data: { pieces: items.length } });
+      if (input.pickupJobId) await this.logistics.linkPickupInTx(tx, input.pickupJobId, { id: order.id, number: order.number, customerId: order.customer.id });
+      await this.audit.log(tx, { action: 'laundry.order.created', entity: 'service_order', entityId: order.id, data: { pieces: items.length, pickupJobId: input.pickupJobId ?? undefined } });
       return this.detailInTx(tx, order.id);
     });
   }

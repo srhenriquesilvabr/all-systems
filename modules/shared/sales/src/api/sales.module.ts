@@ -3,6 +3,8 @@ import { ModuleRoute, RequireAnyPermission, RequirePermission } from '@all/modul
 import { Body, Controller, Get, Module, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { z } from 'zod';
 import { cancelSaleInput, productInput, saleInput, stockMoveInput, type ProductInput, type SaleInput, type StockMoveInput } from '../contracts';
+import { RegistersController } from './registers.controller';
+import { RegistersService } from './registers.service';
 import { SalesService } from './sales.service';
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -82,5 +84,6 @@ export class SalesController {
   }
 }
 
-@Module({ controllers: [SalesController], providers: [SalesService], exports: [SalesService] })
+// RegistersController primeiro: as rotas são registradas nesta ordem e `GET /sales/:id` pegaria `/sales/registers`.
+@Module({ controllers: [RegistersController, SalesController], providers: [SalesService, RegistersService], exports: [SalesService, RegistersService] })
 export class SalesModule {}

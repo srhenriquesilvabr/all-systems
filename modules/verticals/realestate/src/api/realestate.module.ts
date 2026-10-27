@@ -44,7 +44,8 @@ import {
   type Property,
   type PropertyInput,
 } from '../contracts';
-import { reDeals, reProperties } from '../db/schema';
+import { reDeals, reLeases, reProperties } from '../db/schema';
+import { LeasesController, LeasesService } from './leases';
 
 const MODULE = 'real_estate';
 const FILE_OWNER = 're_property';
@@ -124,6 +125,11 @@ export class RealEstateService implements OnModuleInit {
       const owner = await this.customers.findInTx(tx, input.ownerId);
       if (!owner || owner.anonymizedAt) throw badRequest('OWNER_NOT_FOUND', 'Proprietário não encontrado');
       const values = propertyRow(input);
+      // Com contrato de locação ativo, a situação acompanha o contrato.
+      if (id) {
+        const [lease] = await tx.select({ id: reLeases.id }).from(reLeases).where(and(eq(reLeases.propertyId, id), eq(reLeases.status, 'active')));
+        if (lease) values.status = 'rented';
+      }
       let rowId = id;
       if (id) {
         const [row] = await tx.update(reProperties).set(values).where(eq(reProperties.id, id)).returning({ id: reProperties.id });
@@ -627,5 +633,5 @@ export class RealEstateController {
   }
 }
 
-@Module({ imports: [BankingModule, NotificationsModule], controllers: [RealEstateController], providers: [RealEstateService] })
+@Module({ imports: [BankingModule, NotificationsModule], controllers: [RealEstateController, LeasesController], providers: [RealEstateService, LeasesService] })
 export class RealEstateModule {}

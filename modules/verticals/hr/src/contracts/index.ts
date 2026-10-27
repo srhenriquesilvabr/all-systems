@@ -1,9 +1,15 @@
 import { z } from 'zod';
-import type { AcquisitionPeriod, Payslip } from './payroll';
+import { leaveTypes, type AcquisitionPeriod, type LeaveType, type Payslip } from './payroll';
+import { noticeOptions, noticeTypes, terminationTypes, type TerminationStatement, type TerminationType } from './termination';
 
 export * from './payroll';
+export * from './termination';
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data inválida');
+const money = (max = 1_000_000) => z.coerce.number().min(0).max(max).multipleOf(0.01);
+
+export const employeeCategories = ['employee', 'apprentice'] as const;
+export const employeeCategoryLabel = { employee: 'Empregado', apprentice: 'Jovem aprendiz' } as const;
 
 export const employeeInput = z.object({
   name: z.string().trim().min(3).max(150),
@@ -21,6 +27,10 @@ export const employeeInput = z.object({
   salary: z.coerce.number().positive().max(1_000_000).multipleOf(0.01),
   weeklyHours: z.coerce.number().int().min(1).max(44).default(44),
   dependents: z.coerce.number().int().min(0).max(20).default(0),
+  /** Aprendiz: FGTS de 2% (Lei 8.036/90, art. 15 §7). */
+  category: z.enum(employeeCategories).default('employee'),
+  /** Fim do contrato de experiência (até 90 dias, CLT art. 445 parágrafo único). */
+  experienceEnd: isoDate.nullish(),
   status: z.enum(['active', 'on_leave', 'terminated']).default('active'),
   terminationDate: isoDate.nullish(),
   pixKey: z.string().trim().max(120).nullish(),
@@ -34,31 +44,77 @@ export interface Employee extends EmployeeInput {
   periods: AcquisitionPeriod[];
   vacationBalance: number;
   overdueVacation: boolean;
+  /** Rescisão registrada (termo de rescisão). */
+  termination: { id: string; type: TerminationType; terminationDate: string } | null;
 }
 
 export const payrollItemUpdate = z.object({
   daysWorked: z.coerce.number().int().min(0).max(30),
   overtime50Hours: z.coerce.number().min(0).max(200),
   overtime100Hours: z.coerce.number().min(0).max(200),
-  otherEarnings: z.coerce.number().min(0).max(1_000_000).multipleOf(0.01),
-  otherDeductions: z.coerce.number().min(0).max(1_000_000).multipleOf(0.01),
+  /** Comissões e variáveis: geram DSR e entram nas médias. */
+  commissions: money().default(0),
+  otherEarnings: money(),
+  otherDeductions: money(),
+  /** Faltas injustificadas (dias). */
+  absences: z.coerce.number().int().min(0).max(30).default(0),
+  /** Repousos perdidos pelas faltas (um por semana com falta injustificada). */
+  dsrLostDays: z.coerce.number().int().min(0).max(10).default(0),
   notes: z.string().trim().max(500).nullish(),
 });
 export type PayrollItemUpdate = z.infer<typeof payrollItemUpdate>;
 
+/** Ajuste de um colaborador na folha de 13º: avos e média das variáveis. */
+export const thirteenthItemUpdate = z.object({
+  avos: z.coerce.number().int().min(0).max(12),
+  variableAverage: money(),
+  notes: z.string().trim().max(500).nullish(),
+});
+export type ThirteenthItemUpdate = z.infer<typeof thirteenthItemUpdate>;
+
+export const payrollTypes = ['monthly', 'thirteenth_1', 'thirteenth_2', 'termination'] as const;
+export type PayrollType = (typeof payrollTypes)[number];
+export const payrollTypeLabel: Record<PayrollType, string> = {
+  monthly: 'Folha mensal',
+  thirteenth_1: '13º — 1ª parcela',
+  thirteenth_2: '13º — 2ª parcela',
+  termination: 'Rescisões',
+};
+
+export const payrollCreate = z.object({
+  competence: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Competência no formato AAAA-MM'),
+  /** Feriados em dias úteis no mês (para o DSR). */
+  holidays: z.coerce.number().int().min(0).max(10).default(0),
+});
+export type PayrollCreate = z.infer<typeof payrollCreate>;
+
+export const thirteenthCreate = z.object({
+  year: z.coerce.number().int().min(2000).max(2100),
+  installment: z.coerce.number().pipe(z.union([z.literal(1), z.literal(2)])),
+});
+export type ThirteenthCreate = z.infer<typeof thirteenthCreate>;
+
+export const payrollRecalculate = z.object({ holidays: z.coerce.number().int().min(0).max(10).optional() });
+
 export interface PayrollItem extends PayrollItemUpdate, Payslip {
   id: string;
-  employee: { id: string; name: string; cpf: string; position: string; admissionDate: string; dependents: number };
+  commissions: number;
+  employee: { id: string; name: string; cpf: string; position: string; admissionDate: string; dependents: number; category: 'employee' | 'apprentice' };
   salary: number;
+  /** Rescisão (só na folha de rescisões). */
+  terminationId?: string | null;
 }
 
 export interface Payroll {
   id: string;
   competence: string;
+  type: PayrollType;
   status: 'draft' | 'closed';
   closedAt: string | null;
   tablesLabel: string;
-  totals: { gross: number; inss: number; irrf: number; net: number; fgts: number; employees: number };
+  holidays: number;
+  calendar: { days: number; sundays: number; restDays: number; workingDays: number };
+  totals: { gross: number; inss: number; irrf: number; net: number; fgts: number; employees: number; maternity: number };
   items: PayrollItem[];
 }
 
@@ -80,8 +136,63 @@ export interface Vacation {
   endOn: string;
   days: number;
   soldDays: number;
-  status: 'scheduled' | 'cancelled';
+  /** "taken" (gozadas) é derivado: marcadas cujo fim já passou. */
+  status: 'scheduled' | 'taken' | 'cancelled';
   pay: { vacation: number; allowance: number };
   /** Pagamento até 2 dias antes do início (CLT, art. 145). */
   payBy: string;
+}
+
+export const leaveInput = z
+  .object({
+    employeeId: z.string().uuid(),
+    type: z.enum(leaveTypes),
+    startOn: isoDate,
+    /** Maternidade: vazio = 120 dias. */
+    endOn: isoDate.nullish(),
+    notes: z.string().trim().max(500).nullish(),
+  })
+  .refine((v) => v.type === 'maternity' || !!v.endOn, { message: 'Informe o fim do afastamento', path: ['endOn'] })
+  .refine((v) => !v.endOn || v.endOn >= v.startOn, { message: 'O fim deve ser depois do início', path: ['endOn'] });
+export type LeaveInput = z.infer<typeof leaveInput>;
+
+export interface Leave {
+  id: string;
+  type: LeaveType;
+  startOn: string;
+  endOn: string;
+  days: number;
+  /** Dias pagos pela empresa (doença: até o 15º; maternidade: todos, compensados no INSS). */
+  companyDays: number;
+  /** Dias pagos pelo INSS (doença a partir do 16º). */
+  inssDays: number;
+  notes: string | null;
+}
+
+export const terminationInput = z
+  .object({
+    type: z.enum(terminationTypes),
+    /** Último dia trabalhado (data de afastamento). */
+    terminationDate: isoDate,
+    notice: z.enum(noticeTypes),
+    /** Último salário (vazio = o do cadastro). */
+    salary: z.coerce.number().positive().max(1_000_000).multipleOf(0.01).optional(),
+    /** Média mensal das variáveis (vazio = calculada pelas folhas fechadas dos últimos 12 meses). */
+    variableAverage: money().optional(),
+    /** Saldo do FGTS pelo extrato (vazio = estimado pelas folhas registradas). */
+    fgtsBalance: money(100_000_000).optional(),
+    otherEarnings: money().default(0),
+    otherDeductions: money().default(0),
+    notes: z.string().trim().max(500).nullish(),
+  })
+  .refine((v) => noticeOptions[v.type].includes(v.notice), { message: 'Forma de aviso prévio não se aplica a este tipo de rescisão', path: ['notice'] });
+export type TerminationInput = z.infer<typeof terminationInput>;
+
+export interface TerminationDetail extends TerminationStatement {
+  id: string | null;
+  employee: { id: string; name: string; cpf: string; position: string; category: 'employee' | 'apprentice'; pixKey: string | null };
+  /** Férias marcadas depois da saída: canceladas ao confirmar (viram férias indenizadas). */
+  cancelledVacations: { id: string; startOn: string; days: number }[];
+  notes: string | null;
+  createdAt: string | null;
 }

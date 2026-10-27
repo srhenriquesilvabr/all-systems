@@ -143,3 +143,5 @@ export interface DealsSummary {
 
 export const addressOf = (p: { street: string; number?: string | null; district: string; city: string; state: string }) =>
   `${p.street}${p.number ? `, ${p.number}` : ''} — ${p.district}, ${p.city}/${p.state}`;
+
+export * from './leases';

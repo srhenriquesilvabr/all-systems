@@ -1,6 +1,7 @@
 import { defineWebModule } from '@all/module-sdk/web';
 import { PosPage } from './PosPage';
 import { ProductsPage } from './ProductsPage';
+import { RegisterSessionPage, RegistersPage } from './RegistersPage';
 import { SalesPage } from './SalesPage';
 
 export const salesWeb = defineWebModule({
@@ -8,6 +9,8 @@ export const salesWeb = defineWebModule({
   routes: [
     { path: 'pdv', permission: 'shared.sales.sell', Component: PosPage },
     { path: 'vendas', permission: 'shared.sales.read', Component: SalesPage },
+    { path: 'caixas', permission: 'shared.sales.register.history', Component: RegistersPage },
+    { path: 'caixas/:id', permission: 'shared.sales.register.history', Component: RegisterSessionPage },
     { path: 'produtos', permission: 'shared.sales.products', Component: ProductsPage },
   ],
 });

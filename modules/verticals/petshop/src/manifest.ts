@@ -30,7 +30,7 @@ export const petshopManifest = defineModule({
     {
       key: 'petshop.reception',
       label: 'Recepção',
-      permissions: [agenda.read, agenda.write, agenda.status, agenda.payments, 'core.customers.read', 'core.customers.write', 'shared.pets.read', 'shared.pets.write', 'shared.sales.sell'],
+      permissions: [agenda.read, agenda.write, agenda.status, agenda.payments, 'core.customers.read', 'core.customers.write', 'shared.pets.read', 'shared.pets.write', 'shared.sales.sell', 'shared.sales.register'],
     },
     {
       key: 'petshop.groomer',

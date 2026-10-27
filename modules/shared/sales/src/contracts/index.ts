@@ -112,6 +112,8 @@ export const saleInput = z.object({
   notes: z.string().trim().max(500).nullish(),
   /** Data da venda (lançar venda anterior); sem data, é agora. */
   soldAt: pastMoment('A data da venda não pode ser no futuro').optional(),
+  /** Caixa (terminal) em que a venda é feita: a venda entra na sessão aberta dele. */
+  registerId: z.string().uuid().nullish(),
 });
 export type SaleInput = z.infer<typeof saleInput>;
 
@@ -132,6 +134,8 @@ export interface Sale {
   notes: string | null;
   sellerName: string | null;
   cancelReason: string | null;
+  /** Sessão de caixa em que a venda entrou (vendas antigas, sem caixa ou lançadas depois: null). */
+  registerSessionId: string | null;
   /** Quando a venda aconteceu (anterior ao registro nas vendas lançadas depois). */
   soldAt: string;
   createdAt: string;
@@ -152,8 +156,129 @@ export const salesSettings = z.object({
   /** Recusa vender o que não tem em estoque. */
   blockNegativeStock: z.boolean().default(false),
   receiptFooter: z.string().trim().max(200).default('Obrigado pela preferência!'),
+  /**
+   * Só vende com caixa aberto (abertura com troco, sangria/suprimento e fechamento conferido).
+   * Desligado por padrão: quem já vende sem controle de caixa (e as empresas de demonstração)
+   * continua vendendo; ligar é uma decisão do dono, na tela "Caixas".
+   */
+  requireRegisterSession: z.boolean().default(false),
 });
 export type SalesSettings = z.infer<typeof salesSettings>;
+
+// ---- Caixa: abertura, sangria/suprimento e fechamento ------------------------------------------
+
+export const registerInput = z.object({
+  name: z.string().trim().min(2, 'Informe o nome do caixa').max(40),
+});
+export const registerUpdate = registerInput.extend({ active: z.boolean() }).partial();
+export type RegisterInput = z.infer<typeof registerInput>;
+export type RegisterUpdate = z.infer<typeof registerUpdate>;
+
+export const openSessionInput = z.object({
+  registerId: z.string().uuid(),
+  /** Troco inicial: dinheiro que já está na gaveta na abertura. */
+  openingFloat: money,
+});
+export type OpenSessionInput = z.infer<typeof openSessionInput>;
+
+export const registerMoveKinds = ['withdrawal', 'deposit'] as const;
+export type RegisterMoveKind = (typeof registerMoveKinds)[number];
+export const registerMoveLabel: Record<RegisterMoveKind, string> = { withdrawal: 'Sangria', deposit: 'Suprimento' };
+
+export const registerMoveInput = z.object({
+  kind: z.enum(registerMoveKinds),
+  amount: z.coerce.number().positive('Informe o valor').max(1_000_000).multipleOf(0.01, 'Use no máximo 2 casas decimais'),
+  reason: z.string().trim().min(3, 'Explique o motivo').max(200),
+  /**
+   * Conta do financeiro do outro lado: para onde foi a sangria (banco, cofre) ou de onde veio o
+   * suprimento. Sem conta, a sangria é uma despesa e o suprimento uma receita.
+   */
+  accountId: z.string().uuid().nullish(),
+});
+export type RegisterMoveInput = z.infer<typeof registerMoveInput>;
+
+/** Formas conferidas no fechamento (fiado não passa pela gaveta nem pela maquininha). */
+export const countedMethods = ['cash', 'pix', 'debit_card', 'credit_card', 'other'] as const;
+export type CountedMethod = (typeof countedMethods)[number];
+
+export const closeSessionInput = z.object({
+  /** Valores contados pelo operador. Dinheiro é obrigatório; o resto, só se ele conferir. */
+  counted: z.object({
+    cash: money,
+    pix: money.nullish(),
+    debit_card: money.nullish(),
+    credit_card: money.nullish(),
+    other: money.nullish(),
+  }),
+  notes: z.string().trim().max(500).nullish(),
+});
+export type CloseSessionInput = z.infer<typeof closeSessionInput>;
+
+export interface RegisterSessionTotal {
+  method: SalePaymentMethod;
+  /** Dinheiro: troco inicial + vendas + suprimentos − sangrias. Demais: soma das vendas. */
+  expected: number;
+  /** Informado no fechamento (null: não conferido). */
+  counted: number | null;
+  /** Contado − esperado: positivo é sobra, negativo é quebra. */
+  difference: number | null;
+}
+
+export interface RegisterSessionSummary {
+  id: string;
+  number: number;
+  register: { id: string; name: string };
+  status: 'open' | 'closed';
+  openingFloat: number;
+  openedAt: string;
+  openedByName: string | null;
+  closedAt: string | null;
+  closedByName: string | null;
+  /** Vendas concluídas (canceladas não contam). */
+  salesCount: number;
+  salesTotal: number;
+  withdrawals: number;
+  deposits: number;
+  expectedCash: number;
+  /** Só nas sessões fechadas. */
+  countedCash: number | null;
+  cashDifference: number | null;
+  notes: string | null;
+}
+
+export interface RegisterMove {
+  id: string;
+  kind: RegisterMoveKind;
+  amount: number;
+  reason: string;
+  accountName: string | null;
+  userName: string | null;
+  createdAt: string;
+}
+
+export interface RegisterSession extends RegisterSessionSummary {
+  /** Por forma de pagamento; na sessão aberta, `counted` e `difference` são null. */
+  totals: RegisterSessionTotal[];
+  moves: RegisterMove[];
+  sales: { id: string; number: number; soldAt: string; status: 'completed' | 'cancelled'; total: number; payments: { method: SalePaymentMethod; amount: number }[] }[];
+}
+
+export interface CashRegister {
+  id: string;
+  name: string;
+  active: boolean;
+  openSession: { id: string; number: number; openedAt: string; openedByName: string | null; openingFloat: number } | null;
+}
+
+/** O que o PDV precisa para escolher o caixa (quem vende não tem acesso às configurações). */
+export interface RegistersOverview {
+  requireSession: boolean;
+  registers: CashRegister[];
+  /** Contas ativas do financeiro: destino da sangria / origem do suprimento. */
+  accounts: { id: string; name: string; type: 'cash' | 'bank' | 'gateway' }[];
+  /** Conta onde entra o dinheiro das vendas (a gaveta). */
+  cashAccountId: string | null;
+}
 
 /** Quantidade com a casa decimal certa para a unidade: "1,250 kg", "3 un". */
 export function formatQuantity(q: number, unit: Unit): string {

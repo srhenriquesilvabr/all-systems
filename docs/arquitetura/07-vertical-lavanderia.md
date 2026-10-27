@@ -139,12 +139,16 @@ Não vão para a Shopify: fotos das peças, observações de avaria, endereço d
 
 | Permissão | Dono | Atendente | Operador | Motorista |
 |---|:-:|:-:|:-:|:-:|
-| `laundry.orders.read` | ✓ | ✓ | ✓ | ✓ (só as atribuídas) |
+| `laundry.orders.read` | ✓ | ✓ | ✓ | |
 | `laundry.orders.write` | ✓ | ✓ | | |
 | `laundry.orders.status` | ✓ | ✓ | ✓ | |
-| `laundry.logistics.manage` | ✓ | ✓ | | ✓ |
+| `laundry.logistics.manage` (agendar, atribuir, reagendar, cancelar) | ✓ | ✓ | | |
+| `laundry.logistics.drive` (minhas rotas: só as atribuídas) | ✓ | ✓ | | ✓ |
 | `laundry.catalog.manage` | ✓ | | | |
 | `laundry.reports.read` | ✓ | | | |
+
+O motorista não lê ordens nem clientes: cada tarefa da rota já traz o que ele precisa (nome, telefone,
+endereço, nº e saldo da ordem, taxa).
 
 ## Relatórios da vertical
 - Peças processadas por dia, etapa e operador (produtividade)
@@ -168,8 +172,52 @@ Não vão para a Shopify: fotos das peças, observações de avaria, endereço d
 | A ordem anda sozinha conforme as peças; retrabalho volta a ordem para a produção | `LaundryOrdersService.syncOrderStatus` |
 | Telas: Balcão, ordem com peças/fotos/ocorrências/pagamento, etiquetas, comprovante, Produção, Relatórios, Serviços e tipos de peça | `src/web/` |
 
+### Coleta e entrega (versão 0.4.0 do módulo)
+
+Uma tabela só, `laundry_logistics_jobs` (em vez do `laundry_logistics` 1:1 com a ordem do desenho acima):
+cada linha é uma **coleta** (`pickup`) ou uma **entrega** (`delivery`), com cliente, ordem (obrigatória na
+entrega; na coleta é ligada depois, no balcão), endereço (copiado do cadastro do cliente, editável),
+dia + janela (período manhã/tarde/noite ou horário de/até), taxa, motorista, observações e o comprovante.
+
+```mermaid
+stateDiagram-v2
+    [*] --> scheduled: agendada
+    scheduled --> en_route: motorista sai
+    scheduled --> done
+    en_route --> done: concluída (entrega: quem recebeu + foto opcional · coleta: nº de peças)
+    scheduled --> failed
+    en_route --> failed: não realizada (motivo)
+    failed --> scheduled: reagendada (nova data/janela)
+    scheduled --> cancelled
+    failed --> cancelled
+    en_route --> cancelled
+```
+
+| Evento da tarefa | Efeito na ordem (`shared.service-orders`) | Aviso ao cliente |
+|---|---|---|
+| Entrega agendada ("Entregar no endereço", ordem recebida/em produção/pronta) | — | `laundry.delivery.scheduled` |
+| Coleta agendada | — | `laundry.pickup.scheduled` |
+| Motorista sai — entrega (exige ordem Pronta) | `ready → out_for_delivery` | `laundry.order.out_for_delivery` (do fluxo) |
+| Motorista sai — coleta | — | `laundry.pickup.on_the_way` |
+| Entrega concluída | `out_for_delivery → delivered` | `laundry.order.delivered` (do fluxo) |
+| Entrega não realizada / cancelada depois de sair | `out_for_delivery → ready` (motivo no histórico) | `laundry.order.ready` (do fluxo) |
+| Coleta concluída | — (o balcão abre a ordem com `pickupJobId` ou liga depois em `link-order`) | — |
+
+Reagendar notifica de novo (`*.scheduled`). Uma entrega em aberto por ordem (índice único parcial).
+
+**Taxa:** vira um "a receber" próprio no financeiro (`source_type = laundry_logistics`, um por tarefa,
+`settle_in_finance`), não um item da ordem. Motivos: `ServiceOrdersService.update` troca todos os
+`so_items` (e o `laundry_item_details` de cada peça cai em cascata); o serviço não tem como só acrescentar
+um item e recalcular; e a coleta tem taxa antes de existir ordem. O motorista pode dar baixa na hora
+(`feeMethod` ao concluir); senão a baixa é feita no financeiro. Taxas padrão em `settings.pickupFee/deliveryFee`.
+
+Telas: **Coletas e entregas** (`/lavanderia/logistica`, por dia e motorista, filtros, atribuir, reagendar,
+cancelar, "Abrir ordem no balcão" para coleta concluída, taxas padrão), **Minhas rotas**
+(`/lavanderia/minhas-rotas`, celular: mapa, ligar, WhatsApp, sair/concluir/não realizada, foto) e o cartão
+**Entrega** na ordem.
+
 Diferenças em relação ao desenho acima: o status da peça é linear (recebida → lavagem → secagem → passadoria → pronta); retrabalho é voltar de etapa (contado em `rework_count`) e avaria virou **ocorrência**, com aviso ao cliente, em vez de um status. O estado `aguardando_coleta` entra com a loja online (Fase 5).
 
 ## MVP (o que entra primeiro)
 **Entra:** catálogo de serviços, OS de balcão com peças, fotos e etiquetas, kanban de produção, notificações por e-mail, pagamento manual e Pix, relatórios de prazo e receita.
-**Depois:** Shopify (online e coleta), WhatsApp, motorista/rotas, planos mensais, NFS-e automática.
+**Depois:** Shopify (online e coleta), WhatsApp, planos mensais, NFS-e automática. (Motorista/rotas: feito, ver "Coleta e entrega".)

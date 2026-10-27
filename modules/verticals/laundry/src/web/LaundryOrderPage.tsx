@@ -6,6 +6,7 @@ import { useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { pieceStatuses, pieceStatusLabel, type Piece, type PieceStatus } from '../contracts';
 import { laundryKey, useLaundryOrder } from './hooks';
+import { OrderLogisticsCard } from './OrderLogisticsCard';
 
 export function LaundryOrderPage() {
   const { id } = useParams<{ id: string }>();
@@ -87,6 +88,8 @@ export function LaundryOrderPage() {
               </Button>
             )}
           </Card>
+
+          <OrderLogisticsCard order={order} onChanged={refresh} />
 
           <Card className="space-y-1 p-5 text-sm">
             <h2 className="mb-2 font-medium">Cliente</h2>

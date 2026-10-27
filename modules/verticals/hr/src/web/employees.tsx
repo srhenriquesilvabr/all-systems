@@ -3,10 +3,12 @@ import { Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { employeeStatusLabel, vacationPay, type Employee, type Vacation } from '../contracts';
+import { employeeCategoryLabel, employeeStatusLabel, leaveTypeLabel, leaveTypes, terminationTypeLabel, vacationPay, type Employee, type Leave, type LeaveType, type Vacation } from '../contracts';
 import { employeeImportSpec } from './employeeImport';
+import { hrKey } from './hrKey';
+import { TerminationModal, TerminationWizard } from './termination';
 
-export const hrKey = ['hr'] as const;
+export { hrKey };
 const cpfMask = (c: string) => c.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
 
 export function EmployeesPage() {
@@ -84,32 +86,58 @@ export function EmployeePage() {
   const { id = '' } = useParams();
   const queryClient = useQueryClient();
   const canManage = useCan('hr.manage');
+  const canPayroll = useCan('hr.payroll');
   const emp = useQuery({ queryKey: [...hrKey, 'employee', id], queryFn: () => api<Employee>(`/hr/employees/${id}`) });
   const vacations = useQuery({ queryKey: [...hrKey, 'vacations', id], queryFn: () => api<Vacation[]>(`/hr/employees/${id}/vacations`) });
   const [editing, setEditing] = useState(false);
+  const leaves = useQuery({ queryKey: [...hrKey, 'leaves', id], queryFn: () => api<Leave[]>(`/hr/employees/${id}/leaves`) });
   const [scheduling, setScheduling] = useState<string | null>(null);
+  const [addingLeave, setAddingLeave] = useState(false);
+  const [terminating, setTerminating] = useState(false);
+  const [showTermination, setShowTermination] = useState(false);
+  const removeLeave = useMutation({ mutationFn: (lid: string) => api(`/hr/leaves/${lid}`, { method: 'DELETE' }), onSuccess: () => queryClient.invalidateQueries({ queryKey: hrKey }) });
   const cancel = useMutation({ mutationFn: (vid: string) => api(`/hr/vacations/${vid}/cancel`, { method: 'POST' }), onSuccess: () => queryClient.invalidateQueries({ queryKey: hrKey }) });
   if (emp.isPending) return <Spinner />;
   if (emp.isError) return <Alert>{emp.error.message}</Alert>;
   const e = emp.data;
   return (
     <>
+      <div className="print:hidden">
       <PageHeader
         title={e.name}
-        description={`${e.position}${e.department ? ` · ${e.department}` : ''} · ${employeeStatusLabel[e.status]}`}
+        description={`${e.position}${e.department ? ` · ${e.department}` : ''} · ${employeeStatusLabel[e.status]}${e.category === 'apprentice' ? ' · aprendiz' : ''}`}
         actions={
-          canManage && (
-            <Button variant="secondary" onClick={() => setEditing(true)}>
-              Editar
-            </Button>
-          )
+          <div className="flex gap-2">
+            {e.termination && (
+              <Button variant="secondary" onClick={() => setShowTermination(true)}>
+                Termo de rescisão
+              </Button>
+            )}
+            {canPayroll && !e.termination && e.status !== 'terminated' && (
+              <Button variant="danger" onClick={() => setTerminating(true)}>
+                Rescindir
+              </Button>
+            )}
+            {canManage && (
+              <Button variant="secondary" onClick={() => setEditing(true)}>
+                Editar
+              </Button>
+            )}
+          </div>
         }
       />
       <div className="grid gap-6 lg:grid-cols-[18rem_1fr]">
         <Card className="h-fit space-y-2 p-5 text-sm">
           <Info label="CPF">{cpfMask(e.cpf)}</Info>
           <Info label="Admissão">{formatDate(e.admissionDate)}</Info>
-          {e.terminationDate && <Info label="Desligamento">{formatDate(e.terminationDate)}</Info>}
+          {e.experienceEnd && <Info label="Fim da experiência">{formatDate(e.experienceEnd)}</Info>}
+          {e.terminationDate && (
+            <Info label="Desligamento">
+              {formatDate(e.terminationDate)}
+              {e.termination && <span className="text-fg-muted"> · {terminationTypeLabel[e.termination.type]}</span>}
+            </Info>
+          )}
+          <Info label="Categoria">{employeeCategoryLabel[e.category]}</Info>
           <Info label="Salário">{formatMoney(e.salary)}</Info>
           <Info label="Jornada">{e.weeklyHours}h semanais</Info>
           <Info label="Dependentes (IR)">{e.dependents}</Info>
@@ -160,7 +188,7 @@ export function EmployeePage() {
                   <li key={v.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
                     <div className="flex-1">
                       <div className={v.status === 'cancelled' ? 'text-fg-subtle line-through' : 'font-medium'}>
-                        {formatDate(v.startOn)} a {formatDate(v.endOn)} ({v.days} dias{v.soldDays ? ` + ${v.soldDays} vendidos` : ''})
+                        {formatDate(v.startOn)} a {formatDate(v.endOn)} ({v.days} dias{v.soldDays ? ` + ${v.soldDays} vendidos` : ''}) {v.status === 'taken' && <Badge tone="success">Gozadas</Badge>}
                       </div>
                       <div className="text-xs text-fg-muted">
                         {formatMoney(v.pay.vacation + v.pay.allowance)} · pagar até {formatDate(v.payBy)}
@@ -176,10 +204,53 @@ export function EmployeePage() {
               </ul>
             )}
           </Card>
+          <Card>
+            <div className="flex items-center justify-between border-b border-line px-4 py-3">
+              <h2 className="font-medium">Afastamentos</h2>
+              {canManage && e.status !== 'terminated' && (
+                <Button size="sm" variant="secondary" onClick={() => setAddingLeave(true)}>
+                  Registrar afastamento
+                </Button>
+              )}
+            </div>
+            {removeLeave.error && <Alert>{removeLeave.error instanceof ApiError ? removeLeave.error.message : 'Erro'}</Alert>}
+            {!leaves.data?.length ? (
+              <p className="px-4 py-6 text-sm text-fg-muted">Nenhum.</p>
+            ) : (
+              <ul className="divide-y divide-line text-sm">
+                {leaves.data.map((l) => (
+                  <li key={l.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+                    <div className="flex-1">
+                      <div className="font-medium">
+                        {leaveTypeLabel[l.type]} · {formatDate(l.startOn)} a {formatDate(l.endOn)} ({l.days} dias)
+                      </div>
+                      <div className="text-xs text-fg-muted">
+                        {l.type === 'maternity'
+                          ? 'Salário-maternidade pago pela empresa e compensado nas contribuições (DCTFWeb).'
+                          : l.inssDays > 0
+                            ? `${l.companyDays} dias pagos pela empresa · ${l.inssDays} dias pelo INSS (fora da folha)`
+                            : 'Pago pela empresa (até 15 dias).'}
+                        {l.notes && ` · ${l.notes}`}
+                      </div>
+                    </div>
+                    {canManage && (
+                      <Button size="sm" variant="ghost" onClick={() => removeLeave.mutate(l.id)}>
+                        Excluir
+                      </Button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
         </div>
+      </div>
       </div>
       {editing && <EmployeeModal employee={e} onClose={() => setEditing(false)} />}
       {scheduling && <VacationModal employee={e} periodStart={scheduling} onClose={() => setScheduling(null)} />}
+      {addingLeave && <LeaveModal employee={e} onClose={() => setAddingLeave(false)} />}
+      {terminating && <TerminationWizard employee={e} onClose={() => setTerminating(false)} />}
+      {showTermination && <TerminationModal employeeId={e.id} onClose={() => setShowTermination(false)} />}
     </>
   );
 }
@@ -207,6 +278,8 @@ function EmployeeModal({ employee, onClose, onSaved }: { employee: Employee | nu
     salary: employee ? employee.salary.toFixed(2).replace('.', ',') : '',
     weeklyHours: String(employee?.weeklyHours ?? 44),
     dependents: String(employee?.dependents ?? 0),
+    category: employee?.category ?? 'employee',
+    experienceEnd: employee?.experienceEnd ?? '',
     status: employee?.status ?? 'active',
     terminationDate: employee?.terminationDate ?? '',
     pixKey: employee?.pixKey ?? '',
@@ -227,6 +300,7 @@ function EmployeeModal({ employee, onClose, onSaved }: { employee: Employee | nu
           weeklyHours: Number(form.weeklyHours),
           dependents: Number(form.dependents),
           terminationDate: form.terminationDate || null,
+          experienceEnd: form.experienceEnd || null,
           pixKey: form.pixKey || null,
           notes: form.notes || null,
         },
@@ -271,6 +345,20 @@ function EmployeeModal({ employee, onClose, onSaved }: { employee: Employee | nu
           <Field label="Salário (R$)">{(id) => <Input id={id} inputMode="decimal" required value={form.salary} onChange={(e) => set({ salary: e.target.value })} />}</Field>
           <Field label="Jornada semanal (h)">{(id) => <Input id={id} type="number" min={1} max={44} value={form.weeklyHours} onChange={(e) => set({ weeklyHours: e.target.value })} />}</Field>
           <Field label="Dependentes para IR">{(id) => <Input id={id} type="number" min={0} value={form.dependents} onChange={(e) => set({ dependents: e.target.value })} />}</Field>
+          <Field label="Categoria" hint="Aprendiz recolhe FGTS de 2%.">
+            {(id) => (
+              <Select id={id} value={form.category} onChange={(e) => set({ category: e.target.value as typeof form.category })}>
+                {Object.entries(employeeCategoryLabel).map(([k, l]) => (
+                  <option key={k} value={k}>
+                    {l}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+          <Field label="Fim da experiência" hint="Vazio se não houver contrato de experiência.">
+            {(id) => <Input id={id} type="date" value={form.experienceEnd} onChange={(e) => set({ experienceEnd: e.target.value })} />}
+          </Field>
           <Field label="E-mail">{(id) => <Input id={id} type="email" value={form.email} onChange={(e) => set({ email: e.target.value })} />}</Field>
           <Field label="Telefone">{(id) => <Input id={id} value={form.phone} onChange={(e) => set({ phone: e.target.value })} />}</Field>
           <Field label="Chave Pix (salário)">{(id) => <Input id={id} value={form.pixKey} onChange={(e) => set({ pixKey: e.target.value })} />}</Field>
@@ -346,3 +434,65 @@ function VacationModal({ employee, periodStart, onClose }: { employee: Employee;
   );
 }
 
+
+function LeaveModal({ employee, onClose }: { employee: Employee; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [form, setForm] = useState({ type: 'sick' as LeaveType, startOn: '', endOn: '', notes: '' });
+  const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
+  const save = useMutation({
+    mutationFn: () => api('/hr/leaves', { method: 'POST', body: { employeeId: employee.id, type: form.type, startOn: form.startOn, endOn: form.endOn || null, notes: form.notes || null } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: hrKey });
+      onClose();
+    },
+  });
+  function submit(ev: FormEvent) {
+    ev.preventDefault();
+    save.mutate();
+  }
+  return (
+    <Modal
+      open
+      title="Registrar afastamento"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button type="submit" form="hr-leave-form" loading={save.isPending}>
+            Registrar
+          </Button>
+        </>
+      }
+    >
+      <form id="hr-leave-form" onSubmit={submit} className="space-y-4">
+        {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro'}</Alert>}
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Field label="Tipo">
+            {(id) => (
+              <Select id={id} value={form.type} onChange={(e) => set({ type: e.target.value as LeaveType })}>
+                {leaveTypes.map((t) => (
+                  <option key={t} value={t}>
+                    {leaveTypeLabel[t]}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+          <Field label="Início">{(id) => <Input id={id} type="date" required value={form.startOn} onChange={(e) => set({ startOn: e.target.value })} />}</Field>
+          <Field label="Fim" hint={form.type === 'maternity' ? 'Vazio = 120 dias.' : undefined}>
+            {(id) => <Input id={id} type="date" required={form.type === 'sick'} value={form.endOn} onChange={(e) => set({ endOn: e.target.value })} />}
+          </Field>
+        </div>
+        <Field label="Observações">{(id) => <Input id={id} value={form.notes} onChange={(e) => set({ notes: e.target.value })} />}</Field>
+        <p className="text-sm text-fg-muted">
+          {form.type === 'sick'
+            ? 'Doença: a empresa paga os primeiros 15 dias; do 16º em diante paga o INSS e os dias saem da folha.'
+            : 'Maternidade: a empresa paga o salário-maternidade na folha e deduz o valor das contribuições (informativo na folha).'}{' '}
+          A folha do mês considera o afastamento ao ser aberta ou recalculada.
+        </p>
+      </form>
+    </Modal>
+  );
+}

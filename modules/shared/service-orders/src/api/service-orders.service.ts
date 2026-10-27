@@ -175,7 +175,8 @@ export class ServiceOrdersService implements OnModuleInit {
   }
 
   /** Para verticais: muda o status na transação delas (ex.: ordem pronta quando todas as peças ficam prontas). */
-  async transitionInTx(tx: Tx, id: string, to: string, reason?: string | null): Promise<OrderDetail> {
+  /** `notify: false` muda o status sem avisar o cliente (ex.: entrega que falhou e volta para "Pronta"). */
+  async transitionInTx(tx: Tx, id: string, to: string, reason?: string | null, opts: { notify?: boolean } = {}): Promise<OrderDetail> {
     const { tenantId, userId } = requestContext.requireTenant();
     const order = await this.findOrFail(tx, id, true);
     const workflow = this.workflowOf(order.workflow);
@@ -206,7 +207,7 @@ export class ServiceOrdersService implements OnModuleInit {
       entity: 'service_order',
       entityId: id,
     });
-    await this.notify(tx, updated!, workflow);
+    if (opts.notify !== false) await this.notify(tx, updated!, workflow);
     await this.audit.log(tx, { action: 'service_order.status_changed', entity: 'service_order', entityId: id, data: { from: order.status, to, reason } });
     return this.detail(tx, id);
   }

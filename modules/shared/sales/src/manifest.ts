@@ -12,6 +12,8 @@ export const salesManifest = defineModule({
   dependsOn: ['core.customers', 'core.finance'],
   permissions: [
     { key: 'shared.sales.sell', label: 'Vender no caixa (PDV)' },
+    { key: 'shared.sales.register', label: 'Abrir e fechar o caixa, sangria e suprimento' },
+    { key: 'shared.sales.register.history', label: 'Ver o histórico de caixas e gerenciar os caixas' },
     { key: 'shared.sales.read', label: 'Ver vendas e relatórios' },
     { key: 'shared.sales.cancel', label: 'Cancelar vendas' },
     { key: 'shared.sales.products', label: 'Cadastrar produtos e preços' },
@@ -19,12 +21,13 @@ export const salesManifest = defineModule({
   ],
   settings: salesSettings,
   defaultRoles: [
-    { key: 'shared.sales.cashier', label: 'Caixa', permissions: ['shared.sales.sell', 'core.customers.read'] },
+    { key: 'shared.sales.cashier', label: 'Caixa', permissions: ['shared.sales.sell', 'shared.sales.register', 'core.customers.read'] },
     { key: 'shared.sales.stockist', label: 'Estoquista', permissions: ['shared.sales.products', 'shared.sales.stock', 'shared.sales.read'] },
   ],
   menu: [
     { label: 'Caixa (PDV)', path: '/pdv', icon: 'register', permission: 'shared.sales.sell' },
     { label: 'Vendas', path: '/vendas', icon: 'chart', permission: 'shared.sales.read' },
+    { label: 'Caixas', path: '/caixas', icon: 'banknote', permission: 'shared.sales.register.history' },
     { label: 'Produtos e estoque', path: '/produtos', icon: 'package', permission: 'shared.sales.products' },
   ],
 });

@@ -33,7 +33,11 @@ export const laundrySettings = z.object({
   pricingMode: z.enum(['per_piece', 'per_kg', 'mixed']).default('mixed'),
   defaultTurnaroundHours: z.number().int().default(48),
   requirePhotosOnReceive: z.boolean().default(true),
+  /** Taxas padrão de coleta e entrega (em reais), sugeridas ao agendar. */
+  pickupFee: z.number().min(0).max(10_000).multipleOf(0.01).default(0),
+  deliveryFee: z.number().min(0).max(10_000).multipleOf(0.01).default(0),
 });
+export type LaundrySettings = z.infer<typeof laundrySettings>;
 
 // ---- Peças e ordens ---------------------------------------------------------------------------
 
@@ -82,6 +86,8 @@ export const laundryOrderInput = z.object({
   receivedAt: receivedAtInput.optional(),
   notesCustomer: z.string().trim().max(2000).nullish(),
   notesInternal: z.string().trim().max(2000).nullish(),
+  /** Coleta concluída que trouxe estas peças: fica ligada à ordem. */
+  pickupJobId: z.string().uuid().nullish(),
 });
 export type LaundryOrderInput = z.infer<typeof laundryOrderInput>;
 
@@ -134,4 +140,205 @@ export interface LaundryReport {
   incidents: number;
   byService: { serviceName: string; quantity: number; revenue: number }[];
   byOperator: { userName: string; moves: number }[];
+}
+
+// ---- Coleta e entrega -------------------------------------------------------------------------
+
+export const jobKinds = ['pickup', 'delivery'] as const;
+export type JobKind = (typeof jobKinds)[number];
+export const jobKindLabel: Record<JobKind, string> = { pickup: 'Coleta', delivery: 'Entrega' };
+
+/** agendada → em rota → concluída / não realizada (com motivo; pode ser reagendada) · cancelada. */
+export const jobStatuses = ['scheduled', 'en_route', 'done', 'failed', 'cancelled'] as const;
+export type JobStatus = (typeof jobStatuses)[number];
+export const jobStatusLabel: Record<JobStatus, string> = {
+  scheduled: 'Agendada',
+  en_route: 'Em rota',
+  done: 'Concluída',
+  failed: 'Não realizada',
+  cancelled: 'Cancelada',
+};
+export const jobStatusTone: Record<JobStatus, 'neutral' | 'success' | 'warning' | 'danger' | 'brand'> = {
+  scheduled: 'neutral',
+  en_route: 'brand',
+  done: 'success',
+  failed: 'danger',
+  cancelled: 'neutral',
+};
+
+export const jobPeriods = ['morning', 'afternoon', 'evening'] as const;
+export type JobPeriod = (typeof jobPeriods)[number];
+/** Janela de cada período (HH:MM). Guardada também na tarefa, para ordenar a rota. */
+export const periodWindow: Record<JobPeriod, [string, string]> = {
+  morning: ['08:00', '12:00'],
+  afternoon: ['12:00', '18:00'],
+  evening: ['18:00', '21:00'],
+};
+export const periodLabel: Record<JobPeriod, string> = { morning: 'Manhã', afternoon: 'Tarde', evening: 'Noite' };
+
+/** Mesmo formato do endereço do cadastro do cliente, mais um ponto de referência. */
+export interface JobAddress {
+  zip?: string;
+  street?: string;
+  number?: string;
+  complement?: string;
+  district?: string;
+  city?: string;
+  state?: string;
+  reference?: string;
+}
+
+export const jobAddressInput = z.object({
+  zip: z.string().trim().max(9).optional(),
+  street: z.string().trim().max(200).optional(),
+  number: z.string().trim().max(20).optional(),
+  complement: z.string().trim().max(100).optional(),
+  district: z.string().trim().max(100).optional(),
+  city: z.string().trim().max(100).optional(),
+  state: z.string().trim().max(2).optional(),
+  reference: z.string().trim().max(200).optional(),
+});
+
+/** "Rua X, 10 — apto 3 — Bairro, Cidade/UF — CEP" */
+export function formatAddress(a: JobAddress | null | undefined): string {
+  if (!a) return '';
+  const street = [a.street, a.number].filter(Boolean).join(', ');
+  const city = [a.city, a.state].filter(Boolean).join('/');
+  return [street, a.complement, [a.district, city].filter(Boolean).join(', '), a.zip].filter(Boolean).join(' — ');
+}
+
+/** Link de navegação (abre o app do Google Maps no celular). */
+export function mapsUrl(a: JobAddress | null | undefined): string | null {
+  const text = formatAddress(a ? { ...a, complement: undefined, reference: undefined } : a);
+  return text ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(text)}` : null;
+}
+
+/** Links de ligação e WhatsApp a partir do telefone em E.164 (+5511999998888). */
+export function phoneLinks(phone: string | null | undefined): { tel: string; whatsapp: string } | null {
+  const digits = phone?.replace(/\D/g, '');
+  if (!digits) return null;
+  return { tel: `tel:+${digits}`, whatsapp: `https://wa.me/${digits}` };
+}
+
+const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Horário inválido (use HH:MM)');
+const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Informe a data');
+const fee = z.coerce.number().min(0).max(10_000).multipleOf(0.01, 'Use no máximo 2 casas decimais');
+
+type WindowFields = { period?: JobPeriod | null; windowStart?: string | null; windowEnd?: string | null };
+
+/** Período (manhã/tarde/noite) ou horário de/até. Devolve a janela ou a mensagem de erro. */
+export function resolveWindow(w: WindowFields): { period: JobPeriod | null; windowStart: string; windowEnd: string } | { error: string } {
+  if (w.period) return { period: w.period, windowStart: periodWindow[w.period][0], windowEnd: periodWindow[w.period][1] };
+  if (!w.windowStart || !w.windowEnd) return { error: 'Informe o período ou o horário (de/até)' };
+  if (w.windowStart >= w.windowEnd) return { error: 'O horário final deve ser depois do inicial' };
+  return { period: null, windowStart: w.windowStart, windowEnd: w.windowEnd };
+}
+
+const scheduleFields = {
+  /** Sem endereço, usa o do cadastro do cliente. */
+  address: jobAddressInput.nullish(),
+  date: isoDay,
+  period: z.enum(jobPeriods).nullish(),
+  windowStart: hhmm.nullish(),
+  windowEnd: hhmm.nullish(),
+  /** Sem taxa, usa a padrão das configurações da lavanderia. */
+  fee: fee.nullish(),
+  driverUserId: z.string().uuid().nullish(),
+  notes: z.string().trim().max(1000).nullish(),
+};
+
+const windowRefine = (v: WindowFields, ctx: z.RefinementCtx) => {
+  const w = resolveWindow(v);
+  if ('error' in w) ctx.addIssue({ code: z.ZodIssueCode.custom, message: w.error, path: ['period'] });
+};
+
+export const pickupInput = z.object({ customerId: z.string().uuid('Escolha o cliente'), ...scheduleFields }).superRefine(windowRefine);
+export type PickupInput = z.infer<typeof pickupInput>;
+
+/** "Entregar no endereço", a partir da ordem. */
+export const deliveryInput = z.object(scheduleFields).superRefine(windowRefine);
+export type DeliveryInput = z.infer<typeof deliveryInput>;
+
+/**
+ * Atribuir motorista, reagendar, mudar endereço/taxa. Mudar a janela pede o período ou o horário
+ * completo. Uma tarefa "não realizada" volta a "agendada" quando recebe uma nova data.
+ */
+export const jobUpdateInput = z.object({
+  address: jobAddressInput.optional(),
+  date: isoDay.optional(),
+  period: z.enum(jobPeriods).nullish(),
+  windowStart: hhmm.nullish(),
+  windowEnd: hhmm.nullish(),
+  fee: fee.optional(),
+  driverUserId: z.string().uuid().nullable().optional(),
+  notes: z.string().trim().max(1000).nullable().optional(),
+});
+export type JobUpdateInput = z.infer<typeof jobUpdateInput>;
+
+export const feeMethods = ['cash', 'pix', 'credit_card', 'debit_card', 'other'] as const;
+export type FeeMethod = (typeof feeMethods)[number];
+export const feeMethodLabel: Record<FeeMethod, string> = {
+  cash: 'Dinheiro',
+  pix: 'Pix',
+  credit_card: 'Cartão de crédito',
+  debit_card: 'Cartão de débito',
+  other: 'Outro',
+};
+
+export const completeJobInput = z.object({
+  /** Entrega: quem recebeu (comprovante). */
+  receiverName: z.string().trim().min(2, 'Informe quem recebeu').max(120).nullish(),
+  /** Coleta: quantas peças vieram (a conferência peça a peça é no balcão). */
+  itemsCount: z.coerce.number().int().min(1, 'Informe quantas peças foram coletadas').max(999).nullish(),
+  notes: z.string().trim().max(1000).nullish(),
+  /** O motorista recebeu a taxa na hora: dá baixa no financeiro com esta forma de pagamento. */
+  feeMethod: z.enum(feeMethods).nullish(),
+});
+export type CompleteJobInput = z.infer<typeof completeJobInput>;
+
+export const failJobInput = z.object({ reason: z.string().trim().min(3, 'Informe o motivo').max(500) });
+export const cancelJobInput = z.object({ reason: z.string().trim().max(500).nullish() });
+export const linkOrderInput = z.object({ orderId: z.string().uuid() });
+
+export const jobsQuery = z.object({
+  date: isoDay.optional(),
+  from: isoDay.optional(),
+  to: isoDay.optional(),
+  status: z.enum(jobStatuses).optional(),
+  kind: z.enum(jobKinds).optional(),
+  /** Id do motorista, ou "none" para as tarefas sem motorista. */
+  driverId: z.union([z.string().uuid(), z.literal('none')]).optional(),
+  orderId: z.string().uuid().optional(),
+  customerId: z.string().uuid().optional(),
+});
+export type JobsQuery = z.infer<typeof jobsQuery>;
+
+export interface LogisticsJob {
+  id: string;
+  kind: JobKind;
+  status: JobStatus;
+  customer: { id: string; name: string; phone: string | null; email: string | null };
+  order: { id: string; number: number; status: string; total: number; paidAmount: number } | null;
+  address: JobAddress;
+  addressText: string;
+  mapsUrl: string | null;
+  date: string;
+  period: JobPeriod | null;
+  windowStart: string;
+  windowEnd: string;
+  fee: number;
+  /** Situação da taxa no financeiro (null = sem taxa). */
+  feeStatus: 'pending' | 'paid' | null;
+  notes: string | null;
+  driver: { id: string; name: string } | null;
+  itemsCount: number | null;
+  receiverName: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  failReason: string | null;
+  /** Tentativas que não deram certo (a tarefa pode ter sido reagendada depois). */
+  attempts: number;
+  cancelReason: string | null;
+  photos: { id: string; filename: string }[];
+  createdAt: string;
 }

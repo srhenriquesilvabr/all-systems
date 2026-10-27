@@ -6,6 +6,7 @@ import { useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { addressOf, dealStatusLabel, propertyStatuses, propertyStatusLabel, propertyTypeLabel, propertyTypes, purposeLabel, type Deal, type Property } from '../contracts';
 import { DealModal, dealTone } from './deals';
+import { LeaseModal, PropertyLeases } from './leases';
 import { propertyImportSpec } from './propertyImport';
 
 export const reKey = ['real-estate'] as const;
@@ -114,10 +115,12 @@ export function PropertyPage() {
   const navigate = useNavigate();
   const canWrite = useCan('real_estate.properties.write');
   const canDeal = useCan('real_estate.deals.write');
+  const canLease = useCan('real_estate.leases.write');
   const p = useQuery({ queryKey: [...reKey, 'property', id], queryFn: () => api<Property>(`/real-estate/properties/${id}`) });
   const deals = useQuery({ queryKey: [...reKey, 'deals', { propertyId: id }], queryFn: () => api<Deal[]>('/real-estate/deals', { query: { propertyId: id } }) });
   const [editing, setEditing] = useState(false);
   const [dealing, setDealing] = useState(false);
+  const [leasing, setLeasing] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const upload = useMutation({ mutationFn: (f: File) => apiUpload(`/real-estate/properties/${id}/photos`, 'photo', f), onSuccess: () => queryClient.invalidateQueries({ queryKey: reKey }) });
   if (p.isPending) return <Spinner />;
@@ -133,6 +136,11 @@ export function PropertyPage() {
             {canWrite && (
               <Button variant="secondary" onClick={() => setEditing(true)}>
                 Editar
+              </Button>
+            )}
+            {canLease && prop.status === 'available' && prop.purpose !== 'sale' && (
+              <Button variant={prop.purpose === 'both' ? 'secondary' : 'primary'} onClick={() => setLeasing(true)}>
+                Alugar
               </Button>
             )}
             {canDeal && prop.status === 'available' && prop.purpose !== 'rent' && <Button onClick={() => setDealing(true)}>Nova proposta</Button>}
@@ -174,6 +182,7 @@ export function PropertyPage() {
             )}
           </Card>
           {prop.description && <Card className="whitespace-pre-line p-5 text-sm">{prop.description}</Card>}
+          <PropertyLeases propertyId={prop.id} />
           <Card className="p-4">
             <h2 className="mb-2 font-medium">Propostas</h2>
             {deals.data?.length ? (
@@ -217,6 +226,7 @@ export function PropertyPage() {
       </div>
       {editing && <PropertyModal property={prop} onClose={() => setEditing(false)} />}
       {dealing && <DealModal property={prop} onClose={() => setDealing(false)} onSaved={(d) => navigate(`/imoveis/propostas/${d.id}`)} />}
+      {leasing && <LeaseModal property={prop} onClose={() => setLeasing(false)} onSaved={(l) => navigate(`/imoveis/locacoes/${l.id}`)} />}
     </>
   );
 }

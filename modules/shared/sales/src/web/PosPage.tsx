@@ -1,9 +1,10 @@
-import { api, ApiError, CustomerSearch, formatDate, parseMoney, today, useSession, type CustomerOption } from '@all/module-sdk/web';
-import { Alert, Button, Card, Field, Input, Modal, Select } from '@all/ui';
+import { api, ApiError, CustomerSearch, formatDate, formatDateTime, parseMoney, today, useCan, useSession, type CustomerOption } from '@all/module-sdk/web';
+import { Alert, Button, Card, Field, Input, Modal, Select, Spinner } from '@all/ui';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { formatQuantity, fractionalUnits, salePaymentLabel, salePaymentMethods, type Product, type Sale, type SalePaymentMethod } from '../contracts';
-import { brl, salesKey, useProducts, useSalesSettings } from './hooks';
+import { formatQuantity, fractionalUnits, salePaymentLabel, salePaymentMethods, type Product, type RegisterSession, type Sale, type SalePaymentMethod } from '../contracts';
+import { brl, registersKey, salesKey, useDeviceRegister, useProducts, useRegisters, useSalesSettings } from './hooks';
+import { ClosingReport, DifferenceBadge, OpenRegisterForm, SessionDetails, SessionPanel } from './registers';
 
 interface CartLine {
   product: Product;
@@ -31,6 +32,17 @@ export function PosPage() {
   const [paying, setPaying] = useState(false);
   const [done, setDone] = useState<Sale | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+
+  // Caixa deste computador e a sessão aberta dele (as vendas entram nela).
+  const registers = useRegisters();
+  const [registerId, setRegisterId] = useDeviceRegister();
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [choosingRegister, setChoosingRegister] = useState(false);
+  const [closed, setClosed] = useState<RegisterSession | null>(null);
+  const register = registers.data?.registers.find((r) => r.id === registerId && r.active) ?? null;
+  const session = register?.openSession ?? null;
+  const required = registers.data?.requireSession ?? false;
+  const canRegister = useCan('shared.sales.register');
 
   const subtotal = cart.reduce((sum, l) => sum + lineCents(l), 0);
   const discountCents = Math.min(cents(parseMoney(discount) || 0), subtotal);
@@ -70,8 +82,104 @@ export function PosPage() {
     searchRef.current?.focus();
   }
 
+  // Caixa fechado agora: resumo na tela e relatório de fechamento para imprimir.
+  const closedView = closed && (
+    <>
+      <Modal
+        open
+        title={`${closed.register.name} fechado · sessão #${closed.number}`}
+        onClose={() => setClosed(null)}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => window.print()}>
+              Imprimir fechamento
+            </Button>
+            <Button onClick={() => setClosed(null)} autoFocus>
+              Concluir
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div className="flex items-center justify-between rounded-xl bg-muted px-4 py-3">
+            <span>Dinheiro: contado {brl(closed.countedCash ?? 0)} · esperado {brl(closed.expectedCash)}</span>
+            <DifferenceBadge value={closed.cashDifference} />
+          </div>
+          <SessionDetails session={closed} />
+        </div>
+      </Modal>
+      <ClosingReport session={closed} />
+    </>
+  );
+
+  const chooser = registers.data && choosingRegister && (
+    <Modal
+      open
+      title="Caixa deste computador"
+      onClose={() => setChoosingRegister(false)}
+      footer={
+        <Button variant="secondary" onClick={() => setChoosingRegister(false)}>
+          Pronto
+        </Button>
+      }
+    >
+      <OpenRegisterForm overview={registers.data} registerId={registerId} onRegisterChange={setRegisterId} onOpened={() => setChoosingRegister(false)} />
+    </Modal>
+  );
+
+  if (registers.isPending) return <Spinner />;
+
+  // Empresa que exige caixa: sem sessão aberta neste computador, não vende.
+  if (registers.data && required && !session) {
+    return (
+      <>
+        <Card className="mx-auto max-w-md space-y-4 p-6 print:hidden">
+          <div>
+            <h1 className="font-display text-xl font-medium">Abra o caixa para vender</h1>
+            <p className="mt-1 text-sm text-fg-muted">Escolha o caixa deste computador e informe o troco inicial.</p>
+          </div>
+          <OpenRegisterForm overview={registers.data} registerId={registerId} onRegisterChange={setRegisterId} />
+        </Card>
+        {closedView}
+      </>
+    );
+  }
+
+  const showRegisterBar = !!registers.data && (!!session || canRegister || registers.data.registers.some((r) => r.active));
+
   return (
     <>
+      {registers.isError && (
+        <div className="mb-4 print:hidden">
+          <Alert>Não foi possível carregar os caixas: {registers.error.message}</Alert>
+        </div>
+      )}
+      {showRegisterBar && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-surface px-4 py-2.5 text-sm print:hidden">
+          {session && register ? (
+            <span>
+              <span className="font-medium">{register.name}</span>
+              <span className="text-fg-muted">
+                {' '}
+                · aberto em {formatDateTime(session.openedAt)}
+                {session.openedByName && ` por ${session.openedByName}`}
+              </span>
+            </span>
+          ) : (
+            <span className="text-fg-muted">Nenhum caixa aberto neste computador: as vendas não entram em fechamento de caixa.</span>
+          )}
+          <div className="flex gap-2">
+            {session && (
+              <Button size="sm" variant="secondary" onClick={() => setPanelOpen(true)}>
+                Sangria, suprimento e fechamento
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" onClick={() => setChoosingRegister(true)}>
+              {session ? 'Trocar caixa' : canRegister ? 'Abrir caixa' : 'Escolher caixa'}
+            </Button>
+          </div>
+        </div>
+      )}
       <div className="grid gap-6 lg:grid-cols-[1fr_22rem] print:hidden">
         <div className="min-w-0 space-y-4">
           <div className="relative">
@@ -242,17 +350,42 @@ export function PosPage() {
                 discount: discountCents / 100,
                 payments,
                 soldAt: soldOn || undefined,
+                registerId: session && register ? register.id : null,
               },
-            }).then((sale) => {
-              queryClient.invalidateQueries({ queryKey: salesKey });
-              setPaying(false);
-              setDone(sale);
-            })
+            }).then(
+              (sale) => {
+                queryClient.invalidateQueries({ queryKey: salesKey });
+                setPaying(false);
+                setDone(sale);
+              },
+              (err: unknown) => {
+                // Caixa fechado em outro computador (ou exigência ligada agora): recarrega o estado do caixa.
+                if (err instanceof ApiError && (err.code === 'REGISTER_CLOSED' || err.code === 'REGISTER_SESSION_REQUIRED')) {
+                  queryClient.invalidateQueries({ queryKey: registersKey });
+                }
+                throw err;
+              },
+            )
           }
         />
       )}
       {done && <DoneModal sale={done} onNext={reset} />}
-      {done && <Receipt sale={done} />}
+      {done && !closed && <Receipt sale={done} />}
+      {chooser}
+      {panelOpen && session && registers.data && (
+        <SessionPanel
+          sessionId={session.id}
+          overview={registers.data}
+          onClose={() => setPanelOpen(false)}
+          onClosed={(s) => {
+            setPanelOpen(false);
+            setDone(null);
+            setClosed(s);
+            queryClient.invalidateQueries({ queryKey: registersKey });
+          }}
+        />
+      )}
+      {closedView}
     </>
   );
 }

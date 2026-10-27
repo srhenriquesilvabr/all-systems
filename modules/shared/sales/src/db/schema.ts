@@ -1,6 +1,7 @@
-import { customers, users } from '@all/core/schema';
+import { customers, finAccounts, users } from '@all/core/schema';
 import { id, tenantId, tenantIsolation } from '@all/db';
-import { boolean, index, integer, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import { boolean, check, index, integer, jsonb, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 const ts = (name: string) => timestamp(name, { withTimezone: true });
 const money = (name: string) => numeric(name, { precision: 12, scale: 2 });
@@ -32,6 +33,84 @@ export const salesProducts = pgTable(
   (t) => [uniqueIndex('sales_products_barcode_key').on(t.tenantId, t.barcode), index('sales_products_name_idx').on(t.tenantId, t.name), tenantIsolation()],
 );
 
+/** Caixa físico / terminal do PDV ("Caixa 1", "Balcão"). */
+export const salesRegisters = pgTable(
+  'sales_registers',
+  {
+    id: id(),
+    tenantId: tenantId(),
+    name: text('name').notNull(),
+    active: boolean('active').notNull().default(true),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('sales_registers_name_key').on(t.tenantId, t.name), tenantIsolation()],
+);
+
+/** Retrato do fechamento (cópia imutável, valores em reais): o relatório reimpresso sai igual. */
+export interface RegisterClosingJson {
+  totals: { method: 'cash' | 'pix' | 'debit_card' | 'credit_card' | 'on_account' | 'other'; expected: number; counted: number | null; difference: number | null }[];
+  salesCount: number;
+  salesTotal: number;
+  withdrawals: number;
+  deposits: number;
+}
+
+/**
+ * Sessão de caixa: abertura (troco inicial) → vendas, sangrias e suprimentos → fechamento
+ * conferido. Fechada, não muda mais (o serviço recusa; ver também o gatilho em docs).
+ */
+export const salesRegisterSessions = pgTable(
+  'sales_register_sessions',
+  {
+    id: id(),
+    tenantId: tenantId(),
+    registerId: uuid('register_id')
+      .notNull()
+      .references(() => salesRegisters.id),
+    number: integer('number').notNull(),
+    status: text('status', { enum: ['open', 'closed'] }).notNull().default('open'),
+    openingFloat: money('opening_float').notNull(),
+    openedBy: uuid('opened_by').references(() => users.id),
+    openedAt: ts('opened_at').notNull().defaultNow(),
+    closedBy: uuid('closed_by').references(() => users.id),
+    closedAt: ts('closed_at'),
+    /** Preenchidos no fechamento. Diferença = contado − esperado (negativa = quebra). */
+    expectedCash: money('expected_cash'),
+    countedCash: money('counted_cash'),
+    cashDifference: money('cash_difference'),
+    closing: jsonb('closing').$type<RegisterClosingJson>(),
+    notes: text('notes'),
+  },
+  (t) => [
+    uniqueIndex('sales_register_sessions_number_key').on(t.tenantId, t.number),
+    // Uma sessão aberta por caixa.
+    uniqueIndex('sales_register_sessions_open_key').on(t.tenantId, t.registerId).where(sql`status = 'open'`),
+    index('sales_register_sessions_opened_idx').on(t.tenantId, t.openedAt),
+    check('sales_register_sessions_closed_chk', sql`status = 'open' or (closed_at is not null and counted_cash is not null and closing is not null)`),
+    tenantIsolation(),
+  ],
+);
+
+/** Sangria (retirada) e suprimento (reforço) de dinheiro na gaveta durante a sessão. */
+export const salesRegisterMoves = pgTable(
+  'sales_register_moves',
+  {
+    id: id(),
+    tenantId: tenantId(),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => salesRegisterSessions.id),
+    kind: text('kind', { enum: ['withdrawal', 'deposit'] }).notNull(),
+    amount: money('amount').notNull(),
+    reason: text('reason').notNull(),
+    /** Conta do outro lado (banco, cofre); sem conta, saiu/entrou como despesa/receita. */
+    accountId: uuid('account_id').references(() => finAccounts.id),
+    userId: uuid('user_id').references(() => users.id),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [index('sales_register_moves_session_idx').on(t.sessionId), check('sales_register_moves_amount_chk', sql`amount > 0`), tenantIsolation()],
+);
+
 export const salesSales = pgTable(
   'sales_sales',
   {
@@ -48,12 +127,15 @@ export const salesSales = pgTable(
     sellerId: uuid('seller_id').references(() => users.id),
     cancelReason: text('cancel_reason'),
     cancelledAt: ts('cancelled_at'),
+    /** Sessão de caixa da venda; os pagamentos dela entram no fechamento dessa sessão. */
+    registerSessionId: uuid('register_session_id').references(() => salesRegisterSessions.id),
     /** Quando a venda aconteceu; relatórios usam esta data. created_at é o registro (auditoria). */
     soldAt: ts('sold_at').notNull().defaultNow(),
     createdAt: ts('created_at').notNull().defaultNow(),
   },
   (t) => [
     uniqueIndex('sales_sales_number_key').on(t.tenantId, t.number),
+    index('sales_sales_register_session_idx').on(t.registerSessionId),
     index('sales_sales_created_idx').on(t.tenantId, t.createdAt),
     index('sales_sales_sold_idx').on(t.tenantId, t.soldAt),
     tenantIsolation(),

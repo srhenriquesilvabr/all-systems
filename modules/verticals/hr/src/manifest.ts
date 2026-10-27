@@ -9,14 +9,14 @@ export const hrSettings = z.object({
 });
 export type HrSettings = z.infer<typeof hrSettings>;
 
-/** RH e departamento pessoal: colaboradores, folha com INSS/IRRF/FGTS, holerite e férias. */
+/** RH e departamento pessoal: colaboradores, folha com INSS/IRRF/FGTS, 13º, rescisão, afastamentos, holerite e férias. */
 export const hrManifest = defineModule({
   key: 'hr',
   name: 'RH e departamento pessoal',
   layer: 'vertical',
-  description: 'Colaboradores, folha de pagamento e férias.',
+  description: 'Colaboradores, folha de pagamento, 13º, rescisão, afastamentos e férias.',
   icon: 'id-card',
-  version: '1.0.0',
+  version: '1.1.0',
   dependsOn: ['core.finance', 'shared.sales'],
   permissions: [
     { key: 'hr.read', label: 'Ver colaboradores, salários e folha (dado sensível)' },

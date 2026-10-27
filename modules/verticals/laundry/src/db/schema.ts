@@ -1,6 +1,9 @@
+import { customers, users } from '@all/core/schema';
 import { id, tenantId, tenantIsolation } from '@all/db';
 import { soItems, soOrders } from '@all/service-orders/schema';
-import { boolean, index, integer, numeric, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import { boolean, date, index, integer, jsonb, numeric, pgTable, primaryKey, text, time, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import type { JobAddress } from '../contracts';
 
 const ts = (name: string) => timestamp(name, { withTimezone: true });
 
@@ -108,4 +111,60 @@ export const laundryPieceEvents = pgTable(
     createdAt: ts('created_at').notNull().defaultNow(),
   },
   (t) => [index('laundry_piece_events_created_idx').on(t.tenantId, t.createdAt), index('laundry_piece_events_item_idx').on(t.itemId), tenantIsolation()],
+);
+
+/**
+ * Coleta (busca as peças na casa do cliente) ou entrega (leva a ordem pronta). A entrega nasce
+ * da ordem; a coleta ganha a ordem depois, quando o balcão confere as peças.
+ * Status: scheduled → en_route → done | failed (motivo; reagendável) · cancelled.
+ */
+export const laundryLogisticsJobs = pgTable(
+  'laundry_logistics_jobs',
+  {
+    id: id(),
+    tenantId: tenantId(),
+    kind: text('kind', { enum: ['pickup', 'delivery'] }).notNull(),
+    status: text('status', { enum: ['scheduled', 'en_route', 'done', 'failed', 'cancelled'] }).notNull().default('scheduled'),
+    customerId: uuid('customer_id')
+      .notNull()
+      .references(() => customers.id),
+    orderId: uuid('order_id').references(() => soOrders.id),
+    /** Copiado do cadastro do cliente ao agendar (e editável): o cadastro pode mudar depois. */
+    address: jsonb('address').$type<JobAddress>().notNull(),
+    date: date('date', { mode: 'string' }).notNull(),
+    period: text('period', { enum: ['morning', 'afternoon', 'evening'] }),
+    windowStart: time('window_start').notNull(),
+    windowEnd: time('window_end').notNull(),
+    /** Taxa de coleta/entrega: vira um "a receber" próprio no financeiro (source_type laundry_logistics). */
+    fee: numeric('fee', { precision: 14, scale: 2 }).notNull().default('0'),
+    notes: text('notes'),
+    driverUserId: uuid('driver_user_id').references(() => users.id, { onDelete: 'set null' }),
+    /** Coleta: quantas peças vieram. */
+    itemsCount: integer('items_count'),
+    /** Entrega: quem recebeu (a foto do comprovante fica em files, dono laundry_logistics_job). */
+    receiverName: text('receiver_name'),
+    startedAt: ts('started_at'),
+    completedAt: ts('completed_at'),
+    failReason: text('fail_reason'),
+    attempts: integer('attempts').notNull().default(0),
+    cancelReason: text('cancel_reason'),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: ts('created_at').notNull().defaultNow(),
+    updatedAt: ts('updated_at')
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [
+    index('laundry_logistics_jobs_day_idx').on(t.tenantId, t.date, t.windowStart),
+    index('laundry_logistics_jobs_driver_idx').on(t.tenantId, t.driverUserId, t.date),
+    index('laundry_logistics_jobs_customer_idx').on(t.tenantId, t.customerId),
+    index('laundry_logistics_jobs_order_idx').on(t.orderId),
+    // Uma entrega em aberto por ordem; e uma ordem nasce de no máximo uma coleta.
+    uniqueIndex('laundry_logistics_jobs_open_delivery')
+      .on(t.orderId)
+      .where(sql`kind = 'delivery' and status in ('scheduled', 'en_route', 'failed')`),
+    uniqueIndex('laundry_logistics_jobs_pickup_order').on(t.orderId).where(sql`kind = 'pickup'`),
+    tenantIsolation(),
+  ],
 );

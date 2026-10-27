@@ -1,7 +1,7 @@
 import { defineModule } from '@all/module-sdk';
 
 const vars = ['os.numero', 'os.status', 'os.total', 'os.saldo', 'os.previsao', 'os.itens'];
-const sales = ['shared.sales.sell', 'shared.sales.read'];
+const sales = ['shared.sales.sell', 'shared.sales.read', 'shared.sales.register'];
 const orders = ['shared.service-orders.read', 'shared.service-orders.write', 'shared.service-orders.status', 'shared.service-orders.payments'];
 
 /** Padaria: caixa (PDV) com balança, estoque, encomendas e plano de produção. */

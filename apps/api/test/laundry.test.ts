@@ -289,3 +289,258 @@ describe('lavanderia — balcão e produção', () => {
     });
   });
 });
+
+describe('lavanderia — coleta e entrega', () => {
+  let t: TestApp;
+  beforeAll(async () => {
+    t = await createTestApp();
+  });
+  afterAll(() => t.close());
+
+  const address = { street: 'Rua das Flores', number: '10', district: 'Centro', city: 'São Paulo', state: 'SP', zip: '01000-000' };
+  type Job = {
+    id: string;
+    kind: string;
+    status: string;
+    date: string;
+    period: string | null;
+    windowStart: string;
+    windowEnd: string;
+    fee: number;
+    feeStatus: string | null;
+    address: Record<string, string>;
+    mapsUrl: string | null;
+    driver: { id: string; name: string } | null;
+    order: { id: string; number: number; status: string } | null;
+    itemsCount: number | null;
+    receiverName: string | null;
+    completedAt: string | null;
+    failReason: string | null;
+    attempts: number;
+    photos: { id: string }[];
+  };
+
+  async function setup() {
+    const s = await ownerSession(t, ['laundry']);
+    const email = uniqueEmail('cliente');
+    const { body: customer } = await s.as('post', '/customers').send({ name: 'Rita Cliente', email, phone: '+5511987654321', address }).expect(201);
+    const { body: services } = await s.as('get', '/laundry/services').expect(200);
+    const service = (name: string) => services.find((x: { name: string }) => x.name === name);
+    return { ...s, customer, customerEmail: email, service };
+  }
+  type S = Awaited<ReturnType<typeof setup>>;
+
+  async function readyOrder(s: S) {
+    const { body } = await s
+      .as('post', '/laundry/orders')
+      .send({ customerId: s.customer.id, lines: [{ serviceId: s.service('Lavar e passar').id, quantity: 2 }] })
+      .expect(201);
+    await s.as('post', '/laundry/pieces/status').send({ itemIds: body.pieces.map((p: { itemId: string }) => p.itemId), status: 'ready' }).expect(200);
+    return body.order as { id: string; number: number; total: number };
+  }
+
+  /** Convida alguém com o papel Motorista e devolve o id (para atribuir) e um atalho autenticado. */
+  async function inviteDriver(s: S, name: string) {
+    const roles = await s.as('get', '/access/roles').expect(200);
+    const role = roles.body.find((r: { key: string }) => r.key === 'laundry.driver');
+    const email = uniqueEmail('motorista');
+    await s.as('post', '/users/invite').send({ email, name, roleIds: [role.id] }).expect(201);
+    await t.http().post('/api/auth/set-password').send({ token: tokenFromMail(t.mails.findLast((m) => m.to === email)), password: PASSWORD }).expect(204);
+    const { token } = await login(t, email);
+    const team = await s.as('get', '/users/team').expect(200);
+    const id = team.body.find((m: { name: string }) => m.name === name).id as string;
+    const as = (method: 'get' | 'post' | 'patch' | 'delete', path: string) => t.http()[method](`/api${path}`).set(auth(token));
+    return { id, as };
+  }
+
+  const feeEntries = async (s: S, jobId: string) => {
+    const res = await s.as('get', '/finance/entries?limit=200').expect(200);
+    return res.body.items.filter((e: { sourceId: string }) => e.sourceId === jobId) as { status: string; amount: number; sourceType: string; paymentMethod: string | null }[];
+  };
+  const lastMail = (s: S) => t.mails.findLast((m) => m.to === s.customerEmail);
+
+  it('agenda a coleta com o endereço do cadastro e a taxa padrão, conclui com as peças e abre a ordem ligada a ela', async () => {
+    const s = await setup();
+    await s.as('put', '/modules/laundry/settings').send({ pickupFee: 8, deliveryFee: 12 }).expect(204);
+
+    const { body: job } = (await s
+      .as('post', '/laundry/logistics/pickups')
+      .send({ customerId: s.customer.id, date: spDay(1), period: 'morning', notes: 'Interfone 12' })
+      .expect(201)) as { body: Job };
+    expect(job).toMatchObject({ kind: 'pickup', status: 'scheduled', date: spDay(1), period: 'morning', windowStart: '08:00', windowEnd: '12:00', fee: 8, feeStatus: 'pending', order: null });
+    expect(job.address).toMatchObject({ street: 'Rua das Flores', number: '10', city: 'São Paulo' });
+    expect(job.mapsUrl).toContain('https://www.google.com/maps/search/?api=1&query=Rua%20das%20Flores');
+    expect(await feeEntries(s, job.id)).toEqual([expect.objectContaining({ status: 'pending', amount: 8, sourceType: 'laundry_logistics' })]);
+    await t.relay.drain();
+    expect(lastMail(s)?.subject).toMatch(/^Coleta agendada para /);
+    expect(lastMail(s)?.text).toContain('Rua das Flores, 10');
+
+    await s.as('post', `/laundry/logistics/jobs/${job.id}/start`).expect(200);
+    await t.relay.drain();
+    expect(lastMail(s)?.subject).toBe('Estamos a caminho para buscar suas peças');
+
+    const noItems = await s.as('post', `/laundry/logistics/jobs/${job.id}/complete`).send({}).expect(400);
+    expect(noItems.body.code).toBe('ITEMS_REQUIRED');
+    const { body: done } = await s.as('post', `/laundry/logistics/jobs/${job.id}/complete`).send({ itemsCount: 6 }).expect(200);
+    expect(done).toMatchObject({ status: 'done', itemsCount: 6 });
+    expect(done.completedAt).toBeTruthy();
+
+    // No balcão, a ordem aberta a partir da coleta fica ligada a ela (uma vez só).
+    const lines = [{ serviceId: s.service('Lavar e passar').id, quantity: 6 }];
+    const { body: opened } = await s.as('post', '/laundry/orders').send({ customerId: s.customer.id, lines, pickupJobId: job.id }).expect(201);
+    const { body: linked } = await s.as('get', `/laundry/logistics/jobs/${job.id}`).expect(200);
+    expect(linked.order).toMatchObject({ id: opened.order.id, number: opened.order.number });
+    const again = await s.as('post', '/laundry/orders').send({ customerId: s.customer.id, lines, pickupJobId: job.id }).expect(409);
+    expect(again.body.code).toBe('PICKUP_ALREADY_LINKED');
+  });
+
+  it('entrega de ordem pronta com taxa: a taxa é um "a receber" à parte; motorista sai, entrega com comprovante e a ordem fica entregue', async () => {
+    const s = await setup();
+    const driver = await inviteDriver(s, 'Zé Entregador');
+    const order = await readyOrder(s);
+
+    const { body: job } = (await s
+      .as('post', `/laundry/orders/${order.id}/delivery`)
+      .send({ date: spDay(0), windowStart: '14:00', windowEnd: '16:00', fee: 10, driverUserId: driver.id })
+      .expect(201)) as { body: Job };
+    expect(job).toMatchObject({ kind: 'delivery', status: 'scheduled', period: null, windowStart: '14:00', windowEnd: '16:00', fee: 10, feeStatus: 'pending' });
+    expect(job.order).toMatchObject({ id: order.id, number: order.number, status: 'ready' });
+    expect(job.driver).toEqual({ id: driver.id, name: 'Zé Entregador' });
+    await t.relay.drain();
+    expect(lastMail(s)?.subject).toBe(`Entrega agendada — ordem nº ${order.number}`);
+
+    // A taxa não mexe no total da ordem: vira um lançamento próprio.
+    const { body: detail } = await s.as('get', `/laundry/orders/${order.id}`).expect(200);
+    expect(detail.order.total).toBe(order.total);
+    expect(await feeEntries(s, job.id)).toEqual([expect.objectContaining({ status: 'pending', amount: 10, sourceType: 'laundry_logistics' })]);
+
+    const twice = await s.as('post', `/laundry/orders/${order.id}/delivery`).send({ date: spDay(0), period: 'evening' }).expect(409);
+    expect(twice.body.code).toBe('DELIVERY_EXISTS');
+
+    // O motorista sai: a ordem vai para "Saiu para entrega" e o cliente é avisado.
+    const { body: started } = await driver.as('post', `/laundry/logistics/jobs/${job.id}/start`).expect(200);
+    expect(started.status).toBe('en_route');
+    expect(started.order.status).toBe('out_for_delivery');
+    await t.relay.drain();
+    expect(lastMail(s)?.subject).toBe(`Ordem nº ${order.number} saiu para entrega`);
+
+    const noReceiver = await driver.as('post', `/laundry/logistics/jobs/${job.id}/complete`).send({}).expect(400);
+    expect(noReceiver.body.code).toBe('RECEIVER_REQUIRED');
+
+    const photo = await driver
+      .as('post', `/laundry/logistics/jobs/${job.id}/photos`)
+      .attach('photo', PNG_1PX, { filename: 'comprovante.png', contentType: 'image/png' })
+      .expect(201);
+    const { body: done } = await driver
+      .as('post', `/laundry/logistics/jobs/${job.id}/complete`)
+      .send({ receiverName: 'Porteiro João', feeMethod: 'cash' })
+      .expect(200);
+    expect(done).toMatchObject({ status: 'done', receiverName: 'Porteiro João', feeStatus: 'paid' });
+    expect(done.completedAt).toBeTruthy();
+    expect(done.photos).toEqual([{ id: photo.body.id, filename: 'comprovante.png' }]);
+    expect(done.order.status).toBe('delivered');
+
+    const { body: delivered } = await s.as('get', `/laundry/orders/${order.id}`).expect(200);
+    expect(delivered.order.status).toBe('delivered');
+    expect(delivered.order.history.slice(-2).map((h: { to: string }) => h.to)).toEqual(['out_for_delivery', 'delivered']);
+    await t.relay.drain();
+    expect(lastMail(s)?.subject).toBe(`Ordem nº ${order.number} entregue`);
+
+    const fees = await feeEntries(s, job.id);
+    expect(fees.filter((e) => e.status === 'pending')).toEqual([]);
+    expect(fees).toEqual(expect.arrayContaining([expect.objectContaining({ status: 'paid', amount: 10, paymentMethod: 'cash' })]));
+  });
+
+  it('motorista só vê e movimenta as tarefas atribuídas a ele', async () => {
+    const s = await setup();
+    const ana = await inviteDriver(s, 'Ana Motorista');
+    const beto = await inviteDriver(s, 'Beto Motorista');
+    const schedule = async (driverUserId: string | null, period: string) =>
+      (await s.as('post', '/laundry/logistics/pickups').send({ customerId: s.customer.id, date: spDay(0), period, driverUserId }).expect(201)).body as Job;
+    const forAna = await schedule(ana.id, 'afternoon');
+    const forAnaEarly = await schedule(ana.id, 'morning');
+    const forBeto = await schedule(beto.id, 'morning');
+    await schedule(null, 'evening');
+
+    // Rota da Ana: só as dela, na ordem das janelas.
+    const { body: route } = await ana.as('get', '/laundry/logistics/my-route').expect(200);
+    expect(route.map((j: Job) => j.id)).toEqual([forAnaEarly.id, forAna.id]);
+
+    await ana.as('get', '/laundry/logistics/jobs').expect(403);
+    await ana.as('post', '/laundry/logistics/pickups').send({ customerId: s.customer.id, date: spDay(0), period: 'morning' }).expect(403);
+    await ana.as('patch', `/laundry/logistics/jobs/${forAna.id}`).send({ driverUserId: beto.id }).expect(403);
+    await ana.as('get', `/laundry/logistics/jobs/${forBeto.id}`).expect(404);
+    await ana.as('post', `/laundry/logistics/jobs/${forBeto.id}/start`).expect(404);
+    await ana.as('get', '/laundry/production').expect(403);
+    await ana.as('get', `/laundry/logistics/jobs/${forAna.id}`).expect(200);
+
+    // O escritório vê tudo e filtra por motorista ou pelas sem motorista.
+    const { body: all } = await s.as('get', `/laundry/logistics/jobs?date=${spDay(0)}`).expect(200);
+    expect(all).toHaveLength(4);
+    const { body: onlyBeto } = await s.as('get', `/laundry/logistics/jobs?date=${spDay(0)}&driverId=${beto.id}`).expect(200);
+    expect(onlyBeto.map((j: Job) => j.id)).toEqual([forBeto.id]);
+    const { body: unassigned } = await s.as('get', `/laundry/logistics/jobs?date=${spDay(0)}&driverId=none`).expect(200);
+    expect(unassigned).toHaveLength(1);
+
+    // Reatribuída para o Beto, some da rota da Ana.
+    await s.as('patch', `/laundry/logistics/jobs/${forAna.id}`).send({ driverUserId: beto.id }).expect(200);
+    const { body: after } = await ana.as('get', '/laundry/logistics/my-route').expect(200);
+    expect(after.map((j: Job) => j.id)).toEqual([forAnaEarly.id]);
+  });
+
+  it('entrega não realizada: registra o motivo, a ordem volta para "Pronta" e a entrega pode ser reagendada', async () => {
+    const s = await setup();
+    const driver = await inviteDriver(s, 'Caio Motorista');
+    const order = await readyOrder(s);
+    const { body: job } = (await s
+      .as('post', `/laundry/orders/${order.id}/delivery`)
+      .send({ date: spDay(0), period: 'morning', driverUserId: driver.id })
+      .expect(201)) as { body: Job };
+    expect(job.fee).toBe(0); // sem taxa padrão configurada
+    expect(job.feeStatus).toBeNull();
+
+    await driver.as('post', `/laundry/logistics/jobs/${job.id}/start`).expect(200);
+    await driver.as('post', `/laundry/logistics/jobs/${job.id}/fail`).send({ reason: '' }).expect(400);
+    const { body: failed } = await driver.as('post', `/laundry/logistics/jobs/${job.id}/fail`).send({ reason: 'Cliente ausente' }).expect(200);
+    expect(failed).toMatchObject({ status: 'failed', failReason: 'Cliente ausente', attempts: 1 });
+    expect(failed.order.status).toBe('ready');
+
+    const { body: detail } = await s.as('get', `/laundry/orders/${order.id}`).expect(200);
+    expect(detail.order.status).toBe('ready');
+    expect(detail.order.history.at(-1)).toMatchObject({ from: 'out_for_delivery', to: 'ready', reason: 'Entrega não realizada: Cliente ausente' });
+
+    const again = await driver.as('post', `/laundry/logistics/jobs/${job.id}/start`).expect(400);
+    expect(again.body.code).toBe('INVALID_JOB_STATUS');
+    const { body: pending } = await s.as('get', '/laundry/logistics/jobs?status=failed').expect(200);
+    expect(pending.map((j: Job) => j.id)).toContain(job.id);
+
+    // Reagendada para amanhã à tarde: volta para "Agendada", com o histórico da tentativa.
+    const { body: rescheduled } = await s.as('patch', `/laundry/logistics/jobs/${job.id}`).send({ date: spDay(1), period: 'afternoon' }).expect(200);
+    expect(rescheduled).toMatchObject({ status: 'scheduled', date: spDay(1), windowStart: '12:00', attempts: 1 });
+    await s.as('post', `/laundry/orders/${order.id}/delivery`).send({ date: spDay(1), period: 'evening' }).expect(409);
+  });
+
+  it('valida endereço, data e janela ao agendar', async () => {
+    const s = await setup();
+    const { body: noAddress } = await s.as('post', '/customers').send({ name: 'Sem Endereço', email: uniqueEmail('sem') }).expect(201);
+    const missing = await s.as('post', '/laundry/logistics/pickups').send({ customerId: noAddress.id, date: spDay(0), period: 'morning' }).expect(400);
+    expect(missing.body.code).toBe('ADDRESS_REQUIRED');
+    // Endereço informado na hora vale só para esta coleta.
+    const { body: job } = await s
+      .as('post', '/laundry/logistics/pickups')
+      .send({ customerId: noAddress.id, date: spDay(0), period: 'morning', address: { street: 'Av. Brasil', number: '500', city: 'Santos' } })
+      .expect(201);
+    expect(job.addressText).toBe('Av. Brasil, 500 — Santos');
+
+    const past = await s.as('post', '/laundry/logistics/pickups').send({ customerId: s.customer.id, date: spDay(-1), period: 'morning' }).expect(400);
+    expect(past.body.code).toBe('DATE_IN_PAST');
+    await s.as('post', '/laundry/logistics/pickups').send({ customerId: s.customer.id, date: spDay(0) }).expect(400);
+    await s.as('post', '/laundry/logistics/pickups').send({ customerId: s.customer.id, date: spDay(0), windowStart: '15:00', windowEnd: '14:00' }).expect(400);
+
+    // Entrega só para ordem ainda não entregue/cancelada.
+    const order = await readyOrder(s);
+    await s.as('post', `/service-orders/${order.id}/transition`).send({ to: 'delivered' }).expect(201);
+    const closed = await s.as('post', `/laundry/orders/${order.id}/delivery`).send({ date: spDay(0), period: 'morning' }).expect(400);
+    expect(closed.body.code).toBe('ORDER_NOT_OPEN');
+  });
+});

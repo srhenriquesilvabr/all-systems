@@ -4,7 +4,7 @@ import { Alert, Button, Card, Field, Input, PageHeader, Select, Textarea } from 
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { laundryOrderInput, pricingUnitLabel, type LaundryService } from '../contracts';
+import { laundryOrderInput, pricingUnitLabel, type LaundryService, type LogisticsJob } from '../contracts';
 import { laundryKey, useGarmentTypes, useServices, type LaundryOrderDetail } from './hooks';
 
 interface LineDraft {
@@ -42,6 +42,13 @@ export function NewLaundryOrderPage() {
   const pre = useQuery({ queryKey: ['customers', preselected], queryFn: () => api<CustomerOption>(`/customers/${preselected}`), enabled: !!preselected });
   const [picked, setPicked] = useState<CustomerOption | null | undefined>(undefined);
   const customer = picked === undefined ? (pre.data ?? null) : picked;
+  // Ordem das peças de uma coleta concluída (vem do quadro de coletas e entregas).
+  const pickupJobId = params.get('coleta');
+  const pickup = useQuery({
+    queryKey: [...laundryKey, 'logistics', 'job', pickupJobId],
+    queryFn: () => api<LogisticsJob>(`/laundry/logistics/jobs/${pickupJobId}`),
+    enabled: !!pickupJobId,
+  });
 
   const [lines, setLines] = useState<LineDraft[]>([emptyLine()]);
   const [discount, setDiscount] = useState('');
@@ -94,6 +101,7 @@ export function NewLaundryOrderPage() {
       dueAt: dueAt ? new Date(dueAt) : null,
       receivedAt: pastOrder ? receivedAt : undefined,
       notesCustomer: notesCustomer || null,
+      pickupJobId: pickupJobId || null,
       lines: lines.map((l) => {
         const unit = activeServices.find((s) => s.id === l.serviceId)?.pricingUnit;
         return {
@@ -122,6 +130,11 @@ export function NewLaundryOrderPage() {
     <>
       <PageHeader title="Balcão — nova ordem" description="Cada peça recebe uma etiqueta. Anote avarias que a peça já tem: isso protege a lavanderia." />
       <form onSubmit={submit} className="space-y-6">
+        {pickup.data && (
+          <Alert tone="info">
+            Peças da coleta de {pickup.data.customer.name}: {pickup.data.itemsCount ?? '?'} peça(s) informada(s) pelo motorista. A ordem fica ligada à coleta.
+          </Alert>
+        )}
         {(errors.length > 0 || create.error) && (
           <Alert>{errors.length ? errors.join(' · ') : create.error instanceof ApiError ? create.error.message : 'Erro ao salvar'}</Alert>
         )}

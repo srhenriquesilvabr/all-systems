@@ -10,6 +10,7 @@ const orders = {
 const customers = { read: 'core.customers.read', write: 'core.customers.write' };
 
 const vars = ['os.numero', 'os.status', 'os.total', 'os.saldo', 'os.previsao', 'os.itens'];
+const logisticsVars = ['os.numero', 'logistica.data', 'logistica.janela', 'logistica.endereco', 'logistica.taxa'];
 
 /** Vertical Lavanderia (ver docs/arquitetura/07-vertical-lavanderia.md): balcão, peças etiquetadas e produção. */
 export const laundryManifest = defineModule({
@@ -18,7 +19,7 @@ export const laundryManifest = defineModule({
   layer: 'vertical',
   description: 'Peça a peça, do recebimento à entrega, com etiquetas e prazos.',
   icon: 'shirt',
-  version: '0.3.0',
+  version: '0.4.0',
   dependsOn: ['core.customers', 'core.finance', 'shared.service-orders', 'shared.notifications', 'shared.sales'],
   optionalDependsOn: ['integration.payments'],
 
@@ -26,7 +27,8 @@ export const laundryManifest = defineModule({
     { key: 'laundry.orders.read', label: 'Ver ordens de serviço' },
     { key: 'laundry.orders.write', label: 'Criar e editar ordens' },
     { key: 'laundry.orders.status', label: 'Alterar status de peças e ordens' },
-    { key: 'laundry.logistics.manage', label: 'Gerenciar coletas e entregas' },
+    { key: 'laundry.logistics.manage', label: 'Gerenciar coletas e entregas (agendar, atribuir motorista, reagendar)' },
+    { key: 'laundry.logistics.drive', label: 'Fazer coletas e entregas (só as atribuídas a si)' },
     { key: 'laundry.catalog.manage', label: 'Gerenciar serviços e preços' },
     { key: 'laundry.reports.read', label: 'Ver relatórios da lavanderia' },
   ],
@@ -40,6 +42,7 @@ export const laundryManifest = defineModule({
         'laundry.orders.write',
         'laundry.orders.status',
         'laundry.logistics.manage',
+        'laundry.logistics.drive',
         orders.read,
         orders.write,
         orders.status,
@@ -56,13 +59,16 @@ export const laundryManifest = defineModule({
     {
       key: 'laundry.driver',
       label: 'Motorista',
-      permissions: ['laundry.orders.read', 'laundry.logistics.manage', orders.read, orders.status, customers.read],
+      // Só as próprias rotas: os dados do cliente e da ordem de que precisa vêm junto com cada tarefa.
+      permissions: ['laundry.logistics.drive'],
     },
   ],
 
   menu: [
     { label: 'Balcão', path: '/lavanderia/ordens/nova', icon: 'plus', permission: 'laundry.orders.write' },
     { label: 'Produção', path: '/lavanderia/producao', icon: 'kanban', permission: 'laundry.orders.status' },
+    { label: 'Coletas e entregas', path: '/lavanderia/logistica', icon: 'car', permission: 'laundry.logistics.manage' },
+    { label: 'Minhas rotas', path: '/lavanderia/minhas-rotas', icon: 'list', permission: 'laundry.logistics.drive' },
     { label: 'Relatórios da lavanderia', path: '/lavanderia/relatorios', icon: 'chart', permission: 'laundry.reports.read' },
     { label: 'Serviços e preços', path: '/lavanderia/servicos', icon: 'tag', permission: 'laundry.catalog.manage' },
   ],
@@ -109,6 +115,42 @@ export const laundryManifest = defineModule({
       },
       whatsapp: { body: 'Ordem nº {{os.numero}} entregue. Obrigado, {{cliente.nome}}! — {{empresa.nome}}' },
       variables: vars,
+    },
+    // Coleta e entrega. "A caminho" e "entregue" da entrega são os avisos da ordem acima
+    // (Saiu para entrega / Peças entregues), disparados quando o motorista sai e conclui.
+    {
+      key: 'laundry.delivery.scheduled',
+      label: 'Entrega agendada',
+      email: {
+        subject: 'Entrega agendada — ordem nº {{os.numero}}',
+        body: 'Olá, {{cliente.nome}}!\n\nAgendamos a entrega das peças da ordem nº {{os.numero}}:\n\nDia: {{logistica.data}}\nHorário: {{logistica.janela}}\nEndereço: {{logistica.endereco}}\nTaxa de entrega: {{logistica.taxa}}\n\nSe precisar mudar, é só responder esta mensagem.\n{{empresa.nome}}',
+      },
+      whatsapp: {
+        body: 'Olá, {{cliente.nome}}! Entrega da ordem nº {{os.numero}} agendada para {{logistica.data}}, {{logistica.janela}}, em {{logistica.endereco}}. Taxa: {{logistica.taxa}}. — {{empresa.nome}}',
+      },
+      variables: logisticsVars,
+    },
+    {
+      key: 'laundry.pickup.scheduled',
+      label: 'Coleta agendada',
+      email: {
+        subject: 'Coleta agendada para {{logistica.data}}',
+        body: 'Olá, {{cliente.nome}}!\n\nAgendamos a coleta das suas peças:\n\nDia: {{logistica.data}}\nHorário: {{logistica.janela}}\nEndereço: {{logistica.endereco}}\nTaxa de coleta: {{logistica.taxa}}\n\nDeixe as peças separadas. Se precisar mudar, é só responder esta mensagem.\n{{empresa.nome}}',
+      },
+      whatsapp: {
+        body: 'Olá, {{cliente.nome}}! Coleta agendada para {{logistica.data}}, {{logistica.janela}}, em {{logistica.endereco}}. Taxa: {{logistica.taxa}}. — {{empresa.nome}}',
+      },
+      variables: logisticsVars,
+    },
+    {
+      key: 'laundry.pickup.on_the_way',
+      label: 'Motorista a caminho da coleta',
+      email: {
+        subject: 'Estamos a caminho para buscar suas peças',
+        body: 'Olá, {{cliente.nome}}!\n\nO motorista saiu para a coleta das suas peças em {{logistica.endereco}} ({{logistica.janela}}).\n\n{{empresa.nome}}',
+      },
+      whatsapp: { body: 'Olá, {{cliente.nome}}! O motorista está a caminho para buscar suas peças ({{logistica.janela}}). — {{empresa.nome}}' },
+      variables: logisticsVars,
     },
     {
       key: 'laundry.item.incident',
