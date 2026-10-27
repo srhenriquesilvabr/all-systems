@@ -1,5 +1,5 @@
 import { useSession, type SessionInfo } from '@all/module-sdk/web';
-import { Button, cn, Select } from '@all/ui';
+import { Button, cn, PanelHost, Select } from '@all/ui';
 import { Building2, Home, LogOut, Menu, PanelLeftClose, PanelLeftOpen, X, type LucideIcon } from 'lucide-react';
 import { useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router';
@@ -52,7 +52,9 @@ export function AppLayout() {
 
       <main className="min-w-0 px-4 py-6 md:px-8 md:py-8 print:p-0">
         <div className="mx-auto max-w-6xl">
-          <Outlet />
+          <PanelHost>
+            <Outlet />
+          </PanelHost>
         </div>
       </main>
     </div>

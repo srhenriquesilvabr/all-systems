@@ -1,12 +1,18 @@
 import { api, useSession, type ModuleSummary } from '@all/module-sdk/web';
 import { Badge, Card, cn } from '@all/ui';
 import { useQuery } from '@tanstack/react-query';
-import { Building2, CircleCheck, LayoutGrid, Puzzle, Zap, type LucideIcon } from 'lucide-react';
+import { Building2, CircleCheck, LayoutGrid, MessageCircle, Puzzle, Zap, type LucideIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { iconFor } from '../layout/icons';
 
 const layerLabel: Record<string, string> = { vertical: 'Setor', integration: 'Integração', shared: 'Recurso' };
+
+/**
+ * WhatsApp comercial da Palmer Tech (ex.: "https://wa.me/5511999999999"). Enquanto não for
+ * definido, o botão aparece mas não leva a lugar nenhum.
+ */
+const SALES_WHATSAPP_URL: string | null = null;
 
 export function HomePage() {
   const session = useSession();
@@ -74,11 +80,16 @@ export function HomePage() {
       </Section>
 
       {session.isOwner && available.length > 0 && (
-        <Section icon={Puzzle} title="Disponíveis para contratar" description="Fale com a Palmer Tech para ativar um módulo nesta empresa.">
+        <Section icon={Puzzle} title="Disponíveis para contratar" description="Fale com a Palmer Tech pelo WhatsApp para ativar um módulo nesta empresa.">
           <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {available.map((m) => (
               <li key={m.key}>
-                <ModuleCard module={m} muted status={<Badge>{layerLabel[m.layer] ?? m.layer}</Badge>} />
+                <ModuleCard
+                  module={m}
+                  muted
+                  status={<Badge>{layerLabel[m.layer] ?? m.layer}</Badge>}
+                  action={<HireButton module={m.name} tenant={session.tenant.name} />}
+                />
               </li>
             ))}
           </ul>
@@ -106,7 +117,7 @@ function Section({ icon: Icon, title, description, aside, children }: { icon: Lu
   );
 }
 
-function ModuleCard({ module: m, status, muted }: { module: ModuleSummary; status: ReactNode; muted?: boolean }) {
+function ModuleCard({ module: m, status, muted, action }: { module: ModuleSummary; status: ReactNode; muted?: boolean; action?: ReactNode }) {
   const Icon = iconFor(m.icon);
   return (
     <Card className={cn('flex h-full gap-3.5 p-4', muted && 'border-dashed bg-surface/60')}>
@@ -124,7 +135,32 @@ function ModuleCard({ module: m, status, muted }: { module: ModuleSummary; statu
           {status}
         </div>
         {m.description && <p className="mt-1 text-sm leading-snug text-fg-muted">{m.description}</p>}
+        {action && <div className="mt-3">{action}</div>}
       </div>
     </Card>
+  );
+}
+
+function HireButton({ module, tenant }: { module: string; tenant: string }) {
+  const className =
+    'inline-flex h-8 items-center gap-1.5 rounded-full bg-[#25d366] px-3.5 text-sm font-medium text-[#0b3d20] transition-colors hover:bg-[#1fbe5b]';
+  const content = (
+    <>
+      <MessageCircle className="size-4" aria-hidden />
+      Contratar pelo WhatsApp
+    </>
+  );
+  if (!SALES_WHATSAPP_URL) {
+    return (
+      <button type="button" className={className} title="Em breve">
+        {content}
+      </button>
+    );
+  }
+  const text = `Olá! Quero contratar o módulo ${module} para a empresa ${tenant}.`;
+  return (
+    <a href={`${SALES_WHATSAPP_URL}?text=${encodeURIComponent(text)}`} target="_blank" rel="noreferrer" className={className}>
+      {content}
+    </a>
   );
 }
