@@ -7,6 +7,7 @@
 import { parseArgs } from 'node:util';
 import seedCore from './core.mjs';
 import { createClient, createRng } from './lib.mjs';
+import { seedPropertyPhotos, seedVehiclePhotos } from './photos.mjs';
 
 /** Empresa → setor (arquivo em verticals/) e o que ela vende, para o financeiro soar real. */
 const TENANTS = {
@@ -53,4 +54,6 @@ for (const [name, profile] of Object.entries(TENANTS)) {
   if (values['core-only']) continue;
   const { default: seedVertical } = await import(`./verticals/${profile.vertical}.mjs`);
   await seedVertical({ api, rng, log, tenant, customers, users });
+  if (profile.vertical === 'vehicles') await seedVehiclePhotos({ api, log });
+  if (profile.vertical === 'realestate') await seedPropertyPhotos({ api, log });
 }

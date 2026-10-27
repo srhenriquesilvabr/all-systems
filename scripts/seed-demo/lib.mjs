@@ -60,6 +60,26 @@ export function createClient(base) {
     patch: (path, body) => request('PATCH', path, { body }),
     del: (path) => request('DELETE', path),
 
+    /** Envia um arquivo (multipart), como o upload da tela. */
+    async upload(path, field, bytes, fileName, mime) {
+      const form = new FormData();
+      form.append(field, new Blob([bytes], { type: mime }), fileName);
+      for (let attempt = 0; ; attempt++) {
+        const res = await fetch(`${base}/api${path}`, { method: 'POST', headers: token ? { authorization: `Bearer ${token}` } : {}, body: form });
+        if ((res.status === 429 || res.status === 503 || res.status === 500) && attempt < 3) {
+          await sleep(2000 * 2 ** attempt);
+          continue;
+        }
+        if (res.status === 401 && credentials && currentTenant && attempt < 3) {
+          await renew();
+          continue;
+        }
+        const text = await res.text();
+        if (!res.ok) throw new ApiError('POST', path, res.status, text);
+        return text ? JSON.parse(text) : null;
+      }
+    },
+
     /** Faz login e devolve as empresas do usuário. */
     async login(email, password) {
       credentials = { email, password };
