@@ -6,7 +6,9 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { iconFor } from '../layout/icons';
 
-const layerLabel: Record<string, string> = { vertical: 'Setor', integration: 'Integração', shared: 'Recurso' };
+/** Ramo da empresa = a vertical (lavanderia, advocacia…). Módulo = o que se acrescenta a ele (integrações e recursos). */
+const layerLabel: Record<string, string> = { integration: 'Integração', shared: 'Módulo' };
+const isModule = (m: ModuleSummary) => m.layer === 'integration' || m.layer === 'shared';
 
 /**
  * WhatsApp comercial da Palmer Tech (ex.: "https://wa.me/5511999999999"). Enquanto não for
@@ -17,7 +19,8 @@ const SALES_WHATSAPP_URL: string | null = null;
 export function HomePage() {
   const session = useSession();
   const firstName = session.user.name.split(' ')[0];
-  const contracted = session.modules.filter((m) => m.layer !== 'core');
+  const branches = session.modules.filter((m) => m.layer === 'vertical');
+  const contracted = session.modules.filter(isModule);
   const shortcuts = session.menu.filter((m) => !m.group);
   const active = new Set(session.modules.map((m) => m.key));
 
@@ -33,28 +36,39 @@ export function HomePage() {
   return (
     <div className="space-y-8">
       <header className="mb-2">
-        <h1 className="font-display text-[28px] font-medium leading-tight tracking-tight">Olá, {firstName}</h1>
-        <p className="mt-1.5 inline-flex items-center gap-1.5 text-sm text-fg-muted">
-          <Building2 className="size-4" aria-hidden />
-          {session.tenant.name}
-        </p>
+        <h1 className="font-display text-[1.75rem] font-medium leading-tight tracking-tight">Olá, {firstName}</h1>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-fg-muted">
+          <span className="inline-flex items-center gap-1.5">
+            <Building2 className="size-4" aria-hidden />
+            {session.tenant.name}
+          </span>
+          {branches.map((s) => {
+            const Icon = iconFor(s.icon);
+            return (
+              <span key={s.key} className="inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-2.5 py-0.5 text-xs font-medium text-brand-700" title={s.description}>
+                <Icon className="size-3.5" aria-hidden />
+                Ramo da empresa: {s.name}
+              </span>
+            );
+          })}
+        </div>
       </header>
 
       <Section icon={Zap} title="Atalhos">
         {shortcuts.length ? (
-          <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+          <ul className="flex flex-wrap gap-3">
             {shortcuts.map((s) => {
               const Icon = iconFor(s.icon);
               return (
                 <li key={s.path}>
                   <Link
                     to={s.path}
-                    className="group flex h-full items-center gap-3 rounded-2xl border border-line bg-surface p-3.5 transition hover:border-brand-200 hover:shadow-sm"
+                    className="group flex h-full items-center gap-3 rounded-2xl border border-line bg-surface py-3 pl-3 pr-5 transition hover:border-brand-200 hover:shadow-sm"
                   >
                     <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-600 transition group-hover:bg-brand-600 group-hover:text-white">
                       <Icon className="size-5" aria-hidden />
                     </span>
-                    <span className="text-sm font-medium">{s.label}</span>
+                    <span className="whitespace-nowrap text-sm font-medium">{s.label}</span>
                   </Link>
                 </li>
               );
@@ -75,7 +89,7 @@ export function HomePage() {
             ))}
           </ul>
         ) : (
-          <Card className="p-5 text-sm text-fg-muted">Só os recursos básicos estão ativos nesta empresa: clientes, financeiro e usuários.</Card>
+          <Card className="p-5 text-sm text-fg-muted">Nenhum módulo contratado: só os recursos básicos (clientes, financeiro e usuários).</Card>
         )}
       </Section>
 

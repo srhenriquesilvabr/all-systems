@@ -53,6 +53,71 @@
   --color-chart-axis: #c3c8da;
 }
 
+/*
+ * Tema escuro: os mesmos tokens com outros valores, ligado por data-theme="dark" no <html>
+ * (src/layout/theme.ts). Componentes não mudam: quem usa bg-surface, text-fg, border-line…
+ * já acompanha. A variante dark: fica disponível para casos pontuais.
+ */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --color-canvas: #0a0e22;
+  --color-surface: #121836;
+  --color-muted: #1a2147;
+  --color-line: #273061;
+  --color-fg: #e9ebf7;
+  --color-fg-muted: #a6acc6;
+  --color-fg-subtle: #8f95b2;
+
+  /* Azul mais claro para manter contraste sobre fundo escuro; 50 vira um azul profundo. */
+  --color-brand-50: #1b2766;
+  --color-brand-200: #3a4fc4;
+  --color-brand-600: #4f68ff;
+  --color-brand-700: #a8b5ff;
+
+  /* Menu lateral um tom abaixo do fundo, para continuar se destacando. */
+  --color-ink: #060918;
+  --color-ink-soft: #151c42;
+  --color-ink-fg-muted: #9aa0b4;
+
+  --color-success-50: #0c2a1c;
+  --color-success-200: #1d5a3b;
+  --color-success-700: #6fe0a5;
+  --color-warning-50: #2c2109;
+  --color-warning-700: #f4b65a;
+  --color-danger-50: #2f1214;
+  --color-danger-200: #6e2721;
+  --color-danger-600: #f2564b;
+  --color-danger-700: #ff8f86;
+
+  --color-series-1: #6f85ff;
+  --color-series-2: #f08a5d;
+  --color-chart-grid: #1f2753;
+  --color-chart-axis: #3b4475;
+}
+
+/* Rolagem do menu lateral: fina e discreta sobre a tinta, sem empurrar os itens. */
+.sidebar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.16) transparent;
+  scrollbar-gutter: stable;
+}
+.sidebar-scroll:hover {
+  scrollbar-color: rgb(255 255 255 / 0.3) transparent;
+}
+
+/*
+ * Escala da tela: 80% da fonte padrão do navegador. Como medidas são em rem, textos,
+ * espaçamentos e larguras encolhem juntos. Só na tela: a impressão mantém o tamanho real.
+ */
+@media screen {
+  html {
+    font-size: 80%;
+  }
+}
+
 body {
   @apply bg-canvas font-sans text-fg antialiased;
 }

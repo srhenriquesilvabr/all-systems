@@ -11,14 +11,15 @@ export class ModulesController {
   ) {}
 
   /**
-   * Setores e integrações que uma empresa pode contratar. Core e módulos compartilhados ficam
-   * de fora: o core vem em toda empresa e os compartilhados chegam como dependência de um setor.
+   * Módulos que uma empresa pode contratar: integrações (Pix, WhatsApp, bancos) e recursos
+   * compartilhados (agenda, vendas e estoque…). Segmentos (as verticais: lavanderia, advocacia…)
+   * definem o ramo da empresa e não são oferecidos aqui; o core vem em toda empresa.
    */
   @Get('catalog')
   catalog() {
     return this.registry
       .all()
-      .filter((m) => m.layer === 'vertical' || m.layer === 'integration')
+      .filter((m) => m.layer === 'integration' || m.layer === 'shared')
       .map((m) => ({ key: m.key, name: m.name, layer: m.layer, description: m.description, icon: m.icon }));
   }
 

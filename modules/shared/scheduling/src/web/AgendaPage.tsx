@@ -235,7 +235,7 @@ function DayColumn({
             {a.subject ? `${a.subject.label} · ` : ''}
             {a.services.map((s) => s.name).join(', ')}
           </span>
-          <span className="block truncate text-[11px] text-fg-muted">{appointmentStatusLabel[a.status]}</span>
+          <span className="block truncate text-[0.6875rem] text-fg-muted">{appointmentStatusLabel[a.status]}</span>
         </button>
       ))}
 

@@ -46,7 +46,7 @@ Cada push na branch de produção no GitHub dispara o build e o deploy no Cloudf
 | Admin (React) | Assets estáticos do Worker `palmer-systems` |
 | API (NestJS) | O mesmo Worker, em `/api/*` (`apps/api/src/edge.mts`) |
 | Outbox e jobs | Cron Trigger do Worker, a cada minuto |
-| Banco | Supabase (Postgres), via Hyperdrive com cache desligado |
+| Banco | Supabase (Postgres), via Hyperdrive com cache desligado e no máximo 10 conexões com a origem |
 | Fotos e documentos | R2, bucket `palmer-systems-files` |
 | E-mails | Resend (`RESEND_API_KEY`) |
 
@@ -54,6 +54,8 @@ Configuração do Workers Builds:
 - **Build command:** `pnpm build`
 - **Deploy command:** `pnpm deploy:cloudflare` (migrations, `cli sync` e `wrangler deploy`)
 - **Variáveis de build:** `MIGRATION_DATABASE_URL` (Supabase, usuário `postgres`, pooler de sessão, porta 5432). Na primeira vez, defina também `APP_USER_PASSWORD`: a senha do `app_user`, que o Hyperdrive usa.
+
+O pooler de sessão do Supabase aceita até 15 conexões (`pool_size`). Por isso o Hyperdrive fica limitado a 10 (`wrangler hyperdrive update <id> --origin-connection-limit 10`): nos picos ele enfileira as consultas em vez de abrir a 16ª conexão, que o Supabase recusaria com `EMAXCONNSESSION` (erro 500 na API). As 5 restantes ficam para migrations e para o painel do Supabase. Se o plano do Supabase mudar, ajuste os dois números juntos.
 
 Segredos do Worker (`pnpm exec wrangler secret put <NOME>`): `JWT_SECRET`, `SETTINGS_ENCRYPTION_KEY` (32 bytes em base64) e `RESEND_API_KEY`. As demais variáveis ficam em `vars`, no [wrangler.jsonc](wrangler.jsonc).
 

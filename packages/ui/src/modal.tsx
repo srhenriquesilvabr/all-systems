@@ -57,7 +57,7 @@ function PagePanel({ title, onClose, children, footer }: ModalProps) {
         </svg>
         Voltar
       </button>
-      <h1 id={headingId} ref={heading} tabIndex={-1} className="mb-6 font-display text-[28px] font-medium leading-tight tracking-tight text-fg outline-none">
+      <h1 id={headingId} ref={heading} tabIndex={-1} className="mb-6 font-display text-[1.75rem] font-medium leading-tight tracking-tight text-fg outline-none">
         {title}
       </h1>
       <div className="rounded-2xl border border-line bg-surface p-5">{children}</div>

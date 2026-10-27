@@ -1,11 +1,12 @@
 import { useSession, type SessionInfo } from '@all/module-sdk/web';
 import { Button, cn, PanelHost, Select } from '@all/ui';
-import { Building2, Home, LogOut, Menu, PanelLeftClose, PanelLeftOpen, X, type LucideIcon } from 'lucide-react';
+import { Building2, Home, LogOut, Menu, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Sun, X, type LucideIcon } from 'lucide-react';
 import { useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router';
 import { useAuth } from '../auth/auth';
 import { BrandLogo } from './BrandLogo';
 import { iconFor } from './icons';
+import { useTheme, type ThemePreference } from './theme';
 
 const COLLAPSED_KEY = 'palmer:sidebar-collapsed';
 
@@ -51,7 +52,7 @@ export function AppLayout() {
       </aside>
 
       <main className="min-w-0 px-4 py-6 md:px-8 md:py-8 print:p-0">
-        <div className="mx-auto max-w-6xl">
+        <div className="mx-auto max-w-[120rem]">
           <PanelHost>
             <Outlet />
           </PanelHost>
@@ -80,7 +81,7 @@ function Sidebar({ collapsed, onToggle, onNavigate }: { collapsed: boolean; onTo
       <div>
         <div className={cn('mb-5 hidden items-center justify-between gap-2 md:flex', collapsed && 'flex-col')}>
           {collapsed ? (
-            <img src="/brand/palmer-simbolo-white.svg" alt="Palmer Tech" width={30} height={30} />
+            <img src="/brand/palmer-simbolo-white.svg" alt="Palmer Tech" width={30} height={30} className="size-[1.875rem]" />
           ) : (
             <BrandLogo tone="dark" className="px-2" />
           )}
@@ -129,7 +130,7 @@ function Sidebar({ collapsed, onToggle, onNavigate }: { collapsed: boolean; onTo
         )}
       </div>
 
-      <nav className="-mx-1 flex-1 space-y-5 overflow-y-auto overflow-x-hidden px-1" aria-label="Menu principal">
+      <nav className={cn('sidebar-scroll -mx-1 flex-1 space-y-5 overflow-y-auto overflow-x-hidden pl-1 pr-2.5', collapsed && 'md:pr-1')} aria-label="Menu principal">
         <ul className="space-y-0.5">
           {item('/', 'Início', Home)}
           {groups.main.map((m) => item(m.path, m.label, iconFor(m.icon)))}
@@ -157,10 +158,11 @@ function Sidebar({ collapsed, onToggle, onNavigate }: { collapsed: boolean; onTo
             <p className="truncate text-xs text-ink-fg-muted">{session.user.email}</p>
           </div>
         </div>
+        <ThemeSwitch collapsed={collapsed} />
         <Button
           variant="ghost"
           size="sm"
-          className={cn('mt-2 w-full justify-start text-ink-fg-muted hover:bg-white/10 hover:text-white', collapsed && 'md:justify-center')}
+          className={cn('mt-1 w-full justify-start text-ink-fg-muted hover:bg-white/10 hover:text-white', collapsed && 'md:justify-center')}
           onClick={logout}
           title={collapsed ? 'Sair' : undefined}
         >
@@ -168,6 +170,54 @@ function Sidebar({ collapsed, onToggle, onNavigate }: { collapsed: boolean; onTo
         </Button>
       </div>
     </div>
+  );
+}
+
+const themes: { value: ThemePreference; label: string; icon: LucideIcon }[] = [
+  { value: 'light', label: 'Claro', icon: Sun },
+  { value: 'dark', label: 'Escuro', icon: Moon },
+  { value: 'system', label: 'Automático', icon: Monitor },
+];
+
+/** Tema da tela. Aberto: três opções lado a lado. Recolhido: um botão que alterna entre elas. */
+function ThemeSwitch({ collapsed }: { collapsed: boolean }) {
+  const { preference, change } = useTheme();
+  const current = themes.find((t) => t.value === preference)!;
+  const next = themes[(themes.indexOf(current) + 1) % themes.length]!;
+
+  return (
+    <>
+      <div role="radiogroup" aria-label="Tema" className={cn('mt-3 grid grid-cols-3 gap-1 rounded-lg bg-white/5 p-1', collapsed && 'md:hidden')}>
+        {themes.map(({ value, label, icon: Icon }) => (
+          <button
+            key={value}
+            type="button"
+            role="radio"
+            aria-checked={preference === value}
+            onClick={() => change(value)}
+            title={label}
+            className={cn(
+              'flex items-center justify-center gap-1.5 rounded-md px-1.5 py-1 text-xs transition-colors',
+              preference === value ? 'bg-ink-soft font-medium text-white' : 'text-ink-fg-muted hover:text-white',
+            )}
+          >
+            <Icon className="size-3.5" aria-hidden />
+            {label}
+          </button>
+        ))}
+      </div>
+      {collapsed && (
+        <button
+          type="button"
+          onClick={() => change(next.value)}
+          title={`Tema: ${current.label} (mudar para ${next.label})`}
+          aria-label={`Tema: ${current.label}. Mudar para ${next.label}`}
+          className="mx-auto mt-3 hidden size-9 items-center justify-center rounded-lg text-ink-fg-muted hover:bg-white/10 hover:text-white md:flex"
+        >
+          <current.icon className="size-4" />
+        </button>
+      )}
+    </>
   );
 }
 
