@@ -16,7 +16,7 @@ export const orthodonticsManifest = defineModule({
   description: 'Tratamentos ortodônticos, manutenções e prontuário.',
   icon: 'smile',
   version: '1.0.0',
-  dependsOn: ['core.customers', 'core.finance', 'shared.notifications', 'shared.scheduling', 'shared.medical-records'],
+  dependsOn: ['core.customers', 'core.finance', 'shared.notifications', 'shared.scheduling', 'shared.medical-records', 'shared.sales'],
   optionalDependsOn: ['integration.whatsapp', 'integration.payments'],
   permissions: [
     { key: 'orthodontics.treatments.read', label: 'Ver tratamentos e mensalidades' },

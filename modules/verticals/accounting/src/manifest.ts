@@ -8,7 +8,7 @@ export const accountingManifest = defineModule({
   description: 'Carteira de empresas, obrigações e honorários.',
   icon: 'calculator',
   version: '1.0.0',
-  dependsOn: ['core.customers', 'core.finance', 'shared.notifications'],
+  dependsOn: ['core.customers', 'core.finance', 'shared.notifications', 'shared.sales'],
   optionalDependsOn: ['integration.whatsapp'],
   permissions: [
     { key: 'accounting.read', label: 'Ver carteira e obrigações' },

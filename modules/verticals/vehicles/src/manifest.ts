@@ -10,7 +10,7 @@ export const vehiclesManifest = defineModule({
   description: 'Estoque de veículos e negociações, com financiamento.',
   icon: 'car',
   version: '1.0.0',
-  dependsOn: ['core.customers', 'core.finance', 'shared.notifications', 'integration.banking'],
+  dependsOn: ['core.customers', 'core.finance', 'shared.notifications', 'integration.banking', 'shared.sales'],
   optionalDependsOn: ['integration.whatsapp'],
   permissions: [
     { key: 'vehicles.stock.read', label: 'Ver o estoque de veículos' },

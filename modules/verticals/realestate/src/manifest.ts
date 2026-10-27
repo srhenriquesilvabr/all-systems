@@ -11,7 +11,7 @@ export const realEstateManifest = defineModule({
   description: 'Cadastro de imóveis e negociações.',
   icon: 'building',
   version: '1.0.0',
-  dependsOn: ['core.customers', 'core.finance', 'shared.notifications', 'shared.scheduling', 'integration.banking'],
+  dependsOn: ['core.customers', 'core.finance', 'shared.notifications', 'shared.scheduling', 'integration.banking', 'shared.sales'],
   optionalDependsOn: ['integration.whatsapp'],
   permissions: [
     { key: 'real_estate.properties.read', label: 'Ver imóveis' },

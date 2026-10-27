@@ -15,7 +15,7 @@ export const consortiumManifest = defineModule({
   description: 'Simulador de planos, cotas e assembleias.',
   icon: 'ticket',
   version: '1.0.0',
-  dependsOn: ['core.customers', 'core.finance', 'shared.notifications', 'integration.banking'],
+  dependsOn: ['core.customers', 'core.finance', 'shared.notifications', 'integration.banking', 'shared.sales'],
   optionalDependsOn: ['integration.whatsapp'],
   permissions: [
     { key: 'consortium.read', label: 'Ver planos, cotas e assembleias' },

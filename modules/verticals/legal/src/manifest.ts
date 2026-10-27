@@ -14,7 +14,7 @@ export const legalManifest = defineModule({
   description: 'Processos, prazos, andamentos e honorários.',
   icon: 'scale',
   version: '1.0.0',
-  dependsOn: ['core.customers', 'core.finance', 'shared.notifications', 'shared.scheduling'],
+  dependsOn: ['core.customers', 'core.finance', 'shared.notifications', 'shared.scheduling', 'shared.sales'],
   optionalDependsOn: ['integration.whatsapp', 'integration.payments'],
   permissions: [
     { key: 'legal.cases.read', label: 'Ver processos, andamentos e prazos' },

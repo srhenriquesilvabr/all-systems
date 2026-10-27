@@ -17,7 +17,7 @@ export const hrManifest = defineModule({
   description: 'Colaboradores, folha de pagamento e férias.',
   icon: 'id-card',
   version: '1.0.0',
-  dependsOn: ['core.finance'],
+  dependsOn: ['core.finance', 'shared.sales'],
   permissions: [
     { key: 'hr.read', label: 'Ver colaboradores, salários e folha (dado sensível)' },
     { key: 'hr.manage', label: 'Cadastrar colaboradores e férias' },

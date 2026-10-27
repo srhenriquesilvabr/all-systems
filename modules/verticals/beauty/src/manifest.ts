@@ -15,7 +15,7 @@ export const beautyManifest = defineModule({
   description: 'Agenda do salão, serviços e comissões dos profissionais.',
   icon: 'scissors',
   version: '1.0.0',
-  dependsOn: ['core.customers', 'core.finance', 'shared.notifications', 'shared.scheduling'],
+  dependsOn: ['core.customers', 'core.finance', 'shared.notifications', 'shared.scheduling', 'shared.sales'],
   optionalDependsOn: ['integration.whatsapp', 'integration.payments'],
   permissions: [
     { key: 'beauty.commissions.read', label: 'Ver comissões de todos os profissionais' },
