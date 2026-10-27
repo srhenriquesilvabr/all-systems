@@ -2,10 +2,10 @@ import { api, apiDownload, ApiError, formatDate, formatDateTime, useCan, useSess
 import { Alert, Badge, Button, Card, Checkbox, EmptyState, PageHeader, Spinner, Tabs } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { useParams } from 'react-router';
+import { useNavigate, useParams } from 'react-router';
 import { webModules } from '../../modules';
 import { CustomerSegment } from '../segmentation/SegmentsPage';
-import { CustomerForm, useCustomFields } from './CustomerForm';
+import { useCustomFields } from './CustomerForm';
 import { formatDocument, formatPhone } from './format';
 import type { ConsentPurpose, CustomerDetail } from './types';
 
@@ -28,7 +28,7 @@ export function CustomerPage() {
   const canWrite = useCan('core.customers.write');
   const canPrivacy = useCan('core.customers.privacy');
   const [tab, setTab] = useState('data');
-  const [editing, setEditing] = useState(false);
+  const navigate = useNavigate();
   const customer = useQuery({ queryKey: ['customers', id], queryFn: () => api<CustomerDetail>(`/customers/${id}`) });
 
   // Abas que os módulos ativos acrescentam à ficha (ex.: "Ordens de serviço").
@@ -51,7 +51,7 @@ export function CustomerPage() {
         actions={
           canWrite &&
           !c.anonymizedAt && (
-            <Button variant="secondary" onClick={() => setEditing(true)}>
+            <Button variant="secondary" onClick={() => navigate(`/clientes/${c.id}/editar`)}>
               Editar
             </Button>
           )
@@ -80,16 +80,6 @@ export function CustomerPage() {
       {tab === 'privacy' && <PrivacyTab customer={c} canWrite={canWrite} canPrivacy={canPrivacy} />}
       {ModuleTab && <ModuleTab customerId={c.id} />}
 
-      {editing && (
-        <CustomerForm
-          customer={c}
-          onClose={() => setEditing(false)}
-          onSaved={() => {
-            setEditing(false);
-            customer.refetch();
-          }}
-        />
-      )}
     </>
   );
 }

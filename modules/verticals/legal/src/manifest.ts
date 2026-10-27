@@ -11,6 +11,8 @@ export const legalManifest = defineModule({
   key: 'legal',
   name: 'Escritório de advocacia',
   layer: 'vertical',
+  description: 'Processos, prazos, andamentos e honorários.',
+  icon: 'scale',
   version: '1.0.0',
   dependsOn: ['core.customers', 'core.finance', 'shared.notifications', 'shared.scheduling'],
   optionalDependsOn: ['integration.whatsapp', 'integration.payments'],

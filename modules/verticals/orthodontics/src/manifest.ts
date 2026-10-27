@@ -13,6 +13,8 @@ export const orthodonticsManifest = defineModule({
   key: 'orthodontics',
   name: 'Clínica ortodôntica',
   layer: 'vertical',
+  description: 'Tratamentos ortodônticos, manutenções e prontuário.',
+  icon: 'smile',
   version: '1.0.0',
   dependsOn: ['core.customers', 'core.finance', 'shared.notifications', 'shared.scheduling', 'shared.medical-records'],
   optionalDependsOn: ['integration.whatsapp', 'integration.payments'],

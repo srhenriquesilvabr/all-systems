@@ -17,6 +17,8 @@ export const paymentsManifest = defineModule({
   key: 'integration.payments',
   name: 'Pix',
   layer: 'integration',
+  description: 'Cobrança por Pix copia e cola nas ordens e vendas.',
+  icon: 'qr',
   version: '1.0.0',
   settings: paymentsSettings,
   menu: [{ label: 'Pix', path: '/configuracoes/pix', icon: 'qr', permission: 'core.access.settings', group: 'Configurações' }],

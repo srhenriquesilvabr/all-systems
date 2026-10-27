@@ -16,6 +16,8 @@ export const laundryManifest = defineModule({
   key: 'laundry',
   name: 'Lavanderia',
   layer: 'vertical',
+  description: 'Peça a peça, do recebimento à entrega, com etiquetas e prazos.',
+  icon: 'shirt',
   version: '0.3.0',
   dependsOn: ['core.customers', 'core.finance', 'shared.service-orders', 'shared.notifications'],
   optionalDependsOn: ['integration.payments'],

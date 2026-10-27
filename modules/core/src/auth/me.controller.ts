@@ -34,7 +34,7 @@ export class MeController {
       tenants: await this.auth.tenantsOf(ctx.userId),
       modules: moduleKeys.map((key) => {
         const m = this.registry.get(key)!;
-        return { key: m.key, name: m.name, layer: m.layer };
+        return { key: m.key, name: m.name, layer: m.layer, description: m.description, icon: m.icon };
       }),
       permissions: [...permissions].sort(),
       isOwner: !!ctx.isOwner,

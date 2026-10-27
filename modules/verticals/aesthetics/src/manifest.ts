@@ -20,6 +20,8 @@ export const aestheticsManifest = defineModule({
   key: 'aesthetics',
   name: 'Clínica de estética',
   layer: 'vertical',
+  description: 'Procedimentos, pacotes de sessões e prontuário.',
+  icon: 'sparkles',
   version: '1.0.0',
   dependsOn: ['core.customers', 'core.finance', 'shared.notifications', 'shared.scheduling', 'shared.medical-records'],
   optionalDependsOn: ['integration.whatsapp', 'integration.payments'],

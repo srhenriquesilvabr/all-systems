@@ -12,6 +12,8 @@ export const beautyManifest = defineModule({
   key: 'beauty',
   name: 'Salão de beleza',
   layer: 'vertical',
+  description: 'Agenda do salão, serviços e comissões dos profissionais.',
+  icon: 'scissors',
   version: '1.0.0',
   dependsOn: ['core.customers', 'core.finance', 'shared.notifications', 'shared.scheduling'],
   optionalDependsOn: ['integration.whatsapp', 'integration.payments'],

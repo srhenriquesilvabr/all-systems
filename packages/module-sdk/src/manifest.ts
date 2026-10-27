@@ -33,6 +33,10 @@ export interface ModuleManifest {
   key: string;
   name: string;
   layer: ModuleLayer;
+  /** Uma frase sobre o que o módulo faz, mostrada no catálogo e no início do admin. */
+  description?: string;
+  /** Ícone do módulo no admin (mesmos nomes usados no `icon` do menu). */
+  icon?: string;
   version: string;
   dependsOn?: string[];
   optionalDependsOn?: string[];

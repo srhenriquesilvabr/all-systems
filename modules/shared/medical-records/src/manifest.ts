@@ -4,6 +4,8 @@ export const medicalRecordsManifest = defineModule({
   key: 'shared.medical-records',
   name: 'Prontuário',
   layer: 'shared',
+  description: 'Prontuário sem alteração de registros, com log de acesso.',
+  icon: 'file-heart',
   version: '1.0.0',
   dependsOn: ['core.customers'],
   permissions: [

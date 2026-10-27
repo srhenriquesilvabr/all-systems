@@ -19,6 +19,8 @@ export const petshopManifest = defineModule({
   key: 'petshop',
   name: 'Pet shop',
   layer: 'vertical',
+  description: 'Banho e tosa com quadro do dia e venda de produtos.',
+  icon: 'paw',
   version: '1.0.0',
   dependsOn: ['core.customers', 'core.finance', 'shared.notifications', 'shared.scheduling', 'shared.pets', 'shared.sales'],
   optionalDependsOn: ['integration.whatsapp', 'integration.payments'],

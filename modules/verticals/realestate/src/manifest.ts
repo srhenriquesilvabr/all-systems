@@ -8,6 +8,8 @@ export const realEstateManifest = defineModule({
   key: 'real_estate',
   name: 'Imobiliária',
   layer: 'vertical',
+  description: 'Cadastro de imóveis e negociações.',
+  icon: 'building',
   version: '1.0.0',
   dependsOn: ['core.customers', 'core.finance', 'shared.notifications', 'shared.scheduling', 'integration.banking'],
   optionalDependsOn: ['integration.whatsapp'],

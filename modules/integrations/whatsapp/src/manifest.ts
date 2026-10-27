@@ -25,6 +25,8 @@ export const whatsappManifest = defineModule({
   key: 'integration.whatsapp',
   name: 'WhatsApp',
   layer: 'integration',
+  description: 'Mensagens e lembretes pelo WhatsApp, com confirmação do cliente.',
+  icon: 'message',
   version: '1.0.0',
   settings: whatsappSettings,
   secretSettings: ['accessToken'],

@@ -9,6 +9,8 @@ export const bakeryManifest = defineModule({
   key: 'bakery',
   name: 'Padaria',
   layer: 'vertical',
+  description: 'Encomendas, produção do dia e caixa.',
+  icon: 'croissant',
   version: '1.0.0',
   dependsOn: ['core.customers', 'core.finance', 'shared.notifications', 'shared.sales', 'shared.service-orders'],
   optionalDependsOn: ['integration.whatsapp', 'integration.payments'],

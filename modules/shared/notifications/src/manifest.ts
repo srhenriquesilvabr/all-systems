@@ -4,6 +4,8 @@ export const notificationsManifest = defineModule({
   key: 'shared.notifications',
   name: 'Notificações',
   layer: 'shared',
+  description: 'Avisos automáticos aos clientes por e-mail e WhatsApp.',
+  icon: 'bell',
   version: '1.0.0',
   dependsOn: ['core.customers'],
   permissions: [

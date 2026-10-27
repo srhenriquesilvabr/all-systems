@@ -7,6 +7,7 @@ import { useAuth } from './auth/auth';
 import { AppLayout } from './layout/AppLayout';
 import { webModules } from './modules';
 import { AuditPage } from './pages/AuditPage';
+import { EditCustomerPage, NewCustomerPage } from './pages/customers/CustomerFormPage';
 import { CustomerPage } from './pages/customers/CustomerPage';
 import { CustomersPage } from './pages/customers/CustomersPage';
 import { SegmentsPage } from './pages/segmentation/SegmentsPage';
@@ -72,7 +73,9 @@ export function App() {
           <Route path="configuracoes/auditoria" element={<Guarded permission="core.audit.read" Component={AuditPage} />} />
           <Route path="configuracoes/campos-de-clientes" element={<Guarded permission="core.customers.fields" Component={CustomFieldsPage} />} />
           <Route path="clientes" element={<Guarded permission="core.customers.read" Component={CustomersPage} />} />
+          <Route path="clientes/novo" element={<Guarded permission="core.customers.write" Component={NewCustomerPage} />} />
           <Route path="clientes/:id" element={<Guarded permission="core.customers.read" Component={CustomerPage} />} />
+          <Route path="clientes/:id/editar" element={<Guarded permission="core.customers.write" Component={EditCustomerPage} />} />
           <Route path="segmentos" element={<Guarded permission="core.segmentation.read" Component={SegmentsPage} />} />
           <Route path="financeiro" element={<Guarded permission="core.finance.read" Component={FinanceOverviewPage} />} />
           <Route path="financeiro/lancamentos" element={<Guarded permission="core.finance.read" Component={FinanceEntriesPage} />} />

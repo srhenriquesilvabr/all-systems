@@ -6,6 +6,8 @@ export const salesManifest = defineModule({
   key: 'shared.sales',
   name: 'Vendas e estoque',
   layer: 'shared',
+  description: 'Caixa (PDV), vendas e controle de estoque.',
+  icon: 'register',
   version: '1.0.0',
   dependsOn: ['core.customers', 'core.finance'],
   permissions: [

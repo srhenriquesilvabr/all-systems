@@ -6,6 +6,8 @@ export const serviceOrdersManifest = defineModule({
   key: 'shared.service-orders',
   name: 'Ordens de serviço',
   layer: 'shared',
+  description: 'Ordens de serviço com etapas, pagamentos e histórico.',
+  icon: 'clipboard',
   version: '1.0.0',
   dependsOn: ['core.customers', 'core.finance', 'shared.notifications'],
   permissions: [

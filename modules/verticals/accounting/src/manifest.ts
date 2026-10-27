@@ -5,6 +5,8 @@ export const accountingManifest = defineModule({
   key: 'accounting',
   name: 'Escritório de contabilidade',
   layer: 'vertical',
+  description: 'Carteira de empresas, obrigações e honorários.',
+  icon: 'calculator',
   version: '1.0.0',
   dependsOn: ['core.customers', 'core.finance', 'shared.notifications'],
   optionalDependsOn: ['integration.whatsapp'],

@@ -7,6 +7,8 @@ export const schedulingManifest = defineModule({
   key: 'shared.scheduling',
   name: 'Agenda',
   layer: 'shared',
+  description: 'Agenda de profissionais e serviços, com agendamento online.',
+  icon: 'calendar',
   version: '1.0.0',
   dependsOn: ['core.customers', 'core.finance', 'shared.notifications'],
   optionalDependsOn: ['integration.whatsapp'],

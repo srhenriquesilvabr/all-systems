@@ -14,6 +14,8 @@ export const hrManifest = defineModule({
   key: 'hr',
   name: 'RH e departamento pessoal',
   layer: 'vertical',
+  description: 'Colaboradores, folha de pagamento e férias.',
+  icon: 'id-card',
   version: '1.0.0',
   dependsOn: ['core.finance'],
   permissions: [

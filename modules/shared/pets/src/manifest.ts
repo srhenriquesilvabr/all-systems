@@ -4,6 +4,8 @@ export const petsManifest = defineModule({
   key: 'shared.pets',
   name: 'Pets',
   layer: 'shared',
+  description: 'Cadastro de pets ligados aos tutores.',
+  icon: 'paw',
   version: '1.0.0',
   dependsOn: ['core.customers'],
   permissions: [

@@ -8,6 +8,8 @@ export const bankingManifest = defineModule({
   key: 'integration.banking',
   name: 'Integração bancária (crédito e consórcio)',
   layer: 'integration',
+  description: 'Propostas de financiamento e consórcio com bancos parceiros.',
+  icon: 'bank',
   version: '1.0.0',
   dependsOn: ['core.customers'],
   permissions: [
