@@ -7,7 +7,9 @@
       "outputs": ["dist/**", "tsconfig.tsbuildinfo"]
     },
     "typecheck": {
-      "dependsOn": ["^build"]
+      // Espera o build do próprio pacote: nos pacotes com tsc -b, typecheck e build gravam o
+      // mesmo dist/, e rodando ao mesmo tempo já deixaram arquivo vazio no build (e no cache).
+      "dependsOn": ["^build", "build"]
     },
     "test": {
       "dependsOn": ["^build"],
