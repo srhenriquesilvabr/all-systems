@@ -23,7 +23,7 @@
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",
-      "id": "HYPERDRIVE_ID"
+      "id": "ebd3bfe71f1a413d80fc2295aebfe59b"
     }
   ],
   "r2_buckets": [
@@ -32,12 +32,22 @@
       "bucket_name": "palmer-systems-files"
     }
   ],
+  // O banco está em us-west-2 e uma requisição faz várias consultas: rodar o Worker perto do
+  // banco custa menos que rodar perto do usuário. Os assets do admin continuam saindo da borda.
+  "placement": {
+    "mode": "smart"
+  },
+  // Boot do Nest num isolate novo e argon2id em JS puro passam de centenas de ms de CPU.
+  // Exige o Workers Paid: no plano grátis o deploy recusa esta opção.
+  "limits": {
+    "cpu_ms": 30000
+  },
   "triggers": {
     "crons": ["* * * * *"]
   },
   "vars": {
     "NODE_ENV": "production",
-    "ADMIN_URL": "https://palmer-systems.workers.dev",
+    "ADMIN_URL": "https://palmer-systems.all-systems.workers.dev",
     "MAIL_FROM": "Palmer Tech <nao-responda@palmertech.local>"
   },
   "observability": {

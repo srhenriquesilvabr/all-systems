@@ -3,6 +3,8 @@ dist/
 *.tsbuildinfo
 .turbo/
 .env
+.env.*
+!.env.example
 coverage/
 .storage/
 /docs/manual/scripts/node_modules/
