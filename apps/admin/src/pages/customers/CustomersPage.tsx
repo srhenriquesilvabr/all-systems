@@ -1,8 +1,10 @@
-import { api, useCan } from '@all/module-sdk/web';
+import { api, SpreadsheetImport, useCan } from '@all/module-sdk/web';
 import { Alert, Button, Card, EmptyState, Input, PageHeader, Spinner, Table, Td, Th } from '@all/ui';
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router';
+import { useCustomFields } from './CustomerForm';
+import { customerImportSpec } from './customerImport';
 import { formatDocument, formatPhone } from './format';
 import type { Customer } from './types';
 
@@ -11,6 +13,8 @@ const PAGE = 25;
 export function CustomersPage() {
   const navigate = useNavigate();
   const canWrite = useCan('core.customers.write');
+  const queryClient = useQueryClient();
+  const fields = useCustomFields();
   const [params] = useSearchParams();
   const [q, setQ] = useState('');
   const [page, setPage] = useState(0);
@@ -31,7 +35,14 @@ export function CustomersPage() {
       <PageHeader
         title="Clientes"
         description={customers.data ? `${customers.data.total} cadastro(s)` : undefined}
-        actions={canWrite && <Button onClick={openForm}>Novo cliente</Button>}
+        actions={
+          canWrite && (
+            <>
+              {fields.data && <SpreadsheetImport spec={customerImportSpec(fields.data)} onImported={() => queryClient.invalidateQueries({ queryKey: ['customers'] })} />}
+              <Button onClick={openForm}>Novo cliente</Button>
+            </>
+          )
+        }
       />
       <Input
         type="search"

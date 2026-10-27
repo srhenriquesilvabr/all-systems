@@ -4,3 +4,5 @@ export * from './web-module';
 export * from './format';
 export * from './files';
 export * from './widgets';
+export * from './spreadsheet';
+export * from './SpreadsheetImport';
