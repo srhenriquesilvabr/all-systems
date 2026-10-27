@@ -258,6 +258,7 @@ export class AccountingService implements OnModuleInit {
         dueDate: `${competence}-${String(c.feeDueDay).padStart(2, '0')}`,
         customerId: c.customerId,
         sourceType: 'acc_fee',
+        settleInFinance: true,
         sourceId: mark.id,
         categoryKey: 'services',
       });

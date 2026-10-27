@@ -127,6 +127,7 @@ export class OrthodonticsService implements OnModuleInit {
           dueDate: input.startedOn,
           customerId: customer.id,
           sourceType: SOURCE_FEE,
+          settleInFinance: true,
           sourceId: row!.id,
           categoryKey: 'services',
         });
@@ -191,6 +192,7 @@ export class OrthodonticsService implements OnModuleInit {
         dueDate: installmentDue(t.startedOn, t.dueDay, n),
         customerId: t.customerId,
         sourceType: SOURCE,
+        settleInFinance: true,
         sourceId: t.id,
         categoryKey: 'services',
       });

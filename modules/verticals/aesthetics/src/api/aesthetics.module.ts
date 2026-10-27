@@ -90,6 +90,7 @@ export class AestheticsService implements OnModuleInit {
           dueDate: addMonths(input.firstDueOn, i),
           customerId: customer.id,
           sourceType: SOURCE,
+          settleInFinance: true,
           sourceId: pkg!.id,
           categoryKey: 'services',
         });

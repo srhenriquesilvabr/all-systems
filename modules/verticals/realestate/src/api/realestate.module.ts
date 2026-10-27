@@ -213,6 +213,7 @@ export class RealEstateService implements OnModuleInit {
           dueDate: localToday(),
           customerId: property!.ownerId,
           sourceType: SOURCE,
+          settleInFinance: true,
           sourceId: id,
           categoryKey: 'services',
         });

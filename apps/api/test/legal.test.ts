@@ -116,6 +116,26 @@ describe('escritório de advocacia', () => {
     expect(fees[0]).toMatchObject({ status: 'cancelled', receivable: { total: 0 } });
   });
 
+  it('parcela de honorário recebe baixa no financeiro, mas só é cancelada pelo processo', async () => {
+    const s = await office();
+    const { body: lc } = await s.newCase().expect(201);
+    await s.as('post', '/legal/fees').send({ caseId: lc.id, kind: 'fixed', amount: 1200, installments: 2, firstDueOn: '2026-11-05' }).expect(201);
+    const { body: entries } = await s.as('get', '/finance/entries?limit=50&q=Honorários').expect(200);
+    const [first] = entries.items;
+    expect(first).toMatchObject({ sourceType: 'legal_fee', settleInFinance: true, status: 'pending' });
+
+    const { body: accounts } = await s.as('get', '/finance/accounts').expect(200);
+    const { body: paid } = await s
+      .as('post', `/finance/entries/${first.id}/pay`)
+      .send({ paidAt: '2026-11-05', accountId: accounts[0].id, paymentMethod: 'pix' })
+      .expect(201);
+    expect(paid).toMatchObject({ status: 'paid', paidAt: '2026-11-05' });
+
+    const second = entries.items[1];
+    const { body: refused } = await s.as('post', `/finance/entries/${second.id}/cancel`).expect(400);
+    expect(refused.code).toBe('ENTRY_FROM_MODULE');
+  });
+
   it('audiência na agenda ligada ao processo, sem custo', async () => {
     const s = await office();
     const { body: lc } = await s.newCase({ number: cnj(9001) }).expect(201);

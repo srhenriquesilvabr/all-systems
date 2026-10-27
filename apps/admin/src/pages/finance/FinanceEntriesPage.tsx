@@ -129,15 +129,16 @@ export function FinanceEntriesPage() {
                       <Badge tone={statusMeta[e.status].tone}>{statusMeta[e.status].label}</Badge>
                     </Td>
                     <Td className="whitespace-nowrap text-right">
-                      {canWrite && e.sourceType === 'manual' && e.status === 'pending' && (
-                        <>
-                          <Button variant="ghost" size="sm" onClick={() => setPaying(e)}>
-                            Baixar
-                          </Button>
-                          <Button variant="ghost" size="sm" onClick={() => confirm(`Cancelar "${e.description}"?`) && cancel.mutate(e.id)}>
-                            Cancelar
-                          </Button>
-                        </>
+                      {canWrite && e.status === 'pending' && (e.sourceType === 'manual' || e.settleInFinance) && (
+                        <Button variant="ghost" size="sm" onClick={() => setPaying(e)}>
+                          Baixar
+                        </Button>
+                      )}
+                      {/* Cancelar continua só para os manuais: os de módulo são cancelados na origem. */}
+                      {canWrite && e.status === 'pending' && e.sourceType === 'manual' && (
+                        <Button variant="ghost" size="sm" onClick={() => confirm(`Cancelar "${e.description}"?`) && cancel.mutate(e.id)}>
+                          Cancelar
+                        </Button>
                       )}
                     </Td>
                   </tr>

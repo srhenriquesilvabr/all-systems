@@ -32,6 +32,8 @@ export interface SourcedEntryInput extends EntryInput {
   sourceType: string;
   sourceId: string;
   categoryKey?: string;
+  /** O módulo não registra o pagamento: a baixa (e só ela) fica com o financeiro. */
+  settleInFinance?: boolean;
 }
 
 export interface EntryFilters {
@@ -220,7 +222,7 @@ export class FinanceService implements OnModuleInit {
     return this.tdb.run(async (tx) => {
       const current = await this.findOrFail(tx, id);
       if (current.status !== 'pending') throw conflict('ENTRY_NOT_PENDING', 'Só lançamentos em aberto podem receber baixa');
-      if (current.sourceType !== 'manual') {
+      if (current.sourceType !== 'manual' && !current.settleInFinance) {
         throw conflict('ENTRY_FROM_MODULE', 'Este valor é controlado por outro módulo: registre o pagamento por lá');
       }
       const [entry] = await tx
@@ -439,7 +441,7 @@ export class FinanceService implements OnModuleInit {
 
   // ---- internos -----------------------------------------------------------------------------
 
-  private async insertEntry(tx: Tx, input: EntryInput & { sourceType: string; sourceId?: string; categoryKey?: string }) {
+  private async insertEntry(tx: Tx, input: EntryInput & { sourceType: string; sourceId?: string; categoryKey?: string; settleInFinance?: boolean }) {
     const { tenantId, userId } = requestContext.requireTenant();
     if (input.status === 'paid' && (!input.paidAt || !input.accountId)) {
       throw new BadRequestException({ code: 'VALIDATION', message: 'Lançamento pago precisa da data de pagamento e da conta' });
@@ -462,6 +464,7 @@ export class FinanceService implements OnModuleInit {
         paymentMethod: input.paymentMethod ?? null,
         sourceType: input.sourceType,
         sourceId: input.sourceId ?? null,
+        settleInFinance: input.sourceType !== 'manual' && (input.settleInFinance ?? false),
         notes: input.notes ?? null,
         createdBy: userId ?? null,
       })
@@ -512,6 +515,7 @@ export function toEntryDto(e: EntryRow) {
     paymentMethod: e.paymentMethod,
     sourceType: e.sourceType,
     sourceId: e.sourceId,
+    settleInFinance: e.settleInFinance,
     notes: e.notes,
     createdAt: e.createdAt,
   };

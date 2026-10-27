@@ -30,6 +30,8 @@ export interface Entry {
   accountId: string | null;
   categoryId: string | null;
   sourceType: string;
+  /** Lançamento de módulo que recebe baixa no financeiro (parcelas, honorários, folha). */
+  settleInFinance: boolean;
   notes: string | null;
   categoryName: string | null;
   accountName: string | null;

@@ -249,6 +249,7 @@ export class ConsortiumService implements OnModuleInit {
           amount: commission / 100,
           dueDate: localToday(),
           sourceType: SOURCE,
+          settleInFinance: true,
           sourceId: q.id,
           categoryKey: 'services',
         });

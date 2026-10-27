@@ -60,6 +60,12 @@ export const finEntries = pgTable(
     paymentMethod: text('payment_method'),
     sourceType: text('source_type').notNull().default('manual'),
     sourceId: text('source_id'),
+    /**
+     * Lançamento de módulo que recebe baixa aqui no financeiro (parcelas, honorários, folha):
+     * o módulo de origem não tem fluxo de pagamento próprio. Ordens de serviço, agenda e PDV
+     * registram o pagamento por lá e deixam false.
+     */
+    settleInFinance: boolean('settle_in_finance').notNull().default(false),
     notes: text('notes'),
     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
     cancelledAt: ts('cancelled_at'),

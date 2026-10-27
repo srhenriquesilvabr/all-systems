@@ -222,6 +222,7 @@ export class VehiclesService implements OnModuleInit {
           dueDate: today,
           customerId: deal.customerId,
           sourceType: SOURCE,
+          settleInFinance: true,
           sourceId: id,
           categoryKey: 'products',
         });
@@ -235,6 +236,7 @@ export class VehiclesService implements OnModuleInit {
           dueDate: plusDays(today, 7),
           customerId: deal.customerId,
           sourceType: SOURCE,
+          settleInFinance: true,
           sourceId: id,
           categoryKey: 'products',
         });

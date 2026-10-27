@@ -133,6 +133,7 @@ export class HrService {
         amount: Math.round((v.pay.vacation + v.pay.allowance) * 100) / 100,
         dueDate: v.payBy,
         sourceType: 'hr_vacation',
+        settleInFinance: true,
         sourceId: row!.id,
         categoryKey: 'payroll',
       });
@@ -244,7 +245,7 @@ export class HrService {
       ];
       for (const e of entries) {
         if (e.amount <= 0) continue;
-        await this.finance.recordInTx(tx, { kind: 'expense', status: 'pending', ...e, sourceType: SOURCE, sourceId: id });
+        await this.finance.recordInTx(tx, { kind: 'expense', status: 'pending', ...e, sourceType: SOURCE, sourceId: id, settleInFinance: true });
       }
       await tx.update(hrPayrolls).set({ status: 'closed', closedAt: new Date(), closedById: userId ?? null }).where(eq(hrPayrolls.id, id));
       await this.audit.log(tx, { action: 'hr.payroll.closed', entity: 'hr_payroll', entityId: id, data: detail.totals });

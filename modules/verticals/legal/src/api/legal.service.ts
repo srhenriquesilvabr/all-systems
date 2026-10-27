@@ -319,6 +319,7 @@ export class LegalService implements OnModuleInit {
             dueDate: addMonths(input.firstDueOn!, i),
             customerId: c.customerId,
             sourceType: SOURCE,
+            settleInFinance: true,
             sourceId: fee!.id,
             categoryKey: 'services',
           });
@@ -345,6 +346,7 @@ export class LegalService implements OnModuleInit {
         dueDate: dueOn,
         customerId: fee.customerId,
         sourceType: SOURCE,
+        settleInFinance: true,
         sourceId: fee.id,
         categoryKey: 'services',
       });
