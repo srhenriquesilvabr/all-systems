@@ -45,14 +45,14 @@ async function createWithRetry(spec: ImportSpec, row: ImportRow) {
  * navegador; cada linha válida vai para a mesma rota do cadastro manual, e o que a API recusar
  * volta num relatório para corrigir e importar de novo.
  */
-export function SpreadsheetImport({ spec, onImported }: { spec: ImportSpec; onImported?: () => void }) {
+export function SpreadsheetImport({ spec, onImported, size }: { spec: ImportSpec; onImported?: () => void; size?: 'sm' | 'md' }) {
   const [open, setOpen] = useState(false);
   return (
     <>
-      <Button variant="secondary" onClick={() => downloadTemplate(`modelo-${spec.fileName}`, spec.columns)}>
+      <Button variant="secondary" size={size} onClick={() => downloadTemplate(`modelo-${spec.fileName}`, spec.columns)}>
         Baixar modelo
       </Button>
-      <Button variant="secondary" onClick={() => setOpen(true)}>
+      <Button variant="secondary" size={size} onClick={() => setOpen(true)}>
         Importar planilha
       </Button>
       {open && (

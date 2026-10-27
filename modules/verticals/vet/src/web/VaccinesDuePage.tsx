@@ -1,9 +1,10 @@
-import { api, formatDate, formatPhone, today } from '@all/module-sdk/web';
+import { api, formatDate, formatPhone, SpreadsheetImport, today, useCan } from '@all/module-sdk/web';
 import { Alert, Badge, Card, EmptyState, PageHeader, Select, Spinner, Table, Td, Th } from '@all/ui';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link } from 'react-router';
 import type { VaccineDue } from '../contracts';
+import { vaccinationImportSpec } from './vaccinationImport';
 import { vetKey } from './VaccinesTab';
 
 const addDays = (iso: string, days: number) => {
@@ -14,6 +15,8 @@ const addDays = (iso: string, days: number) => {
 
 /** Reforços vencidos e a vencer, para a recepção ligar ou mandar mensagem. */
 export function VaccinesDuePage() {
+  const canWrite = useCan('vet.vaccines.write');
+  const queryClient = useQueryClient();
   const [days, setDays] = useState(30);
   const now = today();
   const until = addDays(now, days);
@@ -25,11 +28,14 @@ export function VaccinesDuePage() {
         title="Vacinas a vencer"
         description="Reforços vencidos e próximos. O tutor recebe lembrete automático antes do vencimento."
         actions={
-          <Select aria-label="Período" value={String(days)} onChange={(e) => setDays(Number(e.target.value))}>
-            <option value="7">Próximos 7 dias</option>
-            <option value="30">Próximos 30 dias</option>
-            <option value="90">Próximos 90 dias</option>
-          </Select>
+          <>
+            <Select aria-label="Período" value={String(days)} onChange={(e) => setDays(Number(e.target.value))}>
+              <option value="7">Próximos 7 dias</option>
+              <option value="30">Próximos 30 dias</option>
+              <option value="90">Próximos 90 dias</option>
+            </Select>
+            {canWrite && <SpreadsheetImport spec={vaccinationImportSpec()} onImported={() => queryClient.invalidateQueries({ queryKey: vetKey })} />}
+          </>
         }
       />
       <Card>

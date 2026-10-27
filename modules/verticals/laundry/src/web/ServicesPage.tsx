@@ -1,9 +1,11 @@
-import { api, ApiError } from '@all/module-sdk/web';
+import { api, ApiError, SpreadsheetImport } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Tabs, Td, Th } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { pricingUnitLabel, pricingUnits, serviceInput, type LaundryService, type PricingUnit, type ServiceInput } from '../contracts';
 import { GarmentTypesTab, PricesModal } from './CatalogExtras';
+import { laundryKey } from './hooks';
+import { garmentTypeImportSpec, serviceImportSpec } from './laundryImport';
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const KEY = ['laundry', 'services'];
@@ -13,13 +15,23 @@ export function ServicesPage() {
   const [editing, setEditing] = useState<LaundryService | 'new' | null>(null);
   const [pricing, setPricing] = useState<LaundryService | null>(null);
   const [tab, setTab] = useState('services');
+  const queryClient = useQueryClient();
 
   return (
     <>
       <PageHeader
         title="Serviços e preços"
         description="O que a lavanderia oferece, como cobra e em quanto tempo entrega."
-        actions={tab === 'services' && <Button onClick={() => setEditing('new')}>Novo serviço</Button>}
+        actions={
+          tab === 'services' ? (
+            <>
+              <SpreadsheetImport spec={serviceImportSpec} onImported={() => queryClient.invalidateQueries({ queryKey: KEY })} />
+              <Button onClick={() => setEditing('new')}>Novo serviço</Button>
+            </>
+          ) : (
+            <SpreadsheetImport spec={garmentTypeImportSpec} onImported={() => queryClient.invalidateQueries({ queryKey: [...laundryKey, 'garment-types'] })} />
+          )
+        }
       />
       <Tabs
         items={[

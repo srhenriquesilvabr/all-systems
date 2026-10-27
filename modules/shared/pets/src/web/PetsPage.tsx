@@ -1,21 +1,35 @@
-import { formatPhone, useCan } from '@all/module-sdk/web';
+import { formatPhone, SpreadsheetImport, useCan } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, EmptyState, Input, PageHeader, Spinner, Table, Td, Th } from '@all/ui';
+import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { petAge, speciesLabel, type Pet } from '../contracts';
-import { usePets } from './hooks';
+import { petsKey, usePets } from './hooks';
+import { petImportSpec } from './petImport';
 import { PetModal } from './PetModal';
 
 export function PetsPage() {
   const [q, setQ] = useState('');
   const pets = usePets({ q: q.trim() || undefined });
   const canWrite = useCan('shared.pets.write');
+  const queryClient = useQueryClient();
   const [creating, setCreating] = useState(false);
   const navigate = useNavigate();
 
   return (
     <>
-      <PageHeader title="Pets" description="Os animais atendidos e seus tutores." actions={canWrite && <Button onClick={() => setCreating(true)}>Novo pet</Button>} />
+      <PageHeader
+        title="Pets"
+        description="Os animais atendidos e seus tutores."
+        actions={
+          canWrite && (
+            <>
+              <SpreadsheetImport spec={petImportSpec()} onImported={() => queryClient.invalidateQueries({ queryKey: petsKey })} />
+              <Button onClick={() => setCreating(true)}>Novo pet</Button>
+            </>
+          )
+        }
+      />
       <div className="mb-4 max-w-sm">
         <Input type="search" aria-label="Buscar pet" placeholder="Nome do pet, raça ou tutor" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>

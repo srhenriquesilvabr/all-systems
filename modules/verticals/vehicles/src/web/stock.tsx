@@ -1,10 +1,11 @@
-import { api, ApiError, apiUpload, AuthImage, formatMoney, parseMoney, useCan } from '@all/module-sdk/web';
+import { api, ApiError, apiUpload, AuthImage, formatMoney, parseMoney, SpreadsheetImport, useCan } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { dealStatusLabel, fuelLabel, transmissionLabel, vehicleKindLabel, vehicleKinds, vehicleStatuses, vehicleStatusLabel, vehicleTitle, type Deal, type FipePrice, type Vehicle } from '../contracts';
 import { DealModal, dealTone } from './deals';
+import { vehicleImportSpec } from './vehicleImport';
 
 export const vehiclesKey = ['vehicles'] as const;
 export const statusTone = { available: 'success', reserved: 'warning', sold: 'neutral', inactive: 'neutral' } as const;
@@ -16,11 +17,23 @@ export function StockPage() {
   const [status, setStatus] = useState('available');
   const [creating, setCreating] = useState(false);
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const list = useQuery({ queryKey: [...vehiclesKey, 'stock', { q, status }], queryFn: () => api<Vehicle[]>('/vehicles/stock', { query: { q: q || undefined, status: status || undefined } }) });
 
   return (
     <>
-      <PageHeader title="Estoque" description="Veículos à venda, com fotos, preço e referência FIPE." actions={canWrite && <Button onClick={() => setCreating(true)}>Novo veículo</Button>} />
+      <PageHeader
+        title="Estoque"
+        description="Veículos à venda, com fotos, preço e referência FIPE."
+        actions={
+          canWrite && (
+            <>
+              <SpreadsheetImport spec={vehicleImportSpec} onImported={() => queryClient.invalidateQueries({ queryKey: vehiclesKey })} />
+              <Button onClick={() => setCreating(true)}>Novo veículo</Button>
+            </>
+          )
+        }
+      />
       <div className="mb-4 flex flex-wrap gap-3">
         <Input type="search" aria-label="Buscar" placeholder="Marca, modelo ou placa" className="max-w-xs" value={q} onChange={(e) => setQ(e.target.value)} />
         <Select aria-label="Situação" className="max-w-48" value={status} onChange={(e) => setStatus(e.target.value)}>

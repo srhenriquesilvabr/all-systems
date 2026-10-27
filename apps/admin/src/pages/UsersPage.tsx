@@ -1,8 +1,9 @@
-import { api, ApiError, useCan, useSession } from '@all/module-sdk/web';
+import { api, ApiError, SpreadsheetImport, useCan, useSession } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, Checkbox, Field, Input, Modal, PageHeader, Spinner, Table, Td, Th } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useRoles, type Role } from './RolesPage';
+import { userImportSpec } from './userImport';
 
 interface Member {
   membershipId: string;
@@ -18,6 +19,8 @@ const dateTime = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyl
 export function UsersPage() {
   const canManage = useCan('core.users.manage');
   const members = useQuery({ queryKey: KEY, queryFn: () => api<Member[]>('/users') });
+  const roles = useRoles();
+  const queryClient = useQueryClient();
   const [inviting, setInviting] = useState(false);
   const [editing, setEditing] = useState<Member | null>(null);
 
@@ -26,7 +29,14 @@ export function UsersPage() {
       <PageHeader
         title="Usuários"
         description="Quem acessa o sistema desta empresa e com quais papéis."
-        actions={canManage && <Button onClick={() => setInviting(true)}>Convidar usuário</Button>}
+        actions={
+          canManage && (
+            <>
+              {roles.data && <SpreadsheetImport spec={userImportSpec(roles.data)} onImported={() => queryClient.invalidateQueries({ queryKey: KEY })} />}
+              <Button onClick={() => setInviting(true)}>Convidar usuário</Button>
+            </>
+          )
+        }
       />
       <Card>
         {members.isPending ? (

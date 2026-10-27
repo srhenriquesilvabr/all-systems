@@ -1,8 +1,9 @@
-import { api, apiDownload, ApiError, formatDate, formatMoney, parseMoney, today, useCan } from '@all/module-sdk/web';
+import { api, apiDownload, ApiError, formatDate, formatMoney, parseMoney, SpreadsheetImport, today, useCan } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th, Textarea } from '@all/ui';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router';
+import { entryImportSpec } from './entryImport';
 import { financeKey, sourceLabel, useAccounts, useCategories, type Entry } from './shared';
 
 const PAGE = 50;
@@ -53,7 +54,12 @@ export function FinanceEntriesPage() {
             <Button variant="secondary" loading={download.isPending} onClick={() => download.mutate()}>
               Exportar CSV
             </Button>
-            {canWrite && <Button onClick={() => setCreating(true)}>Novo lançamento</Button>}
+            {canWrite && (
+              <>
+                <SpreadsheetImport spec={entryImportSpec()} onImported={() => queryClient.invalidateQueries({ queryKey: financeKey })} />
+                <Button onClick={() => setCreating(true)}>Novo lançamento</Button>
+              </>
+            )}
           </>
         }
       />

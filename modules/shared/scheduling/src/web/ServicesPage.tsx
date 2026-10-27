@@ -1,12 +1,15 @@
-import { api, ApiError, formatMoney, parseMoney, useSession } from '@all/module-sdk/web';
+import { api, ApiError, formatMoney, parseMoney, SpreadsheetImport, useCan, useSession } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th, Textarea } from '@all/ui';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, type FormEvent } from 'react';
 import type { SchedulingSettings, Service } from '../contracts';
 import { schedulingKey, useResources, useSchedulingSettings, useServices } from './hooks';
+import { serviceImportSpec } from './serviceImport';
 
 export function SchedulingServicesPage() {
   const services = useServices();
+  const canManage = useCan('shared.scheduling.manage');
+  const queryClient = useQueryClient();
   const [editing, setEditing] = useState<Service | 'new' | null>(null);
 
   return (
@@ -14,7 +17,12 @@ export function SchedulingServicesPage() {
       <PageHeader
         title="Serviços da agenda"
         description="O que pode ser marcado, quanto tempo leva e quanto custa."
-        actions={<Button onClick={() => setEditing('new')}>Novo serviço</Button>}
+        actions={
+          <>
+            {canManage && <SpreadsheetImport spec={serviceImportSpec()} onImported={() => queryClient.invalidateQueries({ queryKey: schedulingKey })} />}
+            <Button onClick={() => setEditing('new')}>Novo serviço</Button>
+          </>
+        }
       />
       <div className="space-y-6">
         <Card>

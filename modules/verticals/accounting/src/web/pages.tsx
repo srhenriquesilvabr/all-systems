@@ -1,8 +1,9 @@
-import { api, ApiError, CustomerSearch, formatDate, formatMoney, parseMoney, useCan, type CustomerOption } from '@all/module-sdk/web';
+import { api, ApiError, CustomerSearch, formatDate, formatMoney, parseMoney, SpreadsheetImport, useCan, type CustomerOption } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { frequencyLabel, obligationStatusLabel, taxRegimeLabel, taxRegimes, type AccountingClient, type Obligation, type ObligationType, type TaxRegime } from '../contracts';
+import { clientImportSpec } from './clientImport';
 
 const key = ['accounting'] as const;
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
@@ -184,6 +185,7 @@ function CatalogModal({ onClose }: { onClose: () => void }) {
 }
 
 export function ClientsPage() {
+  const queryClient = useQueryClient();
   const canManage = useCan('accounting.manage');
   const list = useQuery({ queryKey: [...key, 'clients'], queryFn: () => api<AccountingClient[]>('/accounting/clients') });
   const [editing, setEditing] = useState<AccountingClient | 'new' | null>(null);
@@ -193,7 +195,14 @@ export function ClientsPage() {
       <PageHeader
         title="Carteira de empresas"
         description={list.data ? `${list.data.filter((c) => c.active).length} empresas ativas · honorários de ${formatMoney(total)} por mês` : undefined}
-        actions={canManage && <Button onClick={() => setEditing('new')}>Adicionar empresa</Button>}
+        actions={
+          canManage && (
+            <>
+              <SpreadsheetImport spec={clientImportSpec()} onImported={() => queryClient.invalidateQueries({ queryKey: key })} />
+              <Button onClick={() => setEditing('new')}>Adicionar empresa</Button>
+            </>
+          )
+        }
       />
       <Card>
         {list.isPending ? (

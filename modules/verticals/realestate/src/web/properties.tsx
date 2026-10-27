@@ -1,4 +1,4 @@
-import { api, ApiError, apiUpload, AuthImage, CustomerSearch, formatMoney, parseMoney, useCan, type CustomerOption } from '@all/module-sdk/web';
+import { api, ApiError, apiUpload, AuthImage, CustomerSearch, formatMoney, parseMoney, SpreadsheetImport, useCan, type CustomerOption } from '@all/module-sdk/web';
 import type { SubjectValue } from '@all/scheduling/web';
 import { Alert, Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -6,6 +6,7 @@ import { useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { addressOf, dealStatusLabel, propertyStatuses, propertyStatusLabel, propertyTypeLabel, propertyTypes, purposeLabel, type Deal, type Property } from '../contracts';
 import { DealModal, dealTone } from './deals';
+import { propertyImportSpec } from './propertyImport';
 
 export const reKey = ['real-estate'] as const;
 const statusTone = { available: 'success', reserved: 'warning', sold: 'neutral', rented: 'neutral', inactive: 'neutral' } as const;
@@ -18,6 +19,7 @@ const features = (p: Property) =>
 export function PropertiesPage() {
   const canWrite = useCan('real_estate.properties.write');
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('available');
   const [type, setType] = useState('');
@@ -29,7 +31,18 @@ export function PropertiesPage() {
   });
   return (
     <>
-      <PageHeader title="Imóveis" description="Carteira de imóveis captados, com fotos e preço por m²." actions={canWrite && <Button onClick={() => setCreating(true)}>Captar imóvel</Button>} />
+      <PageHeader
+        title="Imóveis"
+        description="Carteira de imóveis captados, com fotos e preço por m²."
+        actions={
+          canWrite && (
+            <>
+              <SpreadsheetImport spec={propertyImportSpec()} onImported={() => queryClient.invalidateQueries({ queryKey: reKey })} />
+              <Button onClick={() => setCreating(true)}>Captar imóvel</Button>
+            </>
+          )
+        }
+      />
       <div className="mb-4 flex flex-wrap gap-3">
         <Input type="search" aria-label="Buscar" placeholder="Código, bairro, cidade ou rua" className="max-w-xs" value={q} onChange={(e) => setQ(e.target.value)} />
         <Select aria-label="Tipo" className="max-w-48" value={type} onChange={(e) => setType(e.target.value)}>

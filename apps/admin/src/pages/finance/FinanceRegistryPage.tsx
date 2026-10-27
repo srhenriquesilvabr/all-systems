@@ -1,7 +1,8 @@
-import { api, ApiError, formatMoney, parseMoney } from '@all/module-sdk/web';
+import { api, ApiError, formatMoney, parseMoney, SpreadsheetImport } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th } from '@all/ui';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
+import { accountImportSpec, categoryImportSpec } from './registryImport';
 import { accountTypeLabel, financeKey, useAccounts, useCategories, type Account, type Category } from './shared';
 
 export function FinanceRegistryPage() {
@@ -9,6 +10,7 @@ export function FinanceRegistryPage() {
   const accounts = useAccounts();
   const categories = useCategories();
   const [modal, setModal] = useState<'account' | 'category' | null>(null);
+  const refresh = () => queryClient.invalidateQueries({ queryKey: financeKey });
   const toggle = useMutation({
     mutationFn: ({ path, active }: { path: string; active: boolean }) => api(path, { method: 'PATCH', body: { active } }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: financeKey }),
@@ -27,9 +29,12 @@ export function FinanceRegistryPage() {
         <section>
           <div className="mb-3 flex items-center justify-between">
             <h2 className="font-medium">Contas</h2>
-            <Button size="sm" onClick={() => setModal('account')}>
-              Nova conta
-            </Button>
+            <div className="flex flex-wrap justify-end gap-2">
+              <SpreadsheetImport spec={accountImportSpec} onImported={refresh} size="sm" />
+              <Button size="sm" onClick={() => setModal('account')}>
+                Nova conta
+              </Button>
+            </div>
           </div>
           <Card>
             {accounts.isPending ? (
@@ -60,9 +65,12 @@ export function FinanceRegistryPage() {
         <section>
           <div className="mb-3 flex items-center justify-between">
             <h2 className="font-medium">Categorias</h2>
-            <Button size="sm" onClick={() => setModal('category')}>
-              Nova categoria
-            </Button>
+            <div className="flex flex-wrap justify-end gap-2">
+              <SpreadsheetImport spec={categoryImportSpec} onImported={refresh} size="sm" />
+              <Button size="sm" onClick={() => setModal('category')}>
+                Nova categoria
+              </Button>
+            </div>
           </div>
           <Card>
             {categories.isPending ? (

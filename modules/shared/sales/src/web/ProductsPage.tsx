@@ -1,9 +1,10 @@
-import { api, ApiError, formatDateTime, parseMoney, useCan } from '@all/module-sdk/web';
+import { api, ApiError, formatDateTime, parseMoney, SpreadsheetImport, useCan } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { formatQuantity, stockMoveKinds, stockMoveLabel, unitLabel, units, type Product, type StockMove } from '../contracts';
 import { brl, salesKey, useProducts } from './hooks';
+import { productImportSpec } from './productImport';
 
 const money = (n: number | null | undefined) => (n == null ? '' : n.toFixed(2).replace('.', ','));
 
@@ -12,12 +13,23 @@ export function ProductsPage() {
   const [lowStock, setLowStock] = useState(false);
   const products = useProducts({ q: q.trim() || undefined, lowStock: lowStock || undefined });
   const canStock = useCan('shared.sales.stock');
+  const canProducts = useCan('shared.sales.products');
+  const queryClient = useQueryClient();
   const [editing, setEditing] = useState<Product | 'new' | null>(null);
   const [moving, setMoving] = useState<Product | null>(null);
 
   return (
     <>
-      <PageHeader title="Produtos e estoque" description="Preços, códigos de barras e saldo de cada produto." actions={<Button onClick={() => setEditing('new')}>Novo produto</Button>} />
+      <PageHeader
+        title="Produtos e estoque"
+        description="Preços, códigos de barras e saldo de cada produto."
+        actions={
+          <>
+            {canProducts && <SpreadsheetImport spec={productImportSpec(canStock)} onImported={() => queryClient.invalidateQueries({ queryKey: salesKey })} />}
+            <Button onClick={() => setEditing('new')}>Novo produto</Button>
+          </>
+        }
+      />
       <div className="mb-4 flex flex-wrap items-center gap-4">
         <Input type="search" aria-label="Buscar produto" placeholder="Nome, código ou categoria" className="max-w-sm" value={q} onChange={(e) => setQ(e.target.value)} />
         <Checkbox label="Só estoque baixo" checked={lowStock} onChange={(e) => setLowStock(e.target.checked)} />

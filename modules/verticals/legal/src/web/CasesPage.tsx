@@ -1,9 +1,10 @@
-import { api, formatDate, useCan } from '@all/module-sdk/web';
+import { api, formatDate, SpreadsheetImport, useCan } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, EmptyState, Input, PageHeader, Select, Spinner, Table, Td, Th } from '@all/ui';
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { caseAreaLabel, caseStatuses, caseStatusLabel, type LegalCase } from '../contracts';
+import { caseImportSpec } from './caseImport';
 import { CaseModal, daysUntil, dueText, legalKey, statusTone } from './shared';
 
 export function CasesTable({ cases, showCustomer = true }: { cases: LegalCase[]; showCustomer?: boolean }) {
@@ -50,6 +51,7 @@ export function CasesTable({ cases, showCustomer = true }: { cases: LegalCase[];
 
 export function CasesPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const canWrite = useCan('legal.cases.write');
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('active');
@@ -62,7 +64,18 @@ export function CasesPage() {
 
   return (
     <>
-      <PageHeader title="Processos" description="Casos do escritório, com o próximo prazo de cada um." actions={canWrite && <Button onClick={() => setCreating(true)}>Novo processo</Button>} />
+      <PageHeader
+        title="Processos"
+        description="Casos do escritório, com o próximo prazo de cada um."
+        actions={
+          canWrite && (
+            <>
+              <SpreadsheetImport spec={caseImportSpec()} onImported={() => queryClient.invalidateQueries({ queryKey: legalKey })} />
+              <Button onClick={() => setCreating(true)}>Novo processo</Button>
+            </>
+          )
+        }
+      />
       <div className="mb-4 flex flex-wrap gap-3">
         <Input type="search" aria-label="Buscar" placeholder="Título, número, cliente ou parte contrária" className="max-w-sm" value={q} onChange={(e) => setQ(e.target.value)} />
         <Select aria-label="Situação" className="max-w-56" value={status} onChange={(e) => setStatus(e.target.value)}>

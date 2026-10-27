@@ -1,9 +1,10 @@
-import { api, ApiError, formatDate, formatMoney, parseMoney, useCan } from '@all/module-sdk/web';
+import { api, ApiError, formatDate, formatMoney, parseMoney, SpreadsheetImport, useCan } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { employeeStatusLabel, vacationPay, type Employee, type Vacation } from '../contracts';
+import { employeeImportSpec } from './employeeImport';
 
 export const hrKey = ['hr'] as const;
 const cpfMask = (c: string) => c.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
@@ -11,12 +12,24 @@ const cpfMask = (c: string) => c.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.
 export function EmployeesPage() {
   const canManage = useCan('hr.manage');
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [status, setStatus] = useState('active');
   const [creating, setCreating] = useState(false);
   const list = useQuery({ queryKey: [...hrKey, 'employees', status], queryFn: () => api<Employee[]>('/hr/employees', { query: { status: status || undefined } }) });
   return (
     <>
-      <PageHeader title="Colaboradores" description="Dados de admissão, salário e saldo de férias." actions={canManage && <Button onClick={() => setCreating(true)}>Admitir colaborador</Button>} />
+      <PageHeader
+        title="Colaboradores"
+        description="Dados de admissão, salário e saldo de férias."
+        actions={
+          canManage && (
+            <>
+              <SpreadsheetImport spec={employeeImportSpec} onImported={() => queryClient.invalidateQueries({ queryKey: hrKey })} />
+              <Button onClick={() => setCreating(true)}>Admitir colaborador</Button>
+            </>
+          )
+        }
+      />
       <div className="mb-4">
         <Select aria-label="Situação" className="max-w-48" value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="active">Ativos</option>

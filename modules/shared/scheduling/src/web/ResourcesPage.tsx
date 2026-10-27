@@ -1,14 +1,17 @@
-import { api, ApiError, formatDateTime } from '@all/module-sdk/web';
+import { api, ApiError, formatDateTime, SpreadsheetImport, useCan } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th } from '@all/ui';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { weekdayLabel, type Resource } from '../contracts';
 import { localToUtc, schedulingKey, shiftDate, todayLocal, useResources, useServices, useTimeOff } from './hooks';
+import { resourceImportSpec } from './resourceImport';
 
 const COLORS = ['#2d4bff', '#0ea5a4', '#e2557a', '#f59e0b', '#7c3aed', '#16a34a', '#0e1330', '#eb6834'];
 
 export function ResourcesPage() {
   const resources = useResources();
+  const canManage = useCan('shared.scheduling.manage');
+  const queryClient = useQueryClient();
   const [editing, setEditing] = useState<Resource | 'new' | null>(null);
   const [hoursOf, setHoursOf] = useState<Resource | null>(null);
   const [blocksOf, setBlocksOf] = useState<Resource | null>(null);
@@ -18,7 +21,12 @@ export function ResourcesPage() {
       <PageHeader
         title="Profissionais e horários"
         description="Quem atende, o que cada um faz e o horário de trabalho de cada dia."
-        actions={<Button onClick={() => setEditing('new')}>Novo profissional</Button>}
+        actions={
+          <>
+            {canManage && <SpreadsheetImport spec={resourceImportSpec()} onImported={() => queryClient.invalidateQueries({ queryKey: schedulingKey })} />}
+            <Button onClick={() => setEditing('new')}>Novo profissional</Button>
+          </>
+        }
       />
       <Card>
         {resources.isPending ? (
