@@ -1,0 +1,46 @@
+// Deploy no Cloudflare Workers: admin (assets estáticos) + API Nest (/api/*) + cron (outbox e jobs).
+// Segredos (wrangler secret put / painel): JWT_SECRET, SETTINGS_ENCRYPTION_KEY, RESEND_API_KEY.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "palmer-systems",
+  "main": "apps/api/dist/edge.mjs",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "alias": {
+    "class-validator": "./apps/api/edge/missing-optional.cjs",
+    "class-transformer": "./apps/api/edge/missing-optional.cjs",
+    "@nestjs/websockets/socket-module": "./apps/api/edge/missing-optional.cjs",
+    "@nestjs/microservices": "./apps/api/edge/missing-optional.cjs",
+    "@nestjs/microservices/microservices-module": "./apps/api/edge/missing-optional.cjs"
+  },
+  "assets": {
+    "directory": "apps/admin/dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  // Supabase via Hyperdrive (pool de conexões na borda). Criado com cache DESLIGADO:
+  // o RLS depende do tenant da transação, e resposta em cache não pode cruzar empresas.
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "HYPERDRIVE_ID"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "palmer-systems-files"
+    }
+  ],
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+  "vars": {
+    "NODE_ENV": "production",
+    "ADMIN_URL": "https://palmer-systems.workers.dev",
+    "MAIL_FROM": "Palmer Tech <nao-responda@palmertech.local>"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

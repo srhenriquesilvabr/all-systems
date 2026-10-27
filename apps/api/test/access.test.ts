@@ -64,11 +64,11 @@ describe('controle de acesso', () => {
     it('operador consulta o catálogo mas não altera', async () => {
       const { email } = await createTenant(t);
       const owner = await login(t, email);
-      await t.http().post('/api/laundry/services').set(auth(owner.token)).send(service).expect(201);
+      const created = await t.http().post('/api/laundry/services').set(auth(owner.token)).send(service).expect(201);
 
       const operator = await inviteAndLogin(owner.token, ['laundry.operator']);
       const list = await t.http().get('/api/laundry/services').set(auth(operator.token)).expect(200);
-      expect(list.body).toHaveLength(1);
+      expect(list.body.map((s: { id: string }) => s.id)).toContain(created.body.id);
 
       const denied = await t.http().post('/api/laundry/services').set(auth(operator.token)).send(service).expect(403);
       expect(denied.body.code).toBe('MISSING_PERMISSION');

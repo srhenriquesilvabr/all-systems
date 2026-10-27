@@ -1,10 +1,10 @@
-import { api, ApiError, formatDate, formatDateTime, formatMoney, parseMoney, today, useCan } from '@all/module-sdk/web';
+import { api, ApiError, formatDate, formatDateTime, formatMoney, parseMoney, today, useCan, formatPhone, PixCharge } from '@all/module-sdk/web';
 import { Alert, Button, Card, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, Navigate, useParams } from 'react-router';
 import { paymentMethodLabel, paymentMethods, type OrderDetail, type PaymentMethod, type ServiceOrderWorkflow } from '../contracts';
-import { ordersKey, PaymentBadge, StatusBadge, useWorkflows } from './shared';
+import { orderPath, ordersKey, PaymentBadge, StatusBadge, useWorkflows } from './shared';
 
 export function OrderPage() {
   const { id } = useParams<{ id: string }>();
@@ -17,6 +17,8 @@ export function OrderPage() {
   if (order.isError) return <Alert>{order.error.message}</Alert>;
   const o = order.data;
   const workflow = workflows.data?.find((w) => w.key === o.workflow);
+  // Ordens de vertical com tela própria (ex.: lavanderia) abrem lá.
+  if (workflow?.detailPath) return <Navigate to={orderPath(workflows.data, o)} replace />;
   const balance = Math.round((o.total - o.paidAmount) * 100) / 100;
   const cancelled = workflow?.statuses.find((s) => s.key === o.status)?.cancelled;
 
@@ -28,7 +30,11 @@ export function OrderPage() {
         actions={<StatusBadge workflows={workflows.data} workflow={o.workflow} status={o.status} />}
       />
 
-      {workflow && <Transitions order={o} workflow={workflow} />}
+      {workflow && (
+        <div className="mb-4">
+          <Transitions order={o} workflow={workflow} />
+        </div>
+      )}
       {o.cancelReason && (
         <div className="mb-4">
           <Alert>Cancelada: {o.cancelReason}</Alert>
@@ -107,7 +113,7 @@ export function OrderPage() {
             <Link to={`/clientes/${o.customer.id}`} className="font-medium text-brand-700 hover:underline">
               {o.customer.name}
             </Link>
-            <p className="text-sm text-fg-muted">{[o.customer.phone, o.customer.email].filter(Boolean).join(' · ') || 'Sem contato cadastrado'}</p>
+            <p className="text-sm text-fg-muted">{[formatPhone(o.customer.phone), o.customer.email].filter(Boolean).join(' · ') || 'Sem contato cadastrado'}</p>
           </Card>
 
           <Card className="p-5">
@@ -147,7 +153,18 @@ export function OrderPage() {
   );
 }
 
-function Transitions({ order, workflow }: { order: OrderDetail; workflow: ServiceOrderWorkflow }) {
+/** Botões de mudança de status. `hide`: status que a vertical muda sozinha (não aparecem como botão). */
+export function Transitions({
+  order,
+  workflow,
+  onChanged,
+  hide = [],
+}: {
+  order: OrderDetail;
+  workflow: ServiceOrderWorkflow;
+  onChanged?: () => void;
+  hide?: string[];
+}) {
   const canChange = useCan('shared.service-orders.status');
   const queryClient = useQueryClient();
   const [cancelling, setCancelling] = useState<string | null>(null);
@@ -158,14 +175,17 @@ function Transitions({ order, workflow }: { order: OrderDetail; workflow: Servic
       queryClient.setQueryData([...ordersKey, order.id], updated);
       queryClient.invalidateQueries({ queryKey: ordersKey });
       setCancelling(null);
+      onChanged?.();
     },
   });
 
-  const targets = (workflow.transitions[order.status] ?? []).map((key) => workflow.statuses.find((s) => s.key === key)!);
+  const targets = (workflow.transitions[order.status] ?? [])
+    .filter((key) => !hide.includes(key))
+    .map((key) => workflow.statuses.find((s) => s.key === key)!);
   if (!canChange || targets.length === 0) return null;
 
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       {move.error && !cancelling && <Alert>{move.error instanceof ApiError ? move.error.message : 'Erro ao mudar o status'}</Alert>}
       {targets.map((s) =>
         s.cancelled ? (
@@ -204,7 +224,7 @@ function Transitions({ order, workflow }: { order: OrderDetail; workflow: Servic
   );
 }
 
-function PaymentModal({ order, balance, onClose }: { order: OrderDetail; balance: number; onClose: () => void }) {
+export function PaymentModal({ order, balance, onClose }: { order: OrderDetail; balance: number; onClose: () => void }) {
   const queryClient = useQueryClient();
   const accounts = useQuery({
     queryKey: ['service-orders', 'payment-accounts'],
@@ -279,6 +299,7 @@ function PaymentModal({ order, balance, onClose }: { order: OrderDetail; balance
             )}
           </Field>
         </div>
+        {method === 'pix' && <PixCharge amount={parseMoney(amount)} reference={`OS${order.number}`} />}
       </form>
     </Modal>
   );

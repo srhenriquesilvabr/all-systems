@@ -41,10 +41,17 @@ Respostas que podem mudar a arquitetura:
 - Ainda não feito: mesclagem de cadastros duplicados, edição de itens da OS pela tela (a API já aceita), fuso horário por tenant (hoje fixo em São Paulo), devolução de pagamento de OS cancelada
 - **Entrega:** cadastro de clientes e financeiro básico utilizáveis ✔
 
-### Fase 3 — Lavanderia MVP (balcão) + piloto
-- `laundry` conforme o MVP em [07](07-vertical-lavanderia.md#mvp-o-que-entra-primeiro)
-- `integration.payments` (Pix)
-- **Entrega:** uma lavanderia piloto operando o balcão no sistema
+### Fase 3 — Lavanderia MVP (balcão) + piloto · *software concluído, piloto pendente*
+- [x] Balcão: peças por tipo e serviço (peça, kg, m²), preço por tipo de peça, avarias na entrada, prazo automático
+- [x] Uma etiqueta por peça (`<nº da OS>-<seq>`), impressão de etiquetas com QR e comprovante (cupom 80 mm)
+- [x] Fotos das peças (storage local em dev; S3 na Fase de infraestrutura)
+- [x] Quadro de produção: etapas por peça, prioridade por prazo, mover em lote, leitura de etiqueta; a ordem anda sozinha (em produção → pronta) e volta em retrabalho
+- [x] Ocorrências com aviso ao cliente; mensagens próprias da lavanderia (recebida, pronta, saiu para entrega, entregue)
+- [x] Relatórios: entregas no prazo, tempo médio, peças prontas, retrabalho, ocorrências, receita por serviço, movimentações por pessoa
+- [x] `integration.payments`: Pix estático (BR Code) gerado pela chave da empresa, com confirmação manual
+- [x] Upgrade de módulos: `tenant_modules.version` faz o onEnable rodar de novo quando o manifesto muda de versão
+- Ainda não feito: código de retirada, Pix com confirmação automática (depende de ADR-P5), impressão térmica direta, ajuste de itens de uma ordem já aberta pela tela
+- **Entrega:** uma lavanderia piloto operando o balcão no sistema — *falta escolher a lavanderia piloto (V6)*
 
 ### Fase 4 — Loja SaaS (nível 1) e provisionamento
 - Loja Shopify com pacotes Lavanderia, provisionamento automático, onboarding, suspensão por inadimplência
@@ -59,6 +66,9 @@ Respostas que podem mudar a arquitetura:
 - `core.segmentation` (RFM + sync de segmento para a Shopify)
 - `integration.nfse`, `integration.whatsapp`
 - Relatórios avançados (DRE gerencial, produtividade)
+
+### Verticais adicionais · *software concluído (out/2026)*
+Salão, pet shop, veterinária, estética, ortodontia, padaria, advocacia, veículos, imobiliária, consórcio, contabilidade e RH, com agenda, prontuário, PDV/estoque, integração bancária e segmentação RFM. Detalhes em [09](09-verticais.md). Pendências: fiscal (ADR-P3, P6), transmissão da folha (ADR-P7) e contratos com bancos (ADR-P8).
 
 ### Depois — próximas verticais
 1. **Veterinária**: introduz `shared.scheduling` e `shared.medical-records` (e com eles as regras de dados sensíveis)

@@ -1,4 +1,4 @@
-import { api, configureApi, SessionContext, type SessionInfo } from '@all/module-sdk/web';
+import { api, ApiError, configureApi, SessionContext, type SessionInfo } from '@all/module-sdk/web';
 import { useQueryClient } from '@tanstack/react-query';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
@@ -25,6 +25,30 @@ interface AuthApi {
 
 const AuthContext = createContext<AuthApi | null>(null);
 
+let renewing: Promise<string | null> | null = null;
+
+/**
+ * Renova a sessão pelo cookie. Pedidos simultâneos na mesma aba compartilham a mesma chamada
+ * (cada cookie só pode ser usado uma vez). Se outra aba acabou de renovar (REFRESH_RACE), o
+ * navegador já tem o cookie novo: tenta mais uma vez.
+ */
+function renewSession(): Promise<string | null> {
+  renewing ??= (async () => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return (await api<{ accessToken: string }>('/auth/refresh', { method: 'POST' })).accessToken;
+      } catch (err) {
+        if (!(err instanceof ApiError && err.code === 'REFRESH_RACE')) return null;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+    }
+    return null;
+  })().finally(() => {
+    renewing = null;
+  });
+  return renewing;
+}
+
 /**
  * Sessão do admin. O access token fica só em memória; ao recarregar a página, a sessão é
  * restaurada pelo cookie de refresh (httpOnly, inacessível ao JavaScript).
@@ -43,13 +67,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [queryClient]);
 
   const refresh = useCallback(async () => {
-    try {
-      const res = await api<{ accessToken: string }>('/auth/refresh', { method: 'POST' });
-      token.current = res.accessToken;
-      return true;
-    } catch {
-      return false;
-    }
+    const accessToken = await renewSession();
+    if (accessToken) token.current = accessToken;
+    return !!accessToken;
   }, []);
 
   const start = useCallback(

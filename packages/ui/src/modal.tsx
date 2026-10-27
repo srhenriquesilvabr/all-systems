@@ -23,7 +23,7 @@ export function Modal({ open, title, onClose, children, footer }: ModalProps) {
     <dialog
       ref={ref}
       onClose={onClose}
-      className="m-auto w-[min(32rem,calc(100vw-2rem))] rounded-lg border border-line bg-surface p-0 text-fg shadow-xl backdrop:bg-black/40"
+      className="m-auto w-[min(32rem,calc(100vw-2rem))] rounded-2xl border border-line bg-surface p-0 text-fg shadow-xl backdrop:bg-ink/60 print:hidden"
     >
       <div className="border-b border-line px-5 py-4">
         <h2 className="text-lg font-semibold">{title}</h2>

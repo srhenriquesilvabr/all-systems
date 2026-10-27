@@ -44,14 +44,17 @@ export class ServiceOrdersService implements OnModuleInit {
     });
   }
 
+  /** Só os fluxos dos módulos ativos no tenant. */
   listWorkflows(): ServiceOrderWorkflow[] {
-    return this.workflows.all();
+    const active = requestContext.require().modules ?? new Set<string>();
+    return this.workflows.all().filter((w) => active.has(w.moduleKey));
   }
 
-  list(opts: { status?: string; customerId?: string; q?: string; limit: number; offset: number }) {
+  list(opts: { status?: string; workflow?: string; customerId?: string; q?: string; limit: number; offset: number }) {
     return this.tdb.run(async (tx) => {
       const where = and(
         opts.status ? eq(soOrders.status, opts.status) : undefined,
+        opts.workflow ? eq(soOrders.workflow, opts.workflow) : undefined,
         opts.customerId ? eq(soOrders.customerId, opts.customerId) : undefined,
         searchFilter(opts.q),
       );
@@ -74,50 +77,57 @@ export class ServiceOrdersService implements OnModuleInit {
     return this.tdb.run((tx) => this.detail(tx, id));
   }
 
+  /** Abertura pelo endpoint genérico: fluxos com tela própria (customCreate) abrem pela vertical. */
   create(input: CreateOrderInput) {
-    const { tenantId, userId } = requestContext.require();
     const workflow = this.workflowOf(input.workflow);
+    if (workflow.customCreate) {
+      throw badRequest('USE_VERTICAL_ENDPOINT', `Ordens do fluxo "${workflow.label}" são abertas pela tela do módulo`);
+    }
+    return this.tdb.run((tx) => this.createInTx(tx, input));
+  }
 
-    return this.tdb.run(async (tx) => {
-      const customer = await this.customers.findInTx(tx, input.customerId);
-      if (!customer) throw badRequest('CUSTOMER_NOT_FOUND', 'Cliente não encontrado');
-      if (customer.anonymizedAt) throw badRequest('CUSTOMER_ANONYMIZED', 'Cliente anonimizado não pode abrir ordens');
+  /** Para verticais: abre a ordem dentro da transação delas (que gravam dados extras junto). */
+  async createInTx(tx: Tx, input: CreateOrderInput): Promise<OrderDetail> {
+    const { tenantId, userId } = requestContext.requireTenant();
+    const workflow = this.workflowOf(input.workflow);
+    const customer = await this.customers.findInTx(tx, input.customerId);
+    if (!customer) throw badRequest('CUSTOMER_NOT_FOUND', 'Cliente não encontrado');
+    if (customer.anonymizedAt) throw badRequest('CUSTOMER_ANONYMIZED', 'Cliente anonimizado não pode abrir ordens');
 
-      const totals = computeTotals(input.items, input.discount);
-      const [order] = await tx
-        .insert(soOrders)
-        .values({
-          tenantId,
-          number: await nextSequence(tx, tenantId, 'service_order'),
-          workflow: workflow.key,
-          status: workflow.initial,
-          customerId: customer.id,
-          channel: input.channel,
-          subtotal: centsToDecimal(totals.subtotal),
-          discount: centsToDecimal(totals.discount),
-          total: centsToDecimal(totals.total),
-          dueAt: input.dueAt ?? null,
-          notesCustomer: input.notesCustomer ?? null,
-          notesInternal: input.notesInternal ?? null,
-          createdBy: userId,
-        })
-        .returning();
-      await this.replaceItems(tx, order!.id, input.items);
-      await tx.insert(soStatusHistory).values({ tenantId, orderId: order!.id, toStatus: workflow.initial, userId });
-
-      await this.syncReceivable(tx, order!);
-      await this.customers.addTimeline(tx, {
+    const totals = computeTotals(input.items, input.discount);
+    const [order] = await tx
+      .insert(soOrders)
+      .values({
+        tenantId,
+        number: await nextSequence(tx, tenantId, 'service_order'),
+        workflow: workflow.key,
+        status: workflow.initial,
         customerId: customer.id,
-        moduleKey: 'shared.service-orders',
-        type: 'service_order.created',
-        title: `Ordem nº ${order!.number} aberta (${brl.format(centsToNumber(totals.total))})`,
-        entity: 'service_order',
-        entityId: order!.id,
-      });
-      await this.notify(tx, order!, workflow);
-      await this.audit.log(tx, { action: 'service_order.created', entity: 'service_order', entityId: order!.id, data: { number: order!.number } });
-      return this.detail(tx, order!.id);
+        channel: input.channel,
+        subtotal: centsToDecimal(totals.subtotal),
+        discount: centsToDecimal(totals.discount),
+        total: centsToDecimal(totals.total),
+        dueAt: input.dueAt ?? null,
+        notesCustomer: input.notesCustomer ?? null,
+        notesInternal: input.notesInternal ?? null,
+        createdBy: userId ?? null,
+      })
+      .returning();
+    await this.replaceItems(tx, order!.id, input.items);
+    await tx.insert(soStatusHistory).values({ tenantId, orderId: order!.id, toStatus: workflow.initial, userId: userId ?? null });
+
+    await this.syncReceivable(tx, order!);
+    await this.customers.addTimeline(tx, {
+      customerId: customer.id,
+      moduleKey: 'shared.service-orders',
+      type: 'service_order.created',
+      title: `Ordem nº ${order!.number} aberta (${brl.format(centsToNumber(totals.total))})`,
+      entity: 'service_order',
+      entityId: order!.id,
     });
+    await this.notify(tx, order!, workflow);
+    await this.audit.log(tx, { action: 'service_order.created', entity: 'service_order', entityId: order!.id, data: { number: order!.number } });
+    return this.detail(tx, order!.id);
   }
 
   update(id: string, input: UpdateOrderInput) {
@@ -152,40 +162,44 @@ export class ServiceOrdersService implements OnModuleInit {
   }
 
   transition(id: string, to: string, reason?: string | null) {
-    const { tenantId, userId } = requestContext.require();
-    return this.tdb.run(async (tx) => {
-      const order = await this.findOrFail(tx, id, true);
-      const workflow = this.workflowOf(order.workflow);
-      if (!(workflow.transitions[order.status] ?? []).includes(to)) {
-        throw badRequest('INVALID_TRANSITION', `Não é possível ir de "${labelOf(workflow, order.status)}" para "${labelOf(workflow, to)}"`);
-      }
-      const target = workflow.statuses.find((s) => s.key === to)!;
-      if (target.cancelled && !reason?.trim()) throw badRequest('REASON_REQUIRED', 'Informe o motivo do cancelamento');
+    return this.tdb.run((tx) => this.transitionInTx(tx, id, to, reason));
+  }
 
-      const [updated] = await tx
-        .update(soOrders)
-        .set({
-          status: to,
-          closedAt: target.terminal ? new Date() : null,
-          cancelReason: target.cancelled ? reason : null,
-        })
-        .where(eq(soOrders.id, id))
-        .returning();
-      await tx.insert(soStatusHistory).values({ tenantId, orderId: id, fromStatus: order.status, toStatus: to, reason: reason ?? null, userId });
+  /** Para verticais: muda o status na transação delas (ex.: ordem pronta quando todas as peças ficam prontas). */
+  async transitionInTx(tx: Tx, id: string, to: string, reason?: string | null): Promise<OrderDetail> {
+    const { tenantId, userId } = requestContext.requireTenant();
+    const order = await this.findOrFail(tx, id, true);
+    const workflow = this.workflowOf(order.workflow);
+    if (!(workflow.transitions[order.status] ?? []).includes(to)) {
+      throw badRequest('INVALID_TRANSITION', `Não é possível ir de "${labelOf(workflow, order.status)}" para "${labelOf(workflow, to)}"`);
+    }
+    const target = workflow.statuses.find((s) => s.key === to)!;
+    if (target.cancelled && !reason?.trim()) throw badRequest('REASON_REQUIRED', 'Informe o motivo do cancelamento');
+    await workflow.beforeTransition?.({ tx, orderId: id, from: order.status, to });
 
-      await this.syncReceivable(tx, updated!);
-      await this.customers.addTimeline(tx, {
-        customerId: order.customerId,
-        moduleKey: 'shared.service-orders',
-        type: 'service_order.status_changed',
-        title: `Ordem nº ${order.number}: ${target.label}`,
-        entity: 'service_order',
-        entityId: id,
-      });
-      await this.notify(tx, updated!, workflow);
-      await this.audit.log(tx, { action: 'service_order.status_changed', entity: 'service_order', entityId: id, data: { from: order.status, to, reason } });
-      return this.detail(tx, id);
+    const [updated] = await tx
+      .update(soOrders)
+      .set({
+        status: to,
+        closedAt: target.terminal ? new Date() : null,
+        cancelReason: target.cancelled ? reason : null,
+      })
+      .where(eq(soOrders.id, id))
+      .returning();
+    await tx.insert(soStatusHistory).values({ tenantId, orderId: id, fromStatus: order.status, toStatus: to, reason: reason ?? null, userId: userId ?? null });
+
+    await this.syncReceivable(tx, updated!);
+    await this.customers.addTimeline(tx, {
+      customerId: order.customerId,
+      moduleKey: 'shared.service-orders',
+      type: 'service_order.status_changed',
+      title: `Ordem nº ${order.number}: ${target.label}`,
+      entity: 'service_order',
+      entityId: id,
     });
+    await this.notify(tx, updated!, workflow);
+    await this.audit.log(tx, { action: 'service_order.status_changed', entity: 'service_order', entityId: id, data: { from: order.status, to, reason } });
+    return this.detail(tx, id);
   }
 
   addPayment(id: string, input: PaymentInput) {
@@ -305,7 +319,7 @@ export class ServiceOrdersService implements OnModuleInit {
     return rows.map((r) => ({ id: r.id, description: r.description, quantity: Number(r.quantity), unitPrice: Number(r.unitPrice), total: Number(r.total), refType: r.refType, refId: r.refId }));
   }
 
-  private async detail(tx: Tx, id: string): Promise<OrderDetail> {
+  async detail(tx: Tx, id: string): Promise<OrderDetail> {
     const order = await this.findOrFail(tx, id);
     const customer = (await this.customers.findInTx(tx, order.customerId))!;
     const [items, payments, history] = await Promise.all([

@@ -1,5 +1,7 @@
 # 06 — Infraestrutura AWS
 
+> **Substituído:** a produção roda no Cloudflare Workers + Supabase ([ADR-023](decisoes.md), seção "Produção" do [README](../../README.md)). Este documento fica como referência do desenho original.
+
 ## Região
 **sa-east-1 (São Paulo)**: latência para os usuários e dados de clientes brasileiros em território nacional. A LGPD não exige residência local, mas isso simplifica a conversa com clientes regulados (cartório, saúde). O custo é maior que em us-east-1, o que é aceitável.
 

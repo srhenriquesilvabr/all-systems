@@ -43,7 +43,10 @@ describe('isolamento entre tenants (RLS)', () => {
         -- Exceções justificadas (qualquer tabela nova fora desta lista precisa de RLS):
         and c.relname not in (
           'refresh_tokens', -- consultada por hash antes de haver tenant no contexto
-          'outbox_events'   -- o worker lê eventos de todos os tenants; só o OutboxService grava
+          'outbox_events',   -- o worker lê eventos de todos os tenants; só o OutboxService grava
+          'whatsapp_numbers', -- o webhook da Meta chega sem tenant: número → empresa
+          'whatsapp_inbound',  -- idem: deduplicação das mensagens recebidas
+          'bank_webhook_routes' -- o webhook do banco chega sem tenant: conexão → empresa
         )
     `);
     expect(rows.length).toBeGreaterThan(5);

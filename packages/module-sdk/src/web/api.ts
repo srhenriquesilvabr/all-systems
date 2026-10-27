@@ -82,6 +82,30 @@ export async function apiDownload(path: string, filename: string, opts: ApiOptio
   URL.revokeObjectURL(url);
 }
 
+/** Conteúdo binário de uma rota autenticada (ex.: foto), como Blob. */
+export async function apiBlob(path: string): Promise<Blob> {
+  const res = await request(path, {}, false);
+  if (!res.ok) throw new ApiError(res.status, undefined, res.statusText, undefined);
+  return res.blob();
+}
+
+/** Envio de arquivo (multipart). `field` é o nome do campo esperado pela API. */
+export async function apiUpload<T = unknown>(path: string, field: string, file: File): Promise<T> {
+  const form = new FormData();
+  form.append(field, file);
+  const headers: Record<string, string> = {};
+  const token = config.getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  let res = await fetch(config.baseUrl + path, { method: 'POST', headers, body: form, credentials: 'same-origin' });
+  if (res.status === 401 && (await refreshOnce())) {
+    headers.Authorization = `Bearer ${config.getToken()}`;
+    res = await fetch(config.baseUrl + path, { method: 'POST', headers, body: form, credentials: 'same-origin' });
+  }
+  const data = await res.json().catch(() => undefined);
+  if (!res.ok) throw new ApiError(res.status, data?.code, data?.message ?? res.statusText, data);
+  return data as T;
+}
+
 export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Promise<T> {
   const res = await request(path, opts, false);
   const text = await res.text();

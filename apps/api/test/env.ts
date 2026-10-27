@@ -1,3 +1,4 @@
+import os from 'node:os';
 import path from 'node:path';
 
 try {
@@ -13,6 +14,7 @@ export const testEnv = {
   JWT_SECRET: 'segredo-de-teste-com-pelo-menos-32-caracteres!!',
   ADMIN_URL: 'http://admin.test',
   SMTP_URL: 'smtp://localhost:1',
+  STORAGE_DIR: path.join(os.tmpdir(), 'all-systems-test-storage'),
 };
 
 function required(key: string): string {

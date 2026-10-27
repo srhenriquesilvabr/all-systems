@@ -4,3 +4,5 @@ export * from './db/schema';
 export * from './customers/schema';
 export * from './finance/schema';
 export * from './events/schema';
+export * from './files/schema';
+export * from './segmentation/schema';

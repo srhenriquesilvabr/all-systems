@@ -1,4 +1,6 @@
+import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { testEnv } from './env';
 import { auth, createTenant, createTestApp, login, PASSWORD, refreshCookie, tokenFromMail, uniqueEmail, type TestApp } from './helpers';
 
 describe('autenticação', () => {
@@ -46,10 +48,19 @@ describe('autenticação', () => {
     expect(rotated.body.accessToken).toBeTruthy();
     const second = refreshCookie(rotated);
 
-    // Reusar o cookie antigo = possível roubo: a família inteira é revogada.
+    // Logo após a rotação, reusar o cookie antigo é corrida entre abas: recusa, mas a sessão continua.
+    const race = await t.http().post('/api/auth/refresh').set('Cookie', first.cookie).expect(401);
+    expect(race.body.code).toBe('REFRESH_RACE');
+    const third = refreshCookie(await t.http().post('/api/auth/refresh').set('Cookie', second).expect(200));
+
+    // Passada a janela, reusar um cookie antigo = possível roubo: a família inteira é revogada.
+    const admin = new Client({ connectionString: testEnv.MIGRATION_DATABASE_URL });
+    await admin.connect();
+    await admin.query(`update refresh_tokens set revoked_at = now() - interval '1 minute' where revoked_at is not null`);
+    await admin.end();
     const reuse = await t.http().post('/api/auth/refresh').set('Cookie', first.cookie).expect(401);
     expect(reuse.body.code).toBe('REFRESH_REUSED');
-    await t.http().post('/api/auth/refresh').set('Cookie', second).expect(401);
+    await t.http().post('/api/auth/refresh').set('Cookie', third).expect(401);
   });
 
   it('logout invalida o refresh token', async () => {

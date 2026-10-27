@@ -31,6 +31,7 @@ export const accessManifest = defineModule({
   permissions: [
     { key: 'core.access.read', label: 'Ver papéis e permissões' },
     { key: 'core.access.manage', label: 'Criar e editar papéis' },
+    { key: 'core.access.settings', label: 'Configurar os módulos contratados (ex.: chave Pix)' },
   ],
   menu: [{ label: 'Papéis', path: '/configuracoes/papeis', icon: 'shield', permission: 'core.access.read', group: 'Configurações' }],
 });
@@ -79,4 +80,18 @@ export const financeManifest = defineModule({
   ],
 });
 
-export const coreManifests = [authManifest, usersManifest, accessManifest, auditManifest, customersManifest, financeManifest];
+/** Clusterização de clientes (etapa 1: RFM com regras). */
+export const segmentationManifest = defineModule({
+  key: 'core.segmentation',
+  name: 'Segmentação de clientes',
+  layer: 'core',
+  version: '1.0.0',
+  dependsOn: ['core.customers', 'core.finance'],
+  permissions: [
+    { key: 'core.segmentation.read', label: 'Ver segmentos de clientes e exportar listas' },
+    { key: 'core.segmentation.manage', label: 'Recalcular os segmentos' },
+  ],
+  menu: [{ label: 'Segmentos', path: '/segmentos', icon: 'target', permission: 'core.segmentation.read' }],
+});
+
+export const coreManifests = [authManifest, usersManifest, accessManifest, auditManifest, customersManifest, financeManifest, segmentationManifest];

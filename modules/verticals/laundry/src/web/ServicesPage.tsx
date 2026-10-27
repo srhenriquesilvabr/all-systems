@@ -1,8 +1,9 @@
 import { api, ApiError } from '@all/module-sdk/web';
-import { Alert, Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th } from '@all/ui';
+import { Alert, Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Tabs, Td, Th } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { pricingUnitLabel, pricingUnits, serviceInput, type LaundryService, type PricingUnit, type ServiceInput } from '../contracts';
+import { GarmentTypesTab, PricesModal } from './CatalogExtras';
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const KEY = ['laundry', 'services'];
@@ -10,61 +11,81 @@ const KEY = ['laundry', 'services'];
 export function ServicesPage() {
   const query = useQuery({ queryKey: KEY, queryFn: () => api<LaundryService[]>('/laundry/services') });
   const [editing, setEditing] = useState<LaundryService | 'new' | null>(null);
+  const [pricing, setPricing] = useState<LaundryService | null>(null);
+  const [tab, setTab] = useState('services');
 
   return (
     <>
       <PageHeader
         title="Serviços e preços"
         description="O que a lavanderia oferece, como cobra e em quanto tempo entrega."
-        actions={<Button onClick={() => setEditing('new')}>Novo serviço</Button>}
+        actions={tab === 'services' && <Button onClick={() => setEditing('new')}>Novo serviço</Button>}
+      />
+      <Tabs
+        items={[
+          { key: 'services', label: 'Serviços' },
+          { key: 'garments', label: 'Tipos de peça' },
+        ]}
+        active={tab}
+        onChange={setTab}
       />
 
-      <Card>
-        {query.isPending ? (
-          <Spinner />
-        ) : query.isError ? (
-          <div className="p-4">
-            <Alert>Não foi possível carregar os serviços: {query.error.message}</Alert>
-          </div>
-        ) : query.data.length === 0 ? (
-          <EmptyState
-            title="Nenhum serviço cadastrado"
-            description="Cadastre serviços como “Lavar e passar” ou “Lavagem a seco” para usá-los nas ordens de serviço."
-            action={<Button onClick={() => setEditing('new')}>Cadastrar o primeiro</Button>}
-          />
-        ) : (
-          <Table>
-            <thead>
-              <tr>
-                <Th>Serviço</Th>
-                <Th>Cobrança</Th>
-                <Th className="text-right">Preço</Th>
-                <Th className="text-right">Prazo</Th>
-                <Th>Situação</Th>
-                <Th />
-              </tr>
-            </thead>
-            <tbody>
-              {query.data.map((s) => (
-                <tr key={s.id}>
-                  <Td className="font-medium">{s.name}</Td>
-                  <Td>{pricingUnitLabel[s.pricingUnit]}</Td>
-                  <Td className="text-right tabular-nums">{brl.format(s.basePrice)}</Td>
-                  <Td className="text-right tabular-nums">{formatHours(s.turnaroundHours)}</Td>
-                  <Td>{s.active ? <Badge tone="success">Ativo</Badge> : <Badge>Inativo</Badge>}</Td>
-                  <Td className="text-right">
-                    <Button variant="ghost" size="sm" onClick={() => setEditing(s)}>
-                      Editar
-                    </Button>
-                  </Td>
+      {tab === 'garments' ? (
+        <GarmentTypesTab />
+      ) : (
+        <Card>
+          {query.isPending ? (
+            <Spinner />
+          ) : query.isError ? (
+            <div className="p-4">
+              <Alert>Não foi possível carregar os serviços: {query.error.message}</Alert>
+            </div>
+          ) : query.data.length === 0 ? (
+            <EmptyState
+              title="Nenhum serviço cadastrado"
+              description="Cadastre serviços como “Lavar e passar” ou “Lavagem a seco” para usá-los nas ordens de serviço."
+              action={<Button onClick={() => setEditing('new')}>Cadastrar o primeiro</Button>}
+            />
+          ) : (
+            <Table>
+              <thead>
+                <tr>
+                  <Th>Serviço</Th>
+                  <Th>Cobrança</Th>
+                  <Th className="text-right">Preço</Th>
+                  <Th className="text-right">Prazo</Th>
+                  <Th>Situação</Th>
+                  <Th />
                 </tr>
-              ))}
-            </tbody>
-          </Table>
-        )}
-      </Card>
+              </thead>
+              <tbody>
+                {query.data.map((s) => (
+                  <tr key={s.id}>
+                    <Td className="font-medium">{s.name}</Td>
+                    <Td>{pricingUnitLabel[s.pricingUnit]}</Td>
+                    <Td className="text-right tabular-nums">{brl.format(s.basePrice)}</Td>
+                    <Td className="text-right tabular-nums">{formatHours(s.turnaroundHours)}</Td>
+                    <Td>{s.active ? <Badge tone="success">Ativo</Badge> : <Badge>Inativo</Badge>}</Td>
+                    <Td className="whitespace-nowrap text-right">
+                      {s.pricingUnit === 'piece' && (
+                        <Button variant="ghost" size="sm" onClick={() => setPricing(s)}>
+                          Preço por peça
+                        </Button>
+                      )}
+                      <Button variant="ghost" size="sm" onClick={() => setEditing(s)}>
+                        Editar
+                      </Button>
+                    </Td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          )}
+        </Card>
+      )}
 
       {editing && <ServiceForm service={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />}
+      {pricing && <PricesModal service={pricing} onClose={() => setPricing(null)} />}
     </>
   );
 }

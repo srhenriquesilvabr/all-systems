@@ -1,7 +1,7 @@
 import { type Tx } from '@all/db';
 import { requestContext } from '@all/module-sdk';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { and, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne } from 'drizzle-orm';
 import { AccessService } from '../access/access.service';
 import { AuditService } from '../audit/audit.service';
 import { hashToken, newToken } from '../common/crypto';
@@ -52,6 +52,19 @@ export class UsersService {
         roles: assigned.filter((a) => a.membershipId === r.membershipId).map(({ membershipId, ...role }) => role),
       }));
     });
+  }
+
+  team() {
+    const { tenantId } = requestContext.requireTenant();
+    return this.tdb.run((tx) =>
+      tx
+        .select({ id: users.id, name: users.name })
+        .from(memberships)
+        .innerJoin(users, eq(users.id, memberships.userId))
+        // A política de memberships também mostra ao usuário as dele em outras empresas.
+        .where(and(eq(memberships.tenantId, tenantId), eq(memberships.status, 'active')))
+        .orderBy(asc(users.name)),
+    );
   }
 
   async invite(input: { email: string; name: string; roleIds: string[] }) {

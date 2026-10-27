@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useParams } from 'react-router';
 import { webModules } from '../../modules';
+import { CustomerSegment } from '../segmentation/SegmentsPage';
 import { CustomerForm, useCustomFields } from './CustomerForm';
 import { formatDocument, formatPhone } from './format';
 import type { ConsentPurpose, CustomerDetail } from './types';
@@ -56,6 +57,7 @@ export function CustomerPage() {
           )
         }
       />
+      {!c.anonymizedAt && <CustomerSegment customerId={c.id} />}
       {c.anonymizedAt && (
         <div className="mb-4">
           <Alert tone="info">Dados pessoais anonimizados em {formatDateTime(c.anonymizedAt)} a pedido do titular.</Alert>

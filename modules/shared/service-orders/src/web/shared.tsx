@@ -31,7 +31,7 @@ export function OrderRows({ orders, workflows, showCustomer = true }: { orders: 
       {orders.map((o) => (
         <tr key={o.id} className="hover:bg-muted/50">
           <td className="border-b border-line px-4 py-3">
-            <Link to={`/ordens/${o.id}`} className="font-medium text-brand-700 hover:underline">
+            <Link to={orderPath(workflows, o)} className="font-medium text-brand-700 hover:underline">
               nº {o.number}
             </Link>
           </td>
@@ -48,4 +48,15 @@ export function OrderRows({ orders, workflows, showCustomer = true }: { orders: 
       ))}
     </>
   );
+}
+
+/** Tela de detalhe da ordem: a da vertical, se o fluxo tiver uma; senão a genérica. */
+export function orderPath(workflows: ServiceOrderWorkflow[] | undefined, order: { id: string; workflow: string }) {
+  const custom = workflows?.find((w) => w.key === order.workflow)?.detailPath;
+  return custom ? custom.replace(':id', order.id) : `/ordens/${order.id}`;
+}
+
+/** Tela de nova ordem: a da vertical contratada (ex.: balcão da lavanderia) ou a genérica. */
+export function newOrderPath(workflows: ServiceOrderWorkflow[] | undefined) {
+  return workflows?.find((w) => w.newPath)?.newPath ?? '/ordens/nova';
 }

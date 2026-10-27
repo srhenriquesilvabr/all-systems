@@ -5,3 +5,4 @@ export * from './layout';
 export * from './feedback';
 export * from './table';
 export * from './modal';
+export * from './qr';

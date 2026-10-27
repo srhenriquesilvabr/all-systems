@@ -3,7 +3,7 @@ import { Alert, Button, Card, EmptyState, Spinner, Table, Th } from '@all/ui';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
 import type { OrderSummary } from '../contracts';
-import { OrderRows, ordersKey, useWorkflows } from './shared';
+import { newOrderPath, OrderRows, ordersKey, useWorkflows } from './shared';
 
 /** Aba "Ordens de serviço" na ficha do cliente. */
 export function CustomerOrdersTab({ customerId }: { customerId: string }) {
@@ -14,7 +14,7 @@ export function CustomerOrdersTab({ customerId }: { customerId: string }) {
     queryKey: [...ordersKey, { customerId }],
     queryFn: () => api<{ items: OrderSummary[]; total: number }>('/service-orders', { query: { customerId, limit: 50 } }),
   });
-  const newOrder = canWrite && <Button onClick={() => navigate(`/ordens/nova?cliente=${customerId}`)}>Nova ordem</Button>;
+  const newOrder = canWrite && <Button onClick={() => navigate(`${newOrderPath(workflows.data)}?cliente=${customerId}`)}>Nova ordem</Button>;
 
   if (orders.isPending) return <Spinner />;
   if (orders.isError) return <Alert>{orders.error.message}</Alert>;

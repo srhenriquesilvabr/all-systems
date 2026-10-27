@@ -5,7 +5,8 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule.forRoot());
+  // rawBody: o webhook do WhatsApp confere a assinatura sobre o corpo original.
+  const app = await NestFactory.create(AppModule.forRoot(), { rawBody: true });
   configureHttp(app);
   const port = Number(process.env.PORT ?? 3000);
   await app.listen(port);

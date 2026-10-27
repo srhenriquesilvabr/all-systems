@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
-import { hash, verify } from '@node-rs/argon2';
+import { hashPassword as hash, verifyPassword as verify } from '../common/password';
 import { and, eq, gt, isNull, ne } from 'drizzle-orm';
 import { AccessService } from '../access/access.service';
 import { hashToken, newToken } from '../common/crypto';

@@ -2,7 +2,7 @@ import { createContext, useContext } from 'react';
 
 export interface SessionInfo {
   user: { id: string; name: string; email: string };
-  tenant: { id: string; name: string };
+  tenant: { id: string; name: string; slug: string | null };
   tenants: { id: string; name: string }[];
   modules: { key: string; name: string; layer: string }[];
   permissions: string[];

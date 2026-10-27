@@ -7,6 +7,8 @@ export interface ModuleLifecycle {
    * precisa ser idempotente. Uso típico: dados iniciais (categorias, contas, templates).
    */
   onEnable?(tx: Tx, tenantId: string): Promise<void>;
+  /** Depois de salvar as configurações do módulo (ex.: indexar o número do WhatsApp). */
+  onSettingsSaved?(tx: Tx, tenantId: string, settings: Record<string, unknown>): Promise<void>;
 }
 
 /** Ganchos de ciclo de vida que os módulos registram no onModuleInit. */
@@ -15,10 +17,14 @@ export class ModuleHooks {
   private readonly hooks = new Map<string, ModuleLifecycle>();
 
   register(moduleKey: string, lifecycle: ModuleLifecycle) {
-    this.hooks.set(moduleKey, lifecycle);
+    this.hooks.set(moduleKey, { ...this.hooks.get(moduleKey), ...lifecycle });
   }
 
   async onEnable(tx: Tx, tenantId: string, moduleKey: string) {
     await this.hooks.get(moduleKey)?.onEnable?.(tx, tenantId);
+  }
+
+  async onSettingsSaved(tx: Tx, tenantId: string, moduleKey: string, settings: Record<string, unknown>) {
+    await this.hooks.get(moduleKey)?.onSettingsSaved?.(tx, tenantId, settings);
   }
 }

@@ -1,17 +1,10 @@
-import { api, ApiError, formatMoney, parseMoney } from '@all/module-sdk/web';
+import { api, ApiError, formatMoney, parseMoney, formatPhone, CustomerSearch, type CustomerOption } from '@all/module-sdk/web';
 import { Alert, Button, Card, Field, Input, PageHeader, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { createOrderInput, type OrderDetail } from '../contracts';
 import { ordersKey } from './shared';
-
-interface CustomerOption {
-  id: string;
-  name: string;
-  phone: string | null;
-  email: string | null;
-}
 
 interface ItemDraft {
   description: string;
@@ -89,7 +82,7 @@ export function NewOrderPage() {
             <div className="flex items-center justify-between gap-4">
               <div>
                 <p className="font-medium">{customer.name}</p>
-                <p className="text-sm text-fg-muted">{[customer.phone, customer.email].filter(Boolean).join(' · ') || 'Sem contato cadastrado'}</p>
+                <p className="text-sm text-fg-muted">{[formatPhone(customer.phone), customer.email].filter(Boolean).join(' · ') || 'Sem contato cadastrado'}</p>
               </div>
               <Button variant="secondary" size="sm" onClick={() => setCustomer(null)}>
                 Trocar
@@ -156,40 +149,5 @@ export function NewOrderPage() {
         </div>
       </form>
     </>
-  );
-}
-
-function CustomerSearch({ onSelect }: { onSelect: (c: CustomerOption) => void }) {
-  const [q, setQ] = useState('');
-  const results = useQuery({
-    queryKey: ['customers', 'search', q],
-    queryFn: () => api<{ items: CustomerOption[] }>('/customers', { query: { q, limit: 8 } }),
-    enabled: q.trim().length >= 2,
-  });
-
-  return (
-    <div>
-      <Input type="search" aria-label="Buscar cliente" placeholder="Nome, CPF/CNPJ ou telefone" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
-      {q.trim().length >= 2 && (
-        <ul className="mt-2 divide-y divide-line rounded-md border border-line">
-          {results.data?.items.map((c) => (
-            <li key={c.id}>
-              <button type="button" className="w-full px-3 py-2 text-left hover:bg-muted" onClick={() => onSelect(c)}>
-                <span className="font-medium">{c.name}</span>
-                <span className="ml-2 text-sm text-fg-muted">{c.phone ?? c.email ?? ''}</span>
-              </button>
-            </li>
-          ))}
-          {results.data?.items.length === 0 && (
-            <li className="px-3 py-2 text-sm text-fg-muted">
-              Nenhum cliente encontrado.{' '}
-              <Link to="/clientes?novo=1" className="text-brand-700 hover:underline">
-                Cadastrar cliente
-              </Link>
-            </li>
-          )}
-        </ul>
-      )}
-    </div>
   );
 }

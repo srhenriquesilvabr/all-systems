@@ -107,7 +107,7 @@ describe('ordens de serviço', () => {
   it('avisa o cliente por e-mail pelo outbox, com o texto personalizado pela empresa', async () => {
     const s = await setup();
     await s
-      .as('put', '/notifications/templates/shared.service-orders.ready')
+      .as('put', '/notifications/templates/shared.service-orders.ready/email')
       .send({ subject: 'Pode buscar! Ordem {{os.numero}}', body: 'Oi {{cliente.nome}}, falta pagar {{os.saldo}}. — {{empresa.nome}}' })
       .expect(204);
 

@@ -65,11 +65,23 @@ export interface WorkflowStatus {
 export interface ServiceOrderWorkflow {
   key: string;
   label: string;
+  /** Módulo dono do fluxo: só aparece para tenants com ele ativo. */
+  moduleKey: string;
+  /** Ordens deste fluxo são abertas pela tela/endpoint da vertical (que grava dados extras), não pelo genérico. */
+  customCreate?: boolean;
+  /** Telas da vertical para a ordem (`:id` é substituído). Sem isso, usa as telas genéricas. */
+  detailPath?: string;
+  newPath?: string;
   statuses: WorkflowStatus[];
   initial: string;
   transitions: Record<string, string[]>;
   /** Status → template de notificação enviado ao cliente ao entrar nele. */
   notify?: Record<string, string>;
+  /**
+   * Só no servidor (some ao virar JSON): a vertical pode vetar uma mudança de status lançando um erro.
+   * `tx` é a transação do Drizzle em andamento.
+   */
+  beforeTransition?: (ctx: { tx: unknown; orderId: string; from: string; to: string }) => Promise<void>;
 }
 
 export interface OrderSummary {

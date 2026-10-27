@@ -1,4 +1,5 @@
 import { SessionContext, useSession } from '@all/module-sdk/web';
+import { PublicBookingPage } from '@all/scheduling/web';
 import { Spinner } from '@all/ui';
 import { useContext, type ComponentType } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router';
@@ -8,6 +9,7 @@ import { webModules } from './modules';
 import { AuditPage } from './pages/AuditPage';
 import { CustomerPage } from './pages/customers/CustomerPage';
 import { CustomersPage } from './pages/customers/CustomersPage';
+import { SegmentsPage } from './pages/segmentation/SegmentsPage';
 import { CustomFieldsPage } from './pages/customers/CustomFieldsPage';
 import { FinanceEntriesPage } from './pages/finance/FinanceEntriesPage';
 import { FinanceOverviewPage } from './pages/finance/FinanceOverviewPage';
@@ -24,6 +26,15 @@ export function App() {
   const { status } = useAuth();
   const session = useContext(SessionContext);
   const location = useLocation();
+
+  // Agendamento online: página pública, não depende de sessão.
+  if (location.pathname.startsWith('/agendar/')) {
+    return (
+      <Routes>
+        <Route path="/agendar/:slug" element={<PublicBookingPage />} />
+      </Routes>
+    );
+  }
 
   if (status === 'loading') {
     return (
@@ -62,6 +73,7 @@ export function App() {
           <Route path="configuracoes/campos-de-clientes" element={<Guarded permission="core.customers.fields" Component={CustomFieldsPage} />} />
           <Route path="clientes" element={<Guarded permission="core.customers.read" Component={CustomersPage} />} />
           <Route path="clientes/:id" element={<Guarded permission="core.customers.read" Component={CustomerPage} />} />
+          <Route path="segmentos" element={<Guarded permission="core.segmentation.read" Component={SegmentsPage} />} />
           <Route path="financeiro" element={<Guarded permission="core.finance.read" Component={FinanceOverviewPage} />} />
           <Route path="financeiro/lancamentos" element={<Guarded permission="core.finance.read" Component={FinanceEntriesPage} />} />
           <Route path="financeiro/cadastros" element={<Guarded permission="core.finance.manage" Component={FinanceRegistryPage} />} />

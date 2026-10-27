@@ -1,0 +1,599 @@
+<title>Manual de uso Palmer Tech</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: faixa da marca em tinta + manual em duas colunas (sumário fixo à esquerda, texto em ~68ch). */
+  :root {
+    --paper: #f6f7fb;
+    --surface: #ffffff;
+    --ink: #0e1330;
+    --text: #0e1330;
+    --text-2: #3b4160;
+    --muted: #5b6178;
+    --line: #dde1ec;
+    --blue: #2d4bff;
+    --link: #1f35d1;
+    --mist: #eef1ff;
+    --cyan: #7df9ff;
+    --band-text: #c3c8da;
+    --tip-bg: #eef1ff;
+    --warn-bg: #fff6e8;
+    --warn-line: #f5c27a;
+    --warn-text: #7a3a06;
+
+    --f-display: "Outfit", ui-sans-serif, system-ui, sans-serif;
+    --f-body: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --f-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #0a0d22;
+      --surface: #11163a;
+      --text: #eef1ff;
+      --text-2: #c3c8da;
+      --muted: #9aa0b4;
+      --line: #252c58;
+      --blue: #6f86ff;
+      --link: #9fb0ff;
+      --mist: #1a2150;
+      --tip-bg: #161d4a;
+      --warn-bg: #2a1d0c;
+      --warn-line: #7a5214;
+      --warn-text: #f6cf96;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0a0d22;
+    --surface: #11163a;
+    --text: #eef1ff;
+    --text-2: #c3c8da;
+    --muted: #9aa0b4;
+    --line: #252c58;
+    --blue: #6f86ff;
+    --link: #9fb0ff;
+    --mist: #1a2150;
+    --tip-bg: #161d4a;
+    --warn-bg: #2a1d0c;
+    --warn-line: #7a5214;
+    --warn-text: #f6cf96;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    background: var(--paper);
+    color: var(--text);
+    font: 16px/1.65 var(--f-body);
+    -webkit-font-smoothing: antialiased;
+  }
+  .gutter {
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+
+  /* Faixa da marca */
+  .band { background: var(--ink); color: #fff; position: relative; overflow: hidden; }
+  .band::after {
+    content: ""; position: absolute; width: 36rem; height: 36rem; right: -12rem; top: -18rem;
+    border-radius: 50%; background: radial-gradient(closest-side, rgba(45, 75, 255, .45), transparent);
+    pointer-events: none;
+  }
+  .band__inner { max-width: 76rem; margin: 0 auto; padding-block: 28px 44px; position: relative; z-index: 1; }
+  .brand { display: inline-flex; align-items: center; gap: 10px; font-family: var(--f-display); font-size: 24px; letter-spacing: -.03em; line-height: 1; }
+  .brand b { font-weight: 600; }
+  .brand span { font-weight: 300; color: var(--cyan); }
+  .band h1 {
+    font: 300 clamp(2rem, 5vw, 3.2rem)/1.1 var(--f-display); letter-spacing: -.02em;
+    margin: 40px 0 12px; text-wrap: balance; max-width: 22ch;
+  }
+  .band h1 strong { font-weight: 500; color: var(--cyan); }
+  .band p { color: var(--band-text); max-width: 60ch; margin: 0; }
+  .band .meta { margin-top: 20px; font-size: 13px; color: #9aa0b4; }
+
+  /* Corpo */
+  .layout { max-width: 76rem; margin: 0 auto; display: grid; grid-template-columns: 15rem minmax(0, 1fr); gap: 48px; padding-block: 40px 80px; }
+  @media (max-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr); gap: 24px; } }
+
+  .toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); align-self: start; font-size: 14px; }
+  .toc p { font: 600 12px/1 var(--f-body); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; }
+  .toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+  .toc a { display: block; padding: 6px 10px; border-radius: 8px; color: var(--text-2); text-decoration: none; }
+  .toc a:hover { background: var(--mist); color: var(--text); }
+  .toc a[aria-current="true"] { background: var(--blue); color: #fff; }
+  @media (max-width: 900px) {
+    .toc { position: static; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
+    .toc ol { grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr)); }
+  }
+
+  main { min-width: 0; }
+  section { padding-top: 8px; margin-bottom: 64px; }
+  section > :first-child { margin-top: 0; }
+  h2 { font: 500 30px/1.2 var(--f-display); letter-spacing: -.02em; margin: 0 0 12px; text-wrap: balance; }
+  h2 .kicker { display: block; font: 600 12px/1 var(--f-body); letter-spacing: .08em; text-transform: uppercase; color: var(--blue); margin-bottom: 10px; }
+  h3 { font: 500 20px/1.3 var(--f-display); margin: 36px 0 8px; text-wrap: balance; }
+  p, li { max-width: 68ch; color: var(--text-2); }
+  p { margin: 0 0 14px; }
+  strong { color: var(--text); font-weight: 600; }
+  a { color: var(--link); }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
+  .lead { font-size: 18px; color: var(--text-2); }
+
+  ol.steps { counter-reset: step; list-style: none; padding: 0; margin: 16px 0 20px; display: grid; gap: 12px; }
+  ol.steps > li { counter-increment: step; display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; align-items: start; }
+  ol.steps > li::before {
+    content: counter(step); width: 28px; height: 28px; border-radius: 50%; background: var(--mist); color: var(--link);
+    display: grid; place-items: center; font: 600 14px/1 var(--f-body); margin-top: 1px;
+  }
+  ul { padding-left: 20px; margin: 0 0 16px; }
+  ul li { margin-bottom: 6px; }
+
+  .ui { font-weight: 600; color: var(--text); white-space: nowrap; }
+  code, kbd { font: 500 .9em var(--f-mono); background: var(--mist); color: var(--text); padding: 1px 6px; border-radius: 6px; }
+
+  figure { margin: 20px 0 28px; }
+  figure img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 14px; background: #fff; }
+  figure.narrow { max-width: 320px; }
+  figcaption { font-size: 13px; color: var(--muted); margin-top: 8px; }
+
+  .note { border-radius: 14px; padding: 14px 16px; margin: 16px 0 20px; max-width: 68ch; font-size: 15px; }
+  .note p { margin: 0; }
+  .note p + p { margin-top: 8px; }
+  .note--tip { background: var(--tip-bg); }
+  .note--tip strong { color: var(--link); }
+  .note--warn { background: var(--warn-bg); border: 1px solid var(--warn-line); }
+  .note--warn p, .note--warn strong { color: var(--warn-text); }
+
+  .flow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 12px 0 20px; font-size: 14px; }
+  .flow span { background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; color: var(--text); }
+  .flow i { color: var(--muted); font-style: normal; }
+
+  .table-wrap { overflow-x: auto; margin: 16px 0 24px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 15px; min-width: 34rem; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; color: var(--text-2); }
+  th { font: 600 12px/1.4 var(--f-body); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  tr:last-child td { border-bottom: 0; }
+  td:first-child { color: var(--text); font-weight: 600; white-space: nowrap; }
+
+  dl.faq { margin: 0; display: grid; gap: 12px; }
+  dl.faq div { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+  dl.faq dt { font-weight: 600; color: var(--text); margin-bottom: 4px; }
+  dl.faq dd { margin: 0; color: var(--text-2); max-width: 68ch; }
+
+  footer { border-top: 1px solid var(--line); }
+  footer .gutter > div { max-width: 76rem; margin: 0 auto; padding-block: 24px 40px; display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: space-between; font-size: 14px; color: var(--muted); }
+</style>
+
+<header class="band">
+  <div class="gutter">
+    <div class="band__inner">
+      <span class="brand" role="img" aria-label="Palmer Tech">
+        <img src="img/palmer-simbolo-white.svg" alt="" width="36" height="36">
+        <span aria-hidden="true" style="color:#fff;font-weight:600;font-family:var(--f-display)">palmer</span><span aria-hidden="true">tech</span>
+      </span>
+      <h1>Manual do sistema de <strong>gestão</strong></h1>
+      <p>Como atender no balcão, acompanhar a produção, receber pagamentos e acompanhar os números da sua empresa. Escrito para quem usa o sistema no dia a dia: donos, atendentes e equipe de produção.</p>
+      <p class="meta">Atualizado em 21/10/2026 · Lavanderias, ordens de serviço, clientes e financeiro</p>
+    </div>
+  </div>
+</header>
+
+<div class="gutter">
+  <div class="layout">
+    <nav class="toc" aria-label="Sumário">
+      <p>Neste manual</p>
+      <ol>
+        <li><a href="#acesso">Entrar no sistema</a></li>
+        <li><a href="#menu">Tela inicial e menu</a></li>
+        <li><a href="#clientes">Clientes</a></li>
+        <li><a href="#balcao">Balcão: nova ordem</a></li>
+        <li><a href="#ordem">A ordem de serviço</a></li>
+        <li><a href="#producao">Produção</a></li>
+        <li><a href="#financeiro">Financeiro</a></li>
+        <li><a href="#relatorios">Relatórios</a></li>
+        <li><a href="#configuracoes">Configurações</a></li>
+        <li><a href="#duvidas">Dúvidas frequentes</a></li>
+        <li><a href="#glossario">Glossário</a></li>
+      </ol>
+    </nav>
+
+    <main>
+      <section aria-labelledby="t-antes">
+        <h2 id="t-antes">Antes de começar</h2>
+        <p class="lead">O que aparece no seu menu depende de duas coisas: o que a sua empresa contratou e o seu <strong>papel</strong> (Dono, Atendente, Operador, Motorista…). Se alguma tela deste manual não aparece para você, veja <a href="#duvidas">Não encontro uma tela no menu</a>.</p>
+        <p>O sistema funciona no navegador do computador, do tablet e do celular. Não é preciso instalar nada.</p>
+      </section>
+
+      <section id="acesso" aria-labelledby="t-acesso">
+        <h2 id="t-acesso"><span class="kicker">1 · Acesso</span>Entrar no sistema</h2>
+        <figure>
+          <img src="img/01-login.png" alt="Tela de login com os campos E-mail e Senha, o botão Entrar e o link Esqueci minha senha" width="1440" height="900" loading="lazy">
+          <figcaption>Tela de entrada.</figcaption>
+        </figure>
+
+        <h3>Primeiro acesso (convite)</h3>
+        <ol class="steps">
+          <li>Abra o e-mail <strong>“Você foi convidado para…”</strong> enviado quando o dono da empresa cadastrou você.</li>
+          <li>Clique no link. Ele vale por <strong>7 dias</strong>.</li>
+          <li>Confira o seu nome, crie uma senha com pelo menos <strong>10 caracteres</strong> e clique em <span class="ui">Salvar senha</span>.</li>
+          <li>Volte para a tela de login e entre com o seu e-mail e a senha nova.</li>
+        </ol>
+
+        <h3>Esqueci minha senha</h3>
+        <ol class="steps">
+          <li>Na tela de login, clique em <span class="ui">Esqueci minha senha</span> e informe o seu e-mail.</li>
+          <li>Abra o e-mail <strong>“Redefinição de senha”</strong>. O link vale por <strong>30 minutos</strong> e só pode ser usado uma vez.</li>
+          <li>Crie a senha nova. Por segurança, todas as sessões que estavam abertas em outros aparelhos são encerradas.</li>
+        </ol>
+        <div class="note note--tip">
+          <p><strong>Errou a senha várias vezes?</strong> Depois de 5 tentativas erradas o acesso fica bloqueado por 15 minutos. Se precisar entrar antes disso, use <span class="ui">Esqueci minha senha</span>.</p>
+        </div>
+
+        <h3>Trabalha em mais de uma empresa?</h3>
+        <p>Ao entrar, o sistema pergunta em qual empresa você quer trabalhar. Para trocar depois, use o seletor com o nome da empresa no topo do menu. Para sair, use <span class="ui">Sair</span> no rodapé do menu.</p>
+      </section>
+
+      <section id="menu" aria-labelledby="t-menu">
+        <h2 id="t-menu"><span class="kicker">2 · Navegação</span>Tela inicial e menu</h2>
+        <p>A tela inicial mostra os módulos que a sua empresa contratou e atalhos para as telas que você pode usar. O menu à esquerda é dividido em três partes:</p>
+        <ul>
+          <li><strong>Menu principal:</strong> o trabalho do dia a dia (Clientes, Ordens de serviço, Balcão, Produção, Relatórios).</li>
+          <li><strong>Configurações:</strong> usuários, papéis, mensagens automáticas, Pix e outros ajustes, em geral só para o dono.</li>
+          <li><strong>Financeiro:</strong> visão geral, lançamentos, contas e categorias.</li>
+        </ul>
+        <figure>
+          <img src="img/02-inicio.png" alt="Tela inicial com o menu lateral escuro, o cartão Módulos contratados e o cartão Atalhos" width="1440" height="900" loading="lazy">
+          <figcaption>Tela inicial de uma lavanderia.</figcaption>
+        </figure>
+        <p>No celular, o menu fica escondido: toque no botão <kbd>☰</kbd> no topo da tela para abrir.</p>
+        <figure class="narrow">
+          <img src="img/20-celular.png" alt="Tela de produção no celular, com o logo e o botão de menu no topo" width="390" height="844" loading="lazy">
+          <figcaption>Quadro de produção no celular.</figcaption>
+        </figure>
+      </section>
+
+      <section id="clientes" aria-labelledby="t-clientes">
+        <h2 id="t-clientes"><span class="kicker">3 · Cadastro</span>Clientes</h2>
+        <p>Em <span class="ui">Clientes</span> você busca por nome, e-mail, CPF/CNPJ ou telefone. Clique no nome para abrir a ficha.</p>
+        <figure>
+          <img src="img/03-clientes.png" alt="Lista de clientes com busca e colunas Nome, CPF/CNPJ, Telefone e E-mail" width="1440" height="900" loading="lazy">
+        </figure>
+
+        <h3>Cadastrar um cliente</h3>
+        <ol class="steps">
+          <li>Clique em <span class="ui">Novo cliente</span>.</li>
+          <li>Escolha <strong>Pessoa física</strong> ou <strong>Empresa</strong> e preencha o nome.</li>
+          <li>CPF/CNPJ, telefone, e-mail e endereço são opcionais, mas o <strong>e-mail</strong> é o que permite avisar o cliente quando as peças ficam prontas. Informe o telefone com DDD.</li>
+          <li>Clique em <span class="ui">Salvar</span>.</li>
+        </ol>
+        <div class="note note--tip">
+          <p><strong>Cadastros repetidos:</strong> o sistema não deixa cadastrar o mesmo CPF/CNPJ duas vezes e mostra o cadastro que já existe. Se o e-mail ou telefone já aparece em outro cliente (casal, sócios), ele avisa e você pode clicar em <span class="ui">Salvar mesmo assim</span>.</p>
+        </div>
+
+        <h3>A ficha do cliente</h3>
+        <figure>
+          <img src="img/04-cliente.png" alt="Ficha da cliente com as abas Dados, Ordens de serviço, Linha do tempo e Privacidade" width="1440" height="900" loading="lazy">
+        </figure>
+        <ul>
+          <li><strong>Dados:</strong> o cadastro, inclusive os campos extras que a sua empresa criou. Use <span class="ui">Editar</span> para alterar.</li>
+          <li><strong>Ordens de serviço:</strong> todas as ordens do cliente e o botão para abrir uma nova já com ele selecionado.</li>
+          <li><strong>Linha do tempo:</strong> tudo o que aconteceu com o cliente, como ordens abertas, pagamentos, ocorrências e autorizações.</li>
+          <li><strong>Privacidade:</strong> as autorizações de contato e os pedidos do titular (LGPD).</li>
+        </ul>
+
+        <h3>Privacidade e LGPD</h3>
+        <p><strong>Avisos sobre os serviços</strong> (ordem recebida, peças prontas) são enviados por padrão. Se o cliente pedir para não receber, desmarque. <strong>Ofertas</strong> por e-mail ou WhatsApp só podem ser marcadas com a autorização do cliente. Cada mudança fica registrada com data e origem.</p>
+        <p>Quem tem permissão também vê dois botões:</p>
+        <ul>
+          <li><span class="ui">Exportar dados (JSON)</span>: atende o pedido de acesso. Gera um arquivo com tudo o que a empresa guarda sobre o cliente.</li>
+          <li><span class="ui">Anonimizar</span>: atende o pedido de eliminação. Apaga nome, documento, contatos e observações. Os valores financeiros continuam, porque a empresa precisa guardá-los.</li>
+        </ul>
+        <div class="note note--warn">
+          <p><strong>A anonimização não pode ser desfeita.</strong> Use somente quando o próprio cliente pedir a exclusão dos dados.</p>
+        </div>
+      </section>
+
+      <section id="balcao" aria-labelledby="t-balcao">
+        <h2 id="t-balcao"><span class="kicker">4 · Lavanderia</span>Balcão: abrir uma ordem</h2>
+        <p>É aqui que você recebe as peças do cliente. Cada peça ganha uma <strong>etiqueta</strong> com um código próprio, que acompanha a peça até a entrega.</p>
+        <figure>
+          <img src="img/05-balcao.png" alt="Tela Balcão com o cliente selecionado, uma linha de peças com serviço Lavar e passar, tipo Camisa e 3 peças, e o total" width="1440" height="912" loading="lazy">
+          <figcaption>Três camisas para lavar e passar: o sistema já mostra o total e quantas etiquetas serão geradas.</figcaption>
+        </figure>
+        <ol class="steps">
+          <li>No menu, clique em <span class="ui">Balcão</span>.</li>
+          <li>Busque o cliente pelo nome, CPF ou telefone e clique nele. Se ainda não for cliente, use <span class="ui">Cadastrar cliente</span>.</li>
+          <li>Para cada grupo de peças, escolha o <strong>serviço</strong>, o <strong>tipo de peça</strong> e a <strong>quantidade</strong>. Em serviços cobrados <strong>por quilo</strong>, informe também o peso; a quantidade de peças serve só para conferência.</li>
+          <li>Clique em <span class="ui">+ cor, marca e avarias</span> para anotar como a peça chegou: manchas, rasgos, botão faltando. Essas anotações saem no comprovante e protegem a lavanderia.</li>
+          <li>Use <span class="ui">Adicionar peças</span> para outro serviço ou tipo de peça. Confira o total e informe um desconto, se houver.</li>
+          <li>A <strong>previsão de entrega</strong> pode ficar em branco: o sistema usa o maior prazo entre os serviços escolhidos.</li>
+          <li>Clique em <span class="ui">Abrir ordem</span>. Se o cliente tiver e-mail, ele recebe “Recebemos suas peças”.</li>
+        </ol>
+        <div class="note note--tip">
+          <p><strong>De onde vêm os preços?</strong> Do cadastro em <a href="#servicos">Serviços e preços</a>. Um serviço pode ter preço diferente por tipo de peça; por exemplo, lavar e passar um terno custa mais que uma camisa.</p>
+        </div>
+
+        <h3>Etiquetas e comprovante</h3>
+        <p>Na ordem aberta, use os botões <span class="ui">Etiquetas</span> e <span class="ui">Comprovante</span> no canto superior direito e depois <span class="ui">Imprimir</span>. O código da etiqueta segue o padrão <code>nº da ordem-sequência</code>: a etiqueta <code>3-01</code> é a primeira peça da ordem nº 3.</p>
+        <figure>
+          <img src="img/07-etiquetas.png" alt="Seis etiquetas com QR Code, código 3-01 a 3-06, nome da cliente, descrição da peça e previsão de entrega" width="1440" height="900" loading="lazy">
+          <figcaption>Etiquetas de 6 × 3,5 cm. O QR Code traz o código da peça, que pode ser lido na tela de Produção.</figcaption>
+        </figure>
+        <figure class="narrow">
+          <img src="img/08-comprovante.png" alt="Comprovante no formato de cupom com número da ordem, cliente, previsão, itens, total, valor pago e valor a pagar" loading="lazy">
+          <figcaption>Comprovante para impressora de cupom (80 mm) ou folha A4.</figcaption>
+        </figure>
+      </section>
+
+      <section id="ordem" aria-labelledby="t-ordem">
+        <h2 id="t-ordem"><span class="kicker">5 · Acompanhamento</span>A ordem de serviço</h2>
+        <p>A ordem reúne as peças, o pagamento e o histórico. Ela passa por estes status:</p>
+        <div class="flow" aria-label="Sequência de status da ordem">
+          <span>Recebida</span><i>→</i><span>Em produção</span><i>→</i><span>Pronta</span><i>→</i><span>Saiu para entrega</span><i>→</i><span>Entregue</span>
+        </div>
+        <p>Na lavanderia, <strong>Em produção</strong> e <strong>Pronta</strong> mudam sozinhas conforme as peças avançam na produção. Você só precisa marcar a entrega (<span class="ui">Entregue</span> ou <span class="ui">Saiu para entrega</span>) ou cancelar a ordem.</p>
+        <figure>
+          <img src="img/06-ordem.png" alt="Ordem número 3 com o status Em produção, a lista de peças com a etapa de cada uma, e os quadros Pagamento, Cliente e Histórico" width="1440" height="995" loading="lazy">
+        </figure>
+
+        <h3>Peças</h3>
+        <ul>
+          <li><strong>Etapa:</strong> mude pela lista ao lado de cada peça. Para mover muitas peças, use a tela de <a href="#producao">Produção</a>.</li>
+          <li><span class="ui">Foto</span>: registre manchas e avarias. No celular, abre direto a câmera.</li>
+          <li><span class="ui">Registrar ocorrência</span>: use quando algo acontecer durante o processo, como uma mancha que não saiu ou um botão que caiu. O cliente recebe um e-mail com a sua descrição. Se puder, anexe uma foto antes.</li>
+        </ul>
+
+        <h3>Receber um pagamento</h3>
+        <ol class="steps">
+          <li>No quadro <strong>Pagamento</strong>, clique em <span class="ui">Registrar pagamento</span>.</li>
+          <li>O valor já vem com o saldo em aberto. Altere se o cliente pagar só uma parte.</li>
+          <li>Escolha a forma de pagamento e a conta onde o dinheiro entrou (por exemplo, Caixa).</li>
+          <li>Clique em <span class="ui">Registrar</span>. O pagamento entra sozinho no Financeiro, e o que faltar pagar continua como “a receber”.</li>
+        </ol>
+
+        <h3>Pix com QR Code</h3>
+        <p>Com o Pix configurado, escolha a forma <strong>Pix</strong> e clique em <span class="ui">Gerar QR Code Pix</span>. O cliente lê o QR com o aplicativo do banco ou você copia o código “copia e cola” e envia para ele.</p>
+        <figure>
+          <img src="img/11-pagamento-pix.png" alt="Janela Registrar pagamento com valor, data, forma Pix, conta Caixa e um QR Code Pix gerado" width="1440" height="900" loading="lazy">
+        </figure>
+        <div class="note note--warn">
+          <p><strong>O sistema não sabe sozinho que o Pix caiu.</strong> Confira o recebimento no aplicativo do banco e só depois clique em <span class="ui">Registrar</span>.</p>
+        </div>
+
+        <h3>Cancelar uma ordem</h3>
+        <p>Clique em <span class="ui">Cancelar ordem</span> e informe o motivo. O valor em aberto sai do “a receber”. Pagamentos já feitos continuam registrados; se houver devolução ao cliente, lance-a como despesa no Financeiro.</p>
+
+        <h3>Todas as ordens</h3>
+        <p>Em <span class="ui">Ordens de serviço</span> você vê todas as ordens, busca pelo número ou nome do cliente e filtra por status.</p>
+        <figure>
+          <img src="img/10-ordens.png" alt="Lista de ordens de serviço com número, cliente, status, total, pagamento e previsão" width="1440" height="900" loading="lazy">
+        </figure>
+      </section>
+
+      <section id="producao" aria-labelledby="t-producao">
+        <h2 id="t-producao"><span class="kicker">6 · Lavanderia</span>Produção</h2>
+        <p>O quadro mostra as peças das ordens em andamento, uma coluna para cada etapa. As peças mais urgentes aparecem primeiro, e as atrasadas ficam em vermelho. A tela se atualiza sozinha a cada 30 segundos.</p>
+        <div class="flow" aria-label="Etapas de produção">
+          <span>Recebida</span><i>→</i><span>Lavagem</span><i>→</i><span>Secagem</span><i>→</i><span>Passadoria</span><i>→</i><span>Pronta</span>
+        </div>
+        <figure>
+          <img src="img/09-producao.png" alt="Quadro de produção com as colunas Recebida, Lavagem, Secagem, Passadoria e Pronta e cartões de peças" width="1440" height="900" loading="lazy">
+        </figure>
+        <ul>
+          <li><strong>Uma peça:</strong> clique no botão <span class="ui">→ próxima etapa</span> do cartão.</li>
+          <li><strong>Várias peças:</strong> marque as caixas, escolha a etapa na barra que aparece no topo e clique em <span class="ui">Mover</span>.</li>
+          <li><strong>Pela etiqueta:</strong> em <span class="ui">Ler etiqueta e mover para</span>, escolha a etapa e leia o QR Code com o leitor (ou digite o código, como <code>3-01</code>, e tecle <kbd>Enter</kbd>). Cada leitura move uma peça. Leitores de código USB funcionam como teclado e não precisam de configuração.</li>
+        </ul>
+        <p>Os selos no cartão avisam o que pede atenção: <strong>Avaria na entrada</strong>, <strong>Ocorrência</strong>, <strong>Retrabalho</strong> e a quantidade de fotos.</p>
+        <div class="note note--tip">
+          <p><strong>Retrabalho:</strong> voltar uma peça para uma etapa anterior conta como retrabalho. Se a ordem já estava pronta, ela volta para “Em produção”, e o cliente só é avisado de novo quando tudo ficar pronto.</p>
+          <p><strong>Tudo pronto:</strong> quando a última peça chega em “Pronta”, a ordem muda sozinha para Pronta e o cliente recebe “Suas peças estão prontas”.</p>
+        </div>
+      </section>
+
+      <section id="financeiro" aria-labelledby="t-financeiro">
+        <h2 id="t-financeiro"><span class="kicker">7 · Dinheiro</span>Financeiro</h2>
+        <p>Dois conceitos ajudam a ler esta área:</p>
+        <ul>
+          <li><strong>Realizado:</strong> dinheiro que de fato entrou ou saiu, contado pela data do pagamento.</li>
+          <li><strong>Previsto:</strong> o que está em aberto (a receber ou a pagar), contado pela data de vencimento.</li>
+        </ul>
+        <h3>Visão geral</h3>
+        <p>Escolha o período no canto superior direito. Os cartões mostram o que foi recebido, o que foi pago, o resultado e os valores vencidos. O gráfico compara receitas e despesas por mês; passe o mouse sobre um mês para ver os valores. Abaixo ficam a tabela mês a mês, os totais por categoria e o saldo de cada conta.</p>
+        <figure>
+          <img src="img/12-financeiro.png" alt="Visão geral do financeiro com cartões de totais, gráfico de barras de receitas e despesas por mês, tabela mensal e saldo das contas" width="1440" height="1102" loading="lazy">
+        </figure>
+
+        <h3>Lançamentos</h3>
+        <p>Aqui ficam todas as contas a receber e a pagar. Filtre por situação (em aberto, vencidos, pagos, cancelados), tipo, período ou descrição.</p>
+        <figure>
+          <img src="img/13-lancamentos.png" alt="Lista de lançamentos com vencimento, descrição, categoria, valor e situação, e os botões Exportar CSV e Novo lançamento" width="1440" height="900" loading="lazy">
+        </figure>
+        <ol class="steps">
+          <li>Para lançar uma despesa (aluguel, fornecedor, energia) ou uma receita avulsa, clique em <span class="ui">Novo lançamento</span>.</li>
+          <li>Informe o tipo, a descrição, o valor, o vencimento e a categoria.</li>
+          <li>Se já foi pago, escolha <strong>Já pago</strong> e informe a data e a conta. Senão, deixe <strong>Em aberto</strong>.</li>
+          <li>Quando pagar ou receber uma conta em aberto, clique em <span class="ui">Baixar</span> na linha dela.</li>
+        </ol>
+        <div class="note note--tip">
+          <p><strong>Valores das ordens de serviço</strong> entram aqui sozinhos, com a origem “Ordem de serviço”. Para eles, registre o pagamento na própria ordem, não por aqui.</p>
+          <p><strong>Para o contador:</strong> <span class="ui">Exportar CSV</span> gera uma planilha que abre direto no Excel, com os filtros que estiverem aplicados.</p>
+        </div>
+
+        <h3>Contas e categorias</h3>
+        <p>Cadastre as contas onde o dinheiro fica (caixa, bancos, maquininha) com o saldo inicial, e as categorias usadas para classificar receitas e despesas. As categorias padrão do sistema, como “Serviços”, são usadas pelas ordens de serviço e não podem ser desativadas.</p>
+      </section>
+
+      <section id="relatorios" aria-labelledby="t-relatorios">
+        <h2 id="t-relatorios"><span class="kicker">8 · Indicadores</span>Relatórios da lavanderia</h2>
+        <p>Escolha o período (hoje, últimos 7, 30 ou 90 dias) para ver como a operação está indo.</p>
+        <figure>
+          <img src="img/14-relatorios.png" alt="Relatórios com cartões de entregas no prazo, ordens entregues, peças prontas, retrabalhos e ocorrências, e tabelas de ordens atrasadas, receita por serviço e movimentações por pessoa" width="1440" height="900" loading="lazy">
+        </figure>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Indicador</th><th>O que mostra</th></tr></thead>
+            <tbody>
+              <tr><td>Entregues no prazo</td><td>Das ordens entregues no período que tinham previsão, quantas saíram até a data prometida.</td></tr>
+              <tr><td>Ordens entregues</td><td>Quantas ordens foram entregues e quantas horas levaram, em média, da abertura à entrega.</td></tr>
+              <tr><td>Peças prontas</td><td>Quantas peças chegaram à etapa “Pronta” no período.</td></tr>
+              <tr><td>Retrabalhos</td><td>Quantas vezes uma peça voltou de etapa.</td></tr>
+              <tr><td>Ocorrências</td><td>Quantas ocorrências foram registradas e avisadas aos clientes.</td></tr>
+              <tr><td>Ordens atrasadas agora</td><td>Ordens em andamento cuja previsão já passou. Comece por elas.</td></tr>
+              <tr><td>Receita por serviço</td><td>Valor das ordens abertas no período por serviço, sem contar as canceladas.</td></tr>
+              <tr><td>Movimentações por pessoa</td><td>Quantas peças cada pessoa moveu entre etapas.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="configuracoes" aria-labelledby="t-config">
+        <h2 id="t-config"><span class="kicker">9 · Para o dono</span>Configurações</h2>
+        <p>Estas telas costumam ficar só com o dono ou com quem ele autorizar.</p>
+
+        <h3>Usuários</h3>
+        <figure>
+          <img src="img/16-usuarios.png" alt="Lista de usuários com nome, papéis, situação, último acesso e botão Convidar usuário" width="1440" height="900" loading="lazy">
+        </figure>
+        <ol class="steps">
+          <li>Clique em <span class="ui">Convidar usuário</span>, informe nome e e-mail e marque os papéis.</li>
+          <li>A pessoa recebe o convite por e-mail e cria a própria senha. Se ela já usa o sistema em outra empresa, o acesso é liberado na hora.</li>
+          <li>Para mudar papéis ou tirar o acesso, clique em <span class="ui">Editar</span>. Desmarcar <strong>Acesso ativo</strong> desconecta a pessoa imediatamente.</li>
+        </ol>
+        <p>A empresa precisa ter sempre pelo menos um dono ativo, e ninguém pode desativar o próprio acesso.</p>
+
+        <h3>Papéis e permissões</h3>
+        <p>Cada usuário pode ter um ou mais papéis. Os papéis padrão acompanham os módulos contratados e não podem ser alterados:</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Papel</th><th>O que pode fazer</th></tr></thead>
+            <tbody>
+              <tr><td>Dono</td><td>Tudo, inclusive usuários, papéis, financeiro e configurações.</td></tr>
+              <tr><td>Atendente</td><td>Cadastrar clientes, abrir ordens no balcão, mudar status, receber pagamentos e cuidar de coletas e entregas.</td></tr>
+              <tr><td>Operador</td><td>Ver as ordens e mover as peças na produção.</td></tr>
+              <tr><td>Motorista</td><td>Ver as ordens e os clientes, mudar status e cuidar de coletas e entregas.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Para uma combinação diferente (por exemplo, um gerente que vê o financeiro mas não cria usuários), clique em <span class="ui">Novo papel</span> e marque as permissões, agrupadas por módulo.</p>
+        <figure>
+          <img src="img/17-papeis.png" alt="Lista de papéis com os papéis padrão Dono, Atendente, Operador e Motorista" width="1440" height="900" loading="lazy">
+        </figure>
+
+        <h3 id="servicos">Serviços e preços</h3>
+        <figure>
+          <img src="img/15-servicos.png" alt="Lista de serviços com cobrança, preço, prazo e situação, e os botões Preço por peça e Editar" width="1440" height="900" loading="lazy">
+        </figure>
+        <ul>
+          <li><span class="ui">Novo serviço</span>: nome, forma de cobrança (por peça, por kg ou por m²), preço, prazo em horas e se está ativo.</li>
+          <li><span class="ui">Preço por peça</span>: preços diferentes por tipo de peça. Em branco, vale o preço base do serviço.</li>
+          <li>Aba <strong>Tipos de peça</strong>: inclua os tipos que o balcão usa (Camisa, Terno, Edredom…) ou desative os que não usa.</li>
+        </ul>
+
+        <h3>Notificações</h3>
+        <p>Na aba <strong>Mensagens</strong> você ajusta o texto dos e-mails automáticos, como “Recebemos suas peças”, “Suas peças estão prontas” e o aviso de ocorrência. Use as variáveis entre chaves, como <code>{{cliente.nome}}</code> e <code>{{os.numero}}</code>, que o sistema troca pelos dados de cada ordem. <span class="ui">Voltar ao texto padrão</span> desfaz a personalização.</p>
+        <p>Na aba <strong>Enviadas</strong> fica o histórico de cada mensagem: <strong>Enviada</strong>, <strong>Na fila</strong> ou <strong>Não enviada</strong>, com o motivo, por exemplo “Cliente sem e-mail cadastrado”.</p>
+        <figure>
+          <img src="img/18-notificacoes.png" alt="Tela Notificações com as abas Mensagens e Enviadas e a lista de mensagens automáticas" width="1440" height="900" loading="lazy">
+        </figure>
+
+        <h3>Pix</h3>
+        <p>Informe a <strong>chave Pix</strong> da empresa (CPF/CNPJ só com números, e-mail, telefone no formato <code>+5548…</code> ou chave aleatória), o <strong>nome do recebedor</strong> (até 25 letras) e a <strong>cidade</strong> (até 15). Gere o QR de teste de R$ 0,01 e leia com o aplicativo do banco para conferir se o recebedor está certo.</p>
+        <figure>
+          <img src="img/19-pix.png" alt="Configuração do Pix com chave, nome do recebedor, cidade e o quadro Testar" width="1440" height="900" loading="lazy">
+        </figure>
+
+        <h3>Campos de clientes e auditoria</h3>
+        <p>Em <span class="ui">Campos de clientes</span> você cria informações extras para o cadastro, como “Como conheceu a empresa” (lista de opções) ou “Preferência de contato”. O tipo do campo não pode ser mudado depois.</p>
+        <p>Em <span class="ui">Auditoria</span> o dono vê quem fez o quê e quando: ordens abertas, pagamentos, mudanças de usuários e papéis, exportações de dados.</p>
+      </section>
+
+      <section id="duvidas" aria-labelledby="t-duvidas">
+        <h2 id="t-duvidas"><span class="kicker">10 · Ajuda</span>Dúvidas frequentes</h2>
+        <dl class="faq">
+          <div>
+            <dt>Não encontro uma tela no menu.</dt>
+            <dd>O menu mostra só o que o seu papel permite e o que a empresa contratou. Peça ao dono para revisar os seus papéis em Configurações › Usuários.</dd>
+          </div>
+          <div>
+            <dt>O cliente diz que não recebeu o e-mail.</dt>
+            <dd>Veja Configurações › Notificações › Enviadas. Se aparecer “Não enviada”, o motivo está ao lado: cliente sem e-mail cadastrado, ou que pediu para não receber avisos (aba Privacidade da ficha). Se aparecer “Enviada”, peça para o cliente olhar a caixa de spam.</dd>
+          </div>
+          <div>
+            <dt>Ao marcar a ordem como pronta, aparece “Ainda há peças em produção”.</dt>
+            <dd>A ordem só fica pronta quando todas as peças estão na etapa “Pronta”. Mova as peças que faltam na tela de Produção; a ordem muda sozinha.</dd>
+          </div>
+          <div>
+            <dt>O cliente pagou o Pix, mas a ordem continua em aberto.</dt>
+            <dd>A confirmação do Pix é manual. Confira o recebimento no aplicativo do banco e registre o pagamento na ordem.</dd>
+          </div>
+          <div>
+            <dt>O link do convite ou da senha expirou.</dt>
+            <dd>Na tela de login, clique em “Esqueci minha senha” e use o mesmo e-mail. Você recebe um link novo.</dd>
+          </div>
+          <div>
+            <dt>Fui desconectado do sistema.</dt>
+            <dd>Isso acontece quando a senha é trocada, quando o seu acesso é desativado ou por segurança, se a sessão parecer usada em outro lugar. Entre de novo; se não conseguir, fale com o dono da empresa.</dd>
+          </div>
+          <div>
+            <dt>Errei o valor de um lançamento.</dt>
+            <dd>Lançamentos feitos à mão podem ser cancelados e lançados de novo. Os que vieram de uma ordem de serviço são corrigidos na própria ordem.</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section id="glossario" aria-labelledby="t-glossario">
+        <h2 id="t-glossario"><span class="kicker">11 · Termos</span>Glossário</h2>
+        <div class="table-wrap">
+          <table>
+            <tbody>
+              <tr><td>Ordem de serviço (OS)</td><td>O pedido do cliente: peças, valor, pagamento e status. Tem um número sequencial da sua empresa.</td></tr>
+              <tr><td>Etiqueta</td><td>Código de cada peça (ex.: <code>3-01</code>), impresso com QR Code e preso à peça.</td></tr>
+              <tr><td>Etapa</td><td>Onde a peça está na produção: Recebida, Lavagem, Secagem, Passadoria ou Pronta.</td></tr>
+              <tr><td>Ocorrência</td><td>Algo que aconteceu com a peça durante o processo e foi avisado ao cliente.</td></tr>
+              <tr><td>Retrabalho</td><td>Peça que voltou para uma etapa anterior.</td></tr>
+              <tr><td>Papel</td><td>Conjunto de permissões de um usuário (Dono, Atendente, Operador, Motorista ou um papel criado pela empresa).</td></tr>
+              <tr><td>Módulo</td><td>Parte do sistema que a empresa contrata, como Lavanderia, Ordens de serviço, Notificações ou Pix.</td></tr>
+              <tr><td>Realizado / previsto</td><td>Dinheiro que já entrou ou saiu / valores em aberto que ainda vão vencer.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<footer>
+  <div class="gutter">
+    <div>
+      <span>Palmer Tech · Software house em Criciúma, SC</span>
+      <a href="https://palmertech.pages.dev/" target="_blank" rel="noopener">palmertech.pages.dev</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // Destaca no sumário a seção que está na tela.
+  (function () {
+    var links = Array.prototype.slice.call(document.querySelectorAll('.toc a'));
+    if (!('IntersectionObserver' in window) || !links.length) return;
+    var byId = {};
+    links.forEach(function (a) { byId[a.getAttribute('href').slice(1)] = a; });
+    var observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) return;
+        links.forEach(function (a) { a.removeAttribute('aria-current'); });
+        var link = byId[entry.target.id];
+        if (link) link.setAttribute('aria-current', 'true');
+      });
+    }, { rootMargin: '-20% 0px -70% 0px' });
+    Object.keys(byId).forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) observer.observe(el);
+    });
+  })();
+</script>

@@ -15,6 +15,7 @@ import { ServiceOrdersService } from './service-orders.service';
 
 const listQuery = z.object({
   status: z.string().max(50).optional(),
+  workflow: z.string().max(50).optional(),
   customerId: z.string().uuid().optional(),
   q: z.string().max(100).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(25),

@@ -1,4 +1,4 @@
-import { MODULE_KEY, PERMISSIONS_KEY, PUBLIC_KEY, requestContext } from '@all/module-sdk';
+import { ANY_PERMISSION_KEY, MODULE_KEY, PERMISSIONS_KEY, PUBLIC_KEY, requestContext } from '@all/module-sdk';
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
@@ -52,6 +52,10 @@ export class AccessGuard implements CanActivate {
     const missing = required.filter((p) => !access.permissions.has(p));
     if (missing.length) {
       throw new ForbiddenException({ code: 'MISSING_PERMISSION', message: 'Você não tem permissão para esta ação', missing });
+    }
+    const anyOf = this.reflector.getAllAndOverride<string[] | undefined>(ANY_PERMISSION_KEY, targets) ?? [];
+    if (anyOf.length && !anyOf.some((p) => access.permissions.has(p))) {
+      throw new ForbiddenException({ code: 'MISSING_PERMISSION', message: 'Você não tem permissão para esta ação', missing: anyOf });
     }
 
     Object.assign(requestContext.get(), {

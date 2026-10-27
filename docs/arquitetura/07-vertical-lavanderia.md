@@ -159,6 +159,17 @@ Não vão para a Shopify: fotos das peças, observações de avaria, endereço d
 - `laundry.delivery_ratio`: % de pedidos com coleta/entrega
 - `laundry.top_service`: serviço mais usado
 
+## Implementado na Fase 3
+
+| Item | Onde |
+|---|---|
+| Tabelas `laundry_garment_types`, `laundry_service_prices`, `laundry_item_details` (1:1 com `so_items`), `laundry_piece_events` | `modules/verticals/laundry/src/db/schema.ts` |
+| Fluxo `laundry` (Recebida → Em produção → Pronta → Saiu para entrega/Entregue), com veto de "Pronta" se houver peça em produção | `src/api/workflow.ts` |
+| A ordem anda sozinha conforme as peças; retrabalho volta a ordem para a produção | `LaundryOrdersService.syncOrderStatus` |
+| Telas: Balcão, ordem com peças/fotos/ocorrências/pagamento, etiquetas, comprovante, Produção, Relatórios, Serviços e tipos de peça | `src/web/` |
+
+Diferenças em relação ao desenho acima: o status da peça é linear (recebida → lavagem → secagem → passadoria → pronta); retrabalho é voltar de etapa (contado em `rework_count`) e avaria virou **ocorrência**, com aviso ao cliente, em vez de um status. O estado `aguardando_coleta` entra com a loja online (Fase 5).
+
 ## MVP (o que entra primeiro)
 **Entra:** catálogo de serviços, OS de balcão com peças, fotos e etiquetas, kanban de produção, notificações por e-mail, pagamento manual e Pix, relatórios de prazo e receita.
 **Depois:** Shopify (online e coleta), WhatsApp, motorista/rotas, planos mensais, NFS-e automática.

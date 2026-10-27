@@ -5,7 +5,7 @@ export function PageHeader({ title, description, actions }: { title: string; des
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-fg">{title}</h1>
+        <h1 className="font-display text-[28px] font-medium leading-tight tracking-tight text-fg">{title}</h1>
         {description && <p className="mt-1 text-sm text-fg-muted">{description}</p>}
       </div>
       {actions && <div className="flex gap-2">{actions}</div>}
@@ -14,7 +14,7 @@ export function PageHeader({ title, description, actions }: { title: string; des
 }
 
 export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn('rounded-lg border border-line bg-surface shadow-xs', className)} {...props} />;
+  return <div className={cn('rounded-2xl border border-line bg-surface', className)} {...props} />;
 }
 
 export function Badge({ tone = 'neutral', children }: { tone?: 'neutral' | 'success' | 'warning' | 'danger' | 'brand'; children: ReactNode }) {

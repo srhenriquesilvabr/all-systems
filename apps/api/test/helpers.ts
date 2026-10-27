@@ -1,4 +1,7 @@
-import { configureHttp, MailService, OutboxRelay, TenancyService, type MailMessage } from '@all/core';
+import { configureHttp, MailService, OutboxRelay, ScheduledJobs, TenancyService, type MailMessage } from '@all/core';
+import { BankHttp } from '@all/banking';
+import { FipeHttp } from '@all/vehicles';
+import { WhatsAppHttp } from '@all/whatsapp';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { randomUUID } from 'node:crypto';
@@ -13,7 +16,15 @@ export interface TestApp {
   tenancy: TenancyService;
   /** Processa o outbox na hora (no app real quem faz isso é o worker). */
   relay: OutboxRelay;
+  jobs: ScheduledJobs;
+  /** Chamadas que iriam para a API do WhatsApp (Meta). */
+  whatsapp: { url: string; body: any; token: string }[];
   mails: MailMessage[];
+  /** API REST de banco (modo "api" das conexões): chamadas recebidas e a resposta a dar. */
+  bankApi: {
+    calls: { method: string; url: string; json?: any; form?: Record<string, string> }[];
+    respond: (method: string, url: string, json?: any) => { ok: boolean; status: number; body: any };
+  };
   http: () => ReturnType<typeof request>;
   close: () => Promise<void>;
 }
@@ -25,11 +36,38 @@ export async function createTestApp(): Promise<TestApp> {
     sendInBackground: (m: MailMessage) => void mails.push(m),
   };
 
+  const whatsapp: TestApp['whatsapp'] = [];
+  const fakeWhatsApp = {
+    post: async (url: string, body: unknown, token: string) => {
+      whatsapp.push({ url, body, token });
+      return { ok: true, status: 200, body: { messages: [{ id: `wamid.${whatsapp.length}` }] } };
+    },
+  };
+
+  const bankApi: TestApp['bankApi'] = { calls: [], respond: () => ({ ok: false, status: 503, body: {} }) };
+  const fakeBank = {
+    request: async (method: string, url: string, opts: { json?: unknown; form?: Record<string, string> } = {}) => {
+      bankApi.calls.push({ method, url, json: opts.json, form: opts.form });
+      if (url.endsWith('/oauth/token')) return { ok: true, status: 200, body: { access_token: 'token-teste', expires_in: 3600 } };
+      return bankApi.respond(method, url, opts.json);
+    },
+  };
+  const fakeFipe = {
+    price: async (code: string) =>
+      code === '005340-6' ? [{ codigoFipe: code, marca: 'VW - VolksWagen', modelo: 'Gol 1.0', anoModelo: 2020, combustivel: 'Gasolina', valor: 48_500, mesReferencia: 'outubro de 2026' }] : [],
+  };
+
   const moduleRef = await Test.createTestingModule({ imports: [AppModule.forRoot(testEnv)] })
     .overrideProvider(MailService)
     .useValue(fakeMail)
+    .overrideProvider(WhatsAppHttp)
+    .useValue(fakeWhatsApp)
+    .overrideProvider(BankHttp)
+    .useValue(fakeBank)
+    .overrideProvider(FipeHttp)
+    .useValue(fakeFipe)
     .compile();
-  const app = moduleRef.createNestApplication({ logger: false });
+  const app = moduleRef.createNestApplication({ logger: false, rawBody: true });
   configureHttp(app);
   await app.init();
 
@@ -37,7 +75,10 @@ export async function createTestApp(): Promise<TestApp> {
     app,
     tenancy: app.get(TenancyService),
     relay: app.get(OutboxRelay),
+    jobs: app.get(ScheduledJobs),
+    whatsapp,
     mails,
+    bankApi,
     http: () => request(app.getHttpServer()),
     close: () => app.close(),
   };

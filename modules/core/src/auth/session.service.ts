@@ -8,6 +8,8 @@ import { TenantDb } from '../db/tenant-db';
 
 export const ACCESS_TTL_SECONDS = 15 * 60;
 export const REFRESH_TTL_MS = 30 * 24 * 3600_000;
+/** Janela em que reusar um refresh recém-rotacionado é tratado como corrida entre abas, não roubo. */
+export const CONCURRENT_REFRESH_GRACE_MS = 10_000;
 
 export interface AccessClaims {
   sub: string;
@@ -95,6 +97,12 @@ export class SessionService {
     if (!current) throw new UnauthorizedException();
 
     if (current.revokedAt) {
+      // Duas abas (ou dois pedidos simultâneos) renovando com o mesmo cookie: a segunda chega logo depois
+      // da rotação. Isso não é roubo; responde 401 sem derrubar a sessão (o cliente tenta de novo com o
+      // cookie novo). Reuso fora dessa janela continua sendo tratado como token roubado.
+      if (Date.now() - current.revokedAt.getTime() < CONCURRENT_REFRESH_GRACE_MS) {
+        throw new UnauthorizedException({ code: 'REFRESH_RACE', message: 'Sessão renovada por outra aba' });
+      }
       await this.revokeFamily(current.familyId);
       throw new UnauthorizedException({ code: 'REFRESH_REUSED', message: 'Sessão encerrada por segurança. Entre novamente.' });
     }

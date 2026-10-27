@@ -27,6 +27,12 @@ export class UsersController {
     return this.users.list();
   }
 
+  /** Nome de quem está ativo na empresa (para escolher responsável em processos, carteiras…). */
+  @Get('team')
+  team() {
+    return this.users.team();
+  }
+
   @Post('invite')
   @RequirePermission('core.users.manage')
   invite(@Body(new ZodPipe(inviteBody)) body: z.infer<typeof inviteBody>) {

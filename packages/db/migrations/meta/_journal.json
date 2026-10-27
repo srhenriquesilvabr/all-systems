@@ -22,6 +22,97 @@
       "when": 1792627890647,
       "tag": "0002_customers_finance_orders",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792629780465,
+      "tag": "0003_laundry_counter",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792634733510,
+      "tag": "0004_scheduling_whatsapp_beauty",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792634739911,
+      "tag": "0005_scheduling_constraints",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792635343680,
+      "tag": "0006_pets",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792636364558,
+      "tag": "0007_health_verticals",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792636366433,
+      "tag": "0008_medical_records_append_only",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792637542208,
+      "tag": "0009_sales_bakery_legal",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792637544044,
+      "tag": "0010_sales_legal_constraints",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792637803830,
+      "tag": "0011_customer_segmentation",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1792640507958,
+      "tag": "0012_banking_vehicles_realestate_consortium_accounting_hr",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1792640509973,
+      "tag": "0013_new_verticals_constraints",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1792641397849,
+      "tag": "0014_sales_item_position",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1793109203543,
+      "tag": "0015_supabase_data_api_lockdown",
+      "breakpoints": true
     }
   ]
 }

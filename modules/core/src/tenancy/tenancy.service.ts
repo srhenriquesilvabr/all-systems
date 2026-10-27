@@ -1,7 +1,7 @@
 import { uuidv7, type Tx } from '@all/db';
 import { ModuleRegistry } from '@all/module-sdk';
 import { BadRequestException, Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
-import { hash } from '@node-rs/argon2';
+import { hashPassword as hash } from '../common/password';
 import { and, eq, ne, sql } from 'drizzle-orm';
 import { AuditService } from '../audit/audit.service';
 import { hashToken, newToken } from '../common/crypto';
@@ -42,8 +42,12 @@ export class TenancyService implements OnApplicationBootstrap {
     private readonly hooks: ModuleHooks,
   ) {}
 
-  /** Espelha os manifestos desta build na tabela `modules` e alinha os tenants existentes. */
   async onApplicationBootstrap() {
+    if (this.config.syncModulesOnBoot) await this.syncModules();
+  }
+
+  /** Espelha os manifestos desta build na tabela `modules` e alinha os tenants existentes. */
+  async syncModules() {
     const rows = this.registry.all().map((m) => ({ key: m.key, name: m.name, layer: m.layer, version: m.version }));
     await this.tdb.db
       .insert(modules)
@@ -66,8 +70,17 @@ export class TenancyService implements OnApplicationBootstrap {
       const lock = await lockTx.execute<{ ok: boolean }>(sql`select pg_try_advisory_xact_lock(hashtext('all-systems:reconcile-tenants')) as ok`);
       if (!lock.rows[0]?.ok) return;
 
-      const all = await lockTx.select({ id: tenants.id }).from(tenants).where(ne(tenants.status, 'cancelled'));
+      const all = await lockTx.select({ id: tenants.id, name: tenants.name, slug: tenants.slug }).from(tenants).where(ne(tenants.status, 'cancelled'));
+      // Empresas criadas antes do endereço público ganham um slug. Em transação própria e curta:
+      // se a linha do tenant ficasse travada na transação do lock, a ativação de módulos abaixo
+      // (outra conexão, FK para tenants) esperaria por ela para sempre.
+      for (const t of all.filter((x) => !x.slug)) {
+        await this.tdb.db.transaction(async (tx) => {
+          await tx.update(tenants).set({ slug: await this.uniqueSlug(tx, t.name) }).where(eq(tenants.id, t.id));
+        });
+      }
       let changed = 0;
+      let upgraded = 0;
       for (const { id: tenantId } of all) {
         await this.tdb.withScope({ tenantId }, async (tx) => {
           // Suspensos contam como presentes: a reconciliação não reativa o que foi suspenso por cobrança.
@@ -90,9 +103,23 @@ export class TenancyService implements OnApplicationBootstrap {
             });
           }
           for (const key of required) await this.syncDefaultRoles(tx, tenantId, key);
+
+          // Módulo atualizado (versão do manifesto mudou): roda o onEnable de novo para aplicar dados novos.
+          const rows = await tx.select().from(tenantModules).where(eq(tenantModules.tenantId, tenantId));
+          for (const row of rows) {
+            const manifest = this.registry.get(row.moduleKey);
+            if (!manifest || row.status === 'inactive' || row.version === manifest.version) continue;
+            await this.hooks.onEnable(tx, tenantId, row.moduleKey);
+            await tx
+              .update(tenantModules)
+              .set({ version: manifest.version })
+              .where(and(eq(tenantModules.tenantId, tenantId), eq(tenantModules.moduleKey, row.moduleKey)));
+            upgraded++;
+          }
         });
       }
       if (changed) this.logger.log(`Módulos novos ativados em ${changed} empresa(s)`);
+      if (upgraded) this.logger.log(`${upgraded} módulo(s) atualizados nas empresas`);
     });
   }
 
@@ -108,6 +135,7 @@ export class TenancyService implements OnApplicationBootstrap {
         legalName: input.legalName,
         document: input.document,
         packageKey: input.packageKey,
+        slug: await this.uniqueSlug(tx, input.name),
       });
 
       await this.enableInTx(tx, tenantId, this.registry.coreKeys(), 'core');
@@ -205,7 +233,7 @@ export class TenancyService implements OnApplicationBootstrap {
       if (row) {
         await tx
           .update(tenantModules)
-          .set({ status: 'active', disabledAt: null, enabledAt: new Date() })
+          .set({ status: 'active', disabledAt: null, enabledAt: new Date(), version: this.registry.get(key)!.version })
           .where(and(eq(tenantModules.tenantId, tenantId), eq(tenantModules.moduleKey, key)));
       } else {
         await tx.insert(tenantModules).values({
@@ -213,6 +241,7 @@ export class TenancyService implements OnApplicationBootstrap {
           moduleKey: key,
           status: 'active',
           source: requested ? source : 'dependency',
+          version: this.registry.get(key)!.version,
         });
       }
       await this.syncDefaultRoles(tx, tenantId, key);
@@ -243,6 +272,36 @@ export class TenancyService implements OnApplicationBootstrap {
       .from(tenantModules)
       .where(and(eq(tenantModules.tenantId, tenantId), eq(tenantModules.status, 'active')));
     return rows.map((r) => r.key);
+  }
+
+  /** Empresa pelo endereço público (agendamento online). */
+  /** Empresas não canceladas (plataforma/CLI). */
+  listTenants() {
+    return this.tdb.db.select({ id: tenants.id, name: tenants.name, status: tenants.status }).from(tenants).where(ne(tenants.status, 'cancelled'));
+  }
+
+  async tenantBySlug(slug: string) {
+    const [tenant] = await this.tdb.db
+      .select({ id: tenants.id, name: tenants.name, slug: tenants.slug, status: tenants.status })
+      .from(tenants)
+      .where(eq(tenants.slug, slug.toLowerCase()));
+    return tenant && tenant.status !== 'cancelled' ? tenant : undefined;
+  }
+
+  private async uniqueSlug(tx: Tx, name: string) {
+    const base =
+      name
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '')
+        .slice(0, 40) || 'empresa';
+    for (let i = 1; ; i++) {
+      const candidate = i === 1 ? base : `${base}-${i}`;
+      const [taken] = await tx.select({ id: tenants.id }).from(tenants).where(eq(tenants.slug, candidate));
+      if (!taken) return candidate;
+    }
   }
 
   private async usableKeys(tx: Tx, tenantId: string) {

@@ -80,4 +80,12 @@ describe('ModuleRegistry', () => {
     const r = new ModuleRegistry([customers, orders, laundry]);
     expect(r.menuFor(['laundry'], new Set(['laundry.read'])).map((m) => m.label)).toEqual(['Ordens']);
   });
+
+  it('item de vertical substitui o genérico quando os dois estão ativos', () => {
+    const generic = defineModule({ ...orders, menu: [{ label: 'Ordens de serviço', path: '/ordens' }] });
+    const bakery = defineModule({ key: 'bakery', name: 'Padaria', layer: 'vertical', version: '1.0.0', dependsOn: ['shared.orders'], menu: [{ label: 'Encomendas', path: '/encomendas', replaces: '/ordens' }] });
+    const r = new ModuleRegistry([customers, generic, bakery]);
+    expect(r.menuFor(['shared.orders', 'bakery'], new Set()).map((m) => m.label)).toEqual(['Encomendas']);
+    expect(r.menuFor(['shared.orders'], new Set()).map((m) => m.label)).toEqual(['Ordens de serviço']);
+  });
 });

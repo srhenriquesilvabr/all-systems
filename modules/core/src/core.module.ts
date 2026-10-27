@@ -20,9 +20,19 @@ import { CustomerDataRegistry } from './customers/customer-data.registry';
 import { CustomersController, CustomFieldsController } from './customers/customers.controller';
 import { CustomersService } from './customers/customers.service';
 import { CustomFieldsService } from './customers/custom-fields.service';
+import { MessageChannels } from './events/channels';
+import { ScheduledJobs } from './events/jobs';
 import { OutboxHandlers, OutboxRelay, OutboxService } from './events/outbox';
+import { SecretBox } from './common/secrets';
 import { FinanceController } from './finance/finance.controller';
 import { FinanceService } from './finance/finance.service';
+import { FilesController } from './files/files.controller';
+import { FilesService } from './files/files.service';
+import { FileStorage, LocalDiskStorage } from './files/storage';
+import { SegmentationController } from './segmentation/segmentation.controller';
+import { SegmentationService } from './segmentation/segmentation.service';
+import { ModuleSettingsService } from './tenancy/module-settings.service';
+import { ModulesController } from './tenancy/modules.controller';
 import { TenantDb } from './db/tenant-db';
 import { MailService } from './mail/mail.service';
 import { ModuleHooks } from './tenancy/module-hooks';
@@ -34,6 +44,13 @@ export interface CoreModuleOptions {
   /** Manifestos de todos os módulos instalados nesta build (core + shared + verticais). */
   manifests: ModuleManifest[];
   env?: Record<string, string | undefined>;
+  /** Storage de arquivos. Padrão: disco local em STORAGE_DIR. */
+  storage?: FileStorage;
+  /**
+   * Espelhar os manifestos no banco ao subir (padrão: sim). No Cloudflare cada isolate sobe
+   * sozinho, então a sincronização roda uma vez no deploy (`cli sync`).
+   */
+  syncModulesOnBoot?: boolean;
 }
 
 @Global()
@@ -41,6 +58,7 @@ export interface CoreModuleOptions {
 export class CoreModule {
   static forRoot(options: CoreModuleOptions): DynamicModule {
     const config = loadConfig(options.env ?? process.env);
+    config.syncModulesOnBoot = options.syncModulesOnBoot ?? true;
     const registry = new ModuleRegistry(options.manifests);
 
     return {
@@ -61,6 +79,9 @@ export class CoreModule {
         CustomersController,
         CustomFieldsController,
         FinanceController,
+        FilesController,
+        ModulesController,
+        SegmentationController,
       ],
       providers: [
         { provide: CoreConfig, useValue: config },
@@ -81,6 +102,13 @@ export class CoreModule {
         CustomersService,
         CustomFieldsService,
         FinanceService,
+        FilesService,
+        ModuleSettingsService,
+        SegmentationService,
+        { provide: FileStorage, useValue: options.storage ?? new LocalDiskStorage(config.storageDir) },
+        { provide: SecretBox, useValue: new SecretBox(config.settingsEncryptionKey, config.jwtSecret) },
+        MessageChannels,
+        ScheduledJobs,
         { provide: APP_GUARD, useClass: ThrottlerGuard },
         { provide: APP_GUARD, useClass: AccessGuard },
       ],
@@ -98,6 +126,11 @@ export class CoreModule {
         CustomerDataRegistry,
         CustomersService,
         FinanceService,
+        FilesService,
+        ModuleSettingsService,
+        MessageChannels,
+        ScheduledJobs,
+        SecretBox,
       ],
     };
   }

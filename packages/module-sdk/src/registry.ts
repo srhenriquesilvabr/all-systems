@@ -123,10 +123,12 @@ export class ModuleRegistry {
   /** Itens de menu dos módulos ativos, na ordem de instalação (estável, não importa a ordem do banco). */
   menuFor(moduleKeys: Iterable<string>, permissions: ReadonlySet<string>): (MenuItem & { module: string })[] {
     const active = new Set(moduleKeys);
-    return [...this.byKey.keys()].filter((k) => active.has(k)).flatMap((k) =>
+    const items = [...this.byKey.keys()].filter((k) => active.has(k)).flatMap((k) =>
       (this.byKey.get(k)?.menu ?? [])
         .filter((item) => !item.permission || permissions.has(item.permission))
         .map((item) => ({ ...item, module: k })),
     );
+    const replaced = new Set(items.map((i) => i.replaces).filter(Boolean));
+    return items.filter((i) => !replaced.has(i.path));
   }
 }

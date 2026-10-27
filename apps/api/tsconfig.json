@@ -27,7 +27,64 @@
       "path": "../../modules/shared/service-orders"
     },
     {
+      "path": "../../modules/integrations/payments"
+    },
+    {
       "path": "../../modules/verticals/laundry"
+    },
+    {
+      "path": "../../modules/shared/scheduling"
+    },
+    {
+      "path": "../../modules/integrations/whatsapp"
+    },
+    {
+      "path": "../../modules/verticals/beauty"
+    },
+    {
+      "path": "../../modules/shared/pets"
+    },
+    {
+      "path": "../../modules/verticals/petshop"
+    },
+    {
+      "path": "../../modules/shared/medical-records"
+    },
+    {
+      "path": "../../modules/verticals/vet"
+    },
+    {
+      "path": "../../modules/verticals/aesthetics"
+    },
+    {
+      "path": "../../modules/verticals/orthodontics"
+    },
+    {
+      "path": "../../modules/shared/sales"
+    },
+    {
+      "path": "../../modules/verticals/bakery"
+    },
+    {
+      "path": "../../modules/verticals/legal"
+    },
+    {
+      "path": "../../modules/integrations/banking"
+    },
+    {
+      "path": "../../modules/verticals/vehicles"
+    },
+    {
+      "path": "../../modules/verticals/realestate"
+    },
+    {
+      "path": "../../modules/verticals/consortium"
+    },
+    {
+      "path": "../../modules/verticals/accounting"
+    },
+    {
+      "path": "../../modules/verticals/hr"
     }
   ]
 }

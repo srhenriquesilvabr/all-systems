@@ -22,7 +22,7 @@ export class MeController {
       .from(users)
       .where(eq(users.id, ctx.userId));
     const [tenant] = await this.tdb.db
-      .select({ id: tenants.id, name: tenants.name, status: tenants.status })
+      .select({ id: tenants.id, name: tenants.name, slug: tenants.slug, status: tenants.status })
       .from(tenants)
       .where(eq(tenants.id, ctx.tenantId));
     const moduleKeys = [...(ctx.modules ?? [])];

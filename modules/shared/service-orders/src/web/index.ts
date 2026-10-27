@@ -13,3 +13,8 @@ export const serviceOrdersWeb = defineWebModule({
   ],
   customerTabs: [{ key: 'orders', label: 'Ordens de serviço', permission: 'shared.service-orders.read', Component: CustomerOrdersTab }],
 });
+
+// Peças reaproveitadas pelas telas das verticais (ex.: ordem da lavanderia).
+export { newOrderPath, OrderRows, orderPath, ordersKey, PaymentBadge, StatusBadge, useWorkflows } from './shared';
+export { PaymentModal, Transitions } from './OrderPage';
+export { CustomerSearch, type CustomerOption } from '@all/module-sdk/web';

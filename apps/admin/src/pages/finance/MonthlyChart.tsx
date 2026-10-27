@@ -21,8 +21,7 @@ export function MonthlyChart({ data }: { data: MonthPoint[] }) {
   const width = useWidth(ref);
   const [hover, setHover] = useState<number | null>(null);
 
-  const max = niceMax(Math.max(1, ...data.flatMap((d) => [d.income, d.expense])));
-  const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * max);
+  const { max, ticks } = niceScale(Math.max(1, ...data.flatMap((d) => [d.income, d.expense])));
   const plotW = Math.max(0, width - PAD.left - PAD.right);
   const plotH = HEIGHT - PAD.top - PAD.bottom;
   const band = data.length ? plotW / data.length : 0;
@@ -68,7 +67,7 @@ export function MonthlyChart({ data }: { data: MonthPoint[] }) {
             className="pointer-events-none absolute top-2 z-10 w-48 rounded-md border border-line bg-surface p-3 text-sm shadow-lg"
             style={{ left: Math.min(PAD.left + band * hover + band / 2 + 12, width - 200) }}
           >
-            <p className="mb-1 font-medium capitalize">{monthLabel(data[hover].month)}</p>
+            <p className="mb-1 font-medium first-letter:uppercase">{monthLabel(data[hover].month)}</p>
             <Row color="var(--color-series-1)" label="Receitas" value={data[hover].income} />
             <Row color="var(--color-series-2)" label="Despesas" value={data[hover].expense} />
             <div className="mt-1 flex justify-between border-t border-line pt-1">
@@ -111,10 +110,13 @@ function Row({ color, label, value }: { color: string; label: string; value: num
   );
 }
 
-function niceMax(value: number) {
-  const magnitude = 10 ** Math.floor(Math.log10(value));
-  const step = [1, 2, 2.5, 5, 10].find((s) => s * magnitude >= value)!;
-  return step * magnitude;
+/** Eixo com 3–5 marcas em valores redondos (1, 2, 2,5 ou 5 × 10ⁿ). */
+function niceScale(value: number) {
+  const raw = value / 4;
+  const magnitude = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].find((s) => s * magnitude >= raw)! * magnitude;
+  const count = Math.ceil(value / step);
+  return { max: step * count, ticks: Array.from({ length: count + 1 }, (_, i) => i * step) };
 }
 
 function useWidth(ref: React.RefObject<HTMLDivElement | null>) {

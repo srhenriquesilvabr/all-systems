@@ -30,6 +30,8 @@ const updatedAt = () =>
 export const tenants = pgTable('tenants', {
   id: id(),
   name: text('name').notNull(),
+  /** Endereço público da empresa (ex.: agendamento online em /agendar/<slug>). */
+  slug: text('slug').unique(),
   legalName: text('legal_name'),
   document: text('document'),
   status: text('status', { enum: ['trial', 'active', 'suspended', 'cancelled'] })
@@ -117,6 +119,8 @@ export const tenantModules = pgTable(
     status: text('status', { enum: ['active', 'suspended', 'inactive'] }).notNull(),
     source: text('source', { enum: ['core', 'package', 'addon', 'dependency', 'manual'] }).notNull(),
     settings: jsonb('settings').notNull().default({}),
+    /** Versão do manifesto cujo onEnable já rodou; diferente da atual = roda de novo (upgrade). */
+    version: text('version'),
     enabledAt: ts('enabled_at').notNull().defaultNow(),
     disabledAt: ts('disabled_at'),
     updatedAt: updatedAt(),

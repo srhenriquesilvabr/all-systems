@@ -90,7 +90,8 @@ export class OutboxRelay implements OnApplicationShutdown {
     for (;;) {
       const handled = await this.processBatch();
       total += handled;
-      if (handled < BATCH) return total;
+      // Até um lote vazio: handlers podem publicar eventos novos (ex.: status → aviso → entrega).
+      if (handled === 0) return total;
     }
   }
 
@@ -99,7 +100,7 @@ export class OutboxRelay implements OnApplicationShutdown {
       const events = await tx
         .select()
         .from(outboxEvents)
-        .where(and(isNull(outboxEvents.processedAt), isNull(outboxEvents.failedAt), lte(outboxEvents.nextAttemptAt, new Date())))
+        .where(and(isNull(outboxEvents.processedAt), isNull(outboxEvents.failedAt), lte(outboxEvents.nextAttemptAt, sql`now()`)))
         .orderBy(outboxEvents.id)
         .limit(BATCH)
         .for('update', { skipLocked: true });

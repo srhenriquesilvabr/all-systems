@@ -4,21 +4,37 @@
 @source '../../../packages/ui/src';
 @source '../../../modules';
 
+/*
+ * Identidade Palmer Tech (palmertech.pages.dev): azul, tinta e ciano; Outfit nos títulos,
+ * IBM Plex Sans no texto. Os nomes semânticos (fg, line, brand…) são os mesmos usados pelos
+ * componentes: para trocar a marca, basta mexer aqui.
+ */
 @theme {
-  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Outfit', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
 
-  --color-canvas: #f6f7f9;
+  /* Palmer: papel, névoa, linha, tinta, grafite */
+  --color-canvas: #f6f7fb;
   --color-surface: #ffffff;
-  --color-muted: #f1f3f6;
-  --color-line: #e3e6eb;
-  --color-fg: #14181f;
-  --color-fg-muted: #4b5563;
-  --color-fg-subtle: #9aa3af;
+  --color-muted: #eef1ff;
+  --color-line: #dde1ec;
+  --color-fg: #0e1330;
+  --color-fg-muted: #5b6178;
+  /* Mais escuro que o "meta" do site (#9aa0b4) para manter 4,5:1 em texto. */
+  --color-fg-subtle: #6b7186;
 
-  --color-brand-50: #eef3ff;
-  --color-brand-200: #c9d7fb;
-  --color-brand-600: #2f5bd3;
-  --color-brand-700: #2549ad;
+  /* Palmer: azul (600) e névoa (50); 700 = azul escurecido para texto sobre névoa (7,5:1). */
+  --color-brand-50: #eef1ff;
+  --color-brand-200: #c7d0ff;
+  --color-brand-600: #2d4bff;
+  --color-brand-700: #1f35d1;
+
+  /* Palmer: tinta (fundos escuros) e ciano (destaque sobre a tinta). */
+  --color-ink: #0e1330;
+  --color-ink-soft: #1b2250;
+  --color-ink-fg-muted: #9aa0b4;
+  --color-cyan: #7df9ff;
 
   --color-success-50: #ecfdf3;
   --color-success-200: #abefc6;
@@ -30,13 +46,24 @@
   --color-danger-600: #d92d20;
   --color-danger-700: #b42318;
 
-  /* Gráficos: paleta categórica em ordem fixa (slot 1, 2…), validada contra a superfície do card. */
-  --color-series-1: #2a78d6;
+  /* Gráficos: slot 1 = azul Palmer, slot 2 = laranja; par validado contra a superfície branca. */
+  --color-series-1: #2d4bff;
   --color-series-2: #eb6834;
-  --color-chart-grid: #eceef1;
-  --color-chart-axis: #c3c6cc;
+  --color-chart-grid: #eef0f5;
+  --color-chart-axis: #c3c8da;
 }
 
 body {
   @apply bg-canvas font-sans text-fg antialiased;
+}
+
+h1,
+h2 {
+  @apply font-display tracking-tight;
+}
+
+@media print {
+  body {
+    @apply bg-white;
+  }
 }

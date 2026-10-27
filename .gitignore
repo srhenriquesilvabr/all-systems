@@ -4,3 +4,10 @@ dist/
 .turbo/
 .env
 coverage/
+.storage/
+/docs/manual/scripts/node_modules/
+/docs/manual/scripts/package*.json
+.wrangler/
+.dev.vars*
+# O projeto usa pnpm; um package-lock.json confunde a detecção do gerenciador no build do Cloudflare
+package-lock.json

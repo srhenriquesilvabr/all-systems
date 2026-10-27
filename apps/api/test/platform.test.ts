@@ -65,6 +65,18 @@ describe('plataforma', () => {
       expect(categories[0].n).toBeGreaterThan(5);
     });
 
+    it('empresa sem endereço público e com módulo core novo não trava a reconciliação', async () => {
+      // Bug real: o slug era gravado na transação do lock e a ativação do módulo (outra
+      // conexão, FK para tenants) ficava esperando por ela para sempre.
+      const { tenantId } = await createTenant(t, { modules: ['laundry'] });
+      await admin.query(`update tenants set slug = null where id = $1`, [tenantId]);
+      await admin.query(`delete from tenant_modules where tenant_id = $1 and module_key = 'core.segmentation'`, [tenantId]);
+      await Promise.race([t.tenancy.reconcileTenants(), new Promise((_, reject) => setTimeout(() => reject(new Error('reconciliação travou')), 10_000))]);
+      const { rows } = await admin.query(`select t.slug, (select count(*)::int from tenant_modules m where m.tenant_id = t.id and m.module_key = 'core.segmentation') as seg from tenants t where t.id = $1`, [tenantId]);
+      expect(rows[0].slug).toBeTruthy();
+      expect(rows[0].seg).toBe(1);
+    });
+
     it('papéis padrão acompanham o manifesto', async () => {
       const s = await ownerSession(t);
       await admin.query(

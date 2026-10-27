@@ -4,7 +4,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import type { OrderSummary } from '../contracts';
-import { OrderRows, ordersKey, useWorkflows } from './shared';
+import { newOrderPath, OrderRows, ordersKey, useWorkflows } from './shared';
 
 const PAGE = 25;
 
@@ -30,7 +30,7 @@ export function OrdersPage() {
     <>
       <PageHeader
         title="Ordens de serviço"
-        actions={canWrite && <Button onClick={() => navigate('/ordens/nova')}>Nova ordem</Button>}
+        actions={canWrite && <Button onClick={() => navigate(newOrderPath(workflows.data))}>Nova ordem</Button>}
       />
 
       <div className="mb-4 flex flex-wrap gap-3">
@@ -73,7 +73,7 @@ export function OrdersPage() {
         ) : orders.data.items.length === 0 ? (
           <EmptyState
             title={q || status ? 'Nenhuma ordem encontrada' : 'Nenhuma ordem de serviço ainda'}
-            action={canWrite && !q && !status && <Button onClick={() => navigate('/ordens/nova')}>Abrir a primeira</Button>}
+            action={canWrite && !q && !status && <Button onClick={() => navigate(newOrderPath(workflows.data))}>Abrir a primeira</Button>}
           />
         ) : (
           <Table>

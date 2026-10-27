@@ -1,0 +1,17 @@
+import { chromium } from 'playwright-core';
+const out = process.argv[2];
+const login = await (await fetch('http://localhost:3000/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'dono@demo.com', password: 'demo123456' }) })).json();
+const orders = await (await fetch('http://localhost:3000/api/service-orders?limit=50', { headers: { Authorization: 'Bearer ' + login.accessToken } })).json();
+const id = orders.items.find((o) => o.number === 3).id;
+const browser = await chromium.launch({ channel: 'msedge', headless: true });
+const page = await browser.newPage({ viewport: { width: 1200, height: 900 }, deviceScaleFactor: 2 });
+await page.goto('http://localhost:5173/entrar');
+await page.getByLabel('E-mail').fill('dono@demo.com');
+await page.getByLabel('Senha').fill('demo123456');
+await page.getByRole('button', { name: 'Entrar' }).click();
+await page.waitForSelector('nav[aria-label="Menu principal"]');
+await page.goto(`http://localhost:5173/lavanderia/ordens/${id}/comprovante`, { waitUntil: 'networkidle' });
+await page.waitForSelector('[aria-label^="Ordem"] svg');
+await page.locator('main div', { hasText: 'Apresente este comprovante' }).last().screenshot({ path: out });
+await browser.close();
+console.log('ok');

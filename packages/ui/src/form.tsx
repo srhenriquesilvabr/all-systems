@@ -1,8 +1,8 @@
-import { useId, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
+import { useId, type ComponentProps, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
 import { cn } from './cn';
 
 const control =
-  'block w-full rounded-md border border-line bg-surface px-3 text-sm text-fg placeholder:text-fg-subtle ' +
+  'block w-full rounded-lg border border-line bg-surface px-3 text-sm text-fg placeholder:text-fg-subtle ' +
   'focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20 disabled:bg-muted';
 
 interface FieldProps {
@@ -30,7 +30,8 @@ export function Field({ label, hint, error, children }: FieldProps) {
   );
 }
 
-export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
+// React 19: `ref` chega como prop comum (ex.: foco no campo de busca do PDV).
+export function Input({ className, ...props }: ComponentProps<'input'>) {
   return <input className={cn(control, 'h-10', className)} {...props} />;
 }
 

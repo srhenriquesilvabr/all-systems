@@ -78,7 +78,7 @@ export function FinanceOverviewPage() {
               <tbody>
                 {summary.data.months.map((m) => (
                   <tr key={m.month}>
-                    <Td className="capitalize">{monthLabel(m.month)}</Td>
+                    <Td className="first-letter:uppercase">{monthLabel(m.month)}</Td>
                     <Td className="text-right tabular-nums">{formatMoney(m.realizedIncome)}</Td>
                     <Td className="text-right tabular-nums">{formatMoney(m.realizedExpense)}</Td>
                     <Td className="text-right font-medium tabular-nums">{formatMoney(m.realizedIncome - m.realizedExpense)}</Td>

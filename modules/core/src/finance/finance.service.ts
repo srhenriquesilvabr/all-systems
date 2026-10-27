@@ -1,7 +1,7 @@
 import type { Tx } from '@all/db';
 import { requestContext } from '@all/module-sdk';
 import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
-import { aliasedTable, and, asc, count, desc, eq, gte, ilike, lte, sql, type SQL } from 'drizzle-orm';
+import { aliasedTable, and, asc, count, desc, eq, gt, gte, ilike, inArray, lte, sql, type SQL } from 'drizzle-orm';
 import { AuditService } from '../audit/audit.service';
 import { centsToDecimal, centsToNumber, toCents } from '../common/money';
 import { CustomerDataRegistry } from '../customers/customer-data.registry';
@@ -335,6 +335,48 @@ export class FinanceService implements OnModuleInit {
   /** Registra um lançamento vindo de outro módulo (ex.: pagamento de uma OS). */
   async recordInTx(tx: Tx, input: SourcedEntryInput) {
     return toEntryDto(await this.insertEntry(tx, input));
+  }
+
+  /**
+   * Cancela o que ainda está em aberto de uma origem (ex.: parcelas de um contrato encerrado).
+   * Com `dueAfter`, só as que vencem depois dessa data.
+   */
+  async cancelPendingBySourceInTx(tx: Tx, sourceType: string, sourceId: string, opts: { dueAfter?: string } = {}): Promise<number> {
+    const rows = await tx
+      .update(finEntries)
+      .set({ status: 'cancelled', cancelledAt: new Date() })
+      .where(
+        and(
+          eq(finEntries.sourceType, sourceType),
+          eq(finEntries.sourceId, sourceId),
+          eq(finEntries.status, 'pending'),
+          opts.dueAfter ? gt(finEntries.dueDate, opts.dueAfter) : undefined,
+        ),
+      )
+      .returning({ id: finEntries.id });
+    return rows.length;
+  }
+
+  /** Estorno de uma origem (ex.: venda cancelada): cancela tudo, inclusive o que já estava pago. */
+  async cancelAllBySourceInTx(tx: Tx, sourceType: string, sourceId: string): Promise<number> {
+    const rows = await tx
+      .update(finEntries)
+      .set({ status: 'cancelled', cancelledAt: new Date() })
+      .where(and(eq(finEntries.sourceType, sourceType), eq(finEntries.sourceId, sourceId), inArray(finEntries.status, ['pending', 'paid'])))
+      .returning({ id: finEntries.id });
+    return rows.length;
+  }
+
+  /** Lançamentos de uma ou mais origens (ex.: parcelas de tratamentos), por vencimento. */
+  async listBySourceInTx(tx: Tx, sourceType: string, sourceIds: string | string[]) {
+    const ids = Array.isArray(sourceIds) ? sourceIds : [sourceIds];
+    if (!ids.length) return [];
+    const rows = await tx
+      .select()
+      .from(finEntries)
+      .where(and(eq(finEntries.sourceType, sourceType), inArray(finEntries.sourceId, ids)))
+      .orderBy(asc(finEntries.dueDate), asc(finEntries.id));
+    return rows.map(toEntryDto);
   }
 
   /**

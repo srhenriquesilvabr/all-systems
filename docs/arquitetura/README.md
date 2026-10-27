@@ -1,8 +1,8 @@
 # All Systems — Documento de Arquitetura
 
-> Status: **rascunho v0.1** · Última atualização: 2026-10-21
+> Status: **rascunho v0.2** · Última atualização: 2026-10-22
 
-Plataforma SaaS modular e multi-tenant. Um **core** comum a todos os clientes, mais **verticais** contratáveis: lavanderia, veterinária, odontologia, ortopedia, estética, cartório e academia. A Shopify é usada para vender o próprio SaaS e, opcionalmente, como canal de venda de cada cliente.
+Plataforma SaaS modular e multi-tenant. Um **core** comum a todos os clientes, mais **verticais** contratáveis: lavanderia, salão, pet shop, veterinária, estética, ortodontia, padaria, advocacia, revenda de veículos, imobiliária, consórcio, contabilidade e RH. A Shopify é usada para vender o próprio SaaS e, opcionalmente, como canal de venda de cada cliente.
 
 ## Índice
 
@@ -16,6 +16,8 @@ Plataforma SaaS modular e multi-tenant. Um **core** comum a todos os clientes, m
 | 06 | [Infraestrutura AWS](06-infra-aws.md) | Serviços, ambientes, CI/CD, observabilidade, segurança |
 | 07 | [Vertical Lavanderia](07-vertical-lavanderia.md) | Primeira vertical, detalhada |
 | 08 | [Roadmap e riscos](08-roadmap-e-riscos.md) | Fases, validações pendentes, riscos |
+| 09 | [Verticais e módulos compartilhados](09-verticais.md) | O que cada vertical faz, pontos de extensão, limites |
+| 10 | [Integração bancária](10-integracao-bancaria.md) | Crédito e consórcio: modos, contrato da API, webhook, LGPD |
 | — | [Registro de decisões](decisoes.md) | ADRs tomadas e pendentes |
 
 ## Resumo em um parágrafo

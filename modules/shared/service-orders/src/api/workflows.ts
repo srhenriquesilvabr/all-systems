@@ -5,6 +5,7 @@ import type { ServiceOrderWorkflow } from '../contracts';
 export const defaultWorkflow: ServiceOrderWorkflow = {
   key: 'default',
   label: 'Padrão',
+  moduleKey: 'shared.service-orders',
   initial: 'open',
   statuses: [
     { key: 'open', label: 'Aberta', tone: 'brand' },

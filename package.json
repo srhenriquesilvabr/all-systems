@@ -15,10 +15,13 @@
     "infra:down": "docker compose down",
     "db:generate": "turbo run build --filter=@all/db... && pnpm --filter @all/db generate",
     "db:migrate": "turbo run build --filter=@all/db && pnpm --filter @all/db migrate",
-    "db:seed": "turbo run build --filter=@all/api && pnpm --filter @all/api cli seed-demo"
+    "db:seed": "turbo run build --filter=@all/api && pnpm --filter @all/api cli seed-demo",
+    "dev:cloudflare": "turbo run build --filter=@all/api --filter=@all/admin && wrangler dev",
+    "deploy:cloudflare": "node scripts/deploy-cloudflare.mjs"
   },
   "devDependencies": {
     "turbo": "^2.5.4",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "wrangler": "^4.153.0"
   }
 }

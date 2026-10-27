@@ -3,13 +3,31 @@
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "dist",
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["src"],
-  "exclude": ["src/web"],
+  "include": [
+    "src"
+  ],
+  "exclude": [
+    "src/web"
+  ],
   "references": [
-    { "path": "../../../packages/db" },
-    { "path": "../../../packages/module-sdk" },
-    { "path": "../../core" }
+    {
+      "path": "../../../packages/db"
+    },
+    {
+      "path": "../../../packages/module-sdk"
+    },
+    {
+      "path": "../../core"
+    },
+    {
+      "path": "../../shared/notifications"
+    },
+    {
+      "path": "../../shared/service-orders"
+    }
   ]
 }
