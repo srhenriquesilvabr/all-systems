@@ -4,7 +4,7 @@ import { requestContext } from '@all/module-sdk';
 import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
-import type { AccessLogEntry, AmendInput, EntryInput, FormField, MedicalEntry, MedicalForm } from '../contracts';
+import { businessToday, type AccessLogEntry, type AmendInput, type EntryInput, type FormField, type MedicalEntry, type MedicalForm } from '../contracts';
 import { mrAccessLog, mrEntries } from '../db/schema';
 
 const MODULE = 'shared.medical-records';
@@ -39,7 +39,8 @@ export class MedicalRecordsService implements OnModuleInit {
     this.customerData.register({
       moduleKey: MODULE,
       export: async (tx, customerId) =>
-        (await tx.select().from(mrEntries).where(eq(mrEntries.customerId, customerId)).orderBy(asc(mrEntries.createdAt))).map((e) => ({
+        (await tx.select().from(mrEntries).where(eq(mrEntries.customerId, customerId)).orderBy(asc(mrEntries.occurredOn), asc(mrEntries.createdAt))).map((e) => ({
+          occurredOn: e.occurredOn,
           createdAt: e.createdAt,
           subjectType: e.subjectType,
           title: e.title,
@@ -80,7 +81,8 @@ export class MedicalRecordsService implements OnModuleInit {
         .select()
         .from(mrEntries)
         .where(and(eq(mrEntries.subjectType, subjectType), eq(mrEntries.subjectId, subjectId)))
-        .orderBy(desc(mrEntries.createdAt), desc(mrEntries.id));
+        // Pela data do atendimento; no mesmo dia, o registrado por último primeiro.
+        .orderBy(desc(mrEntries.occurredOn), desc(mrEntries.createdAt), desc(mrEntries.id));
       return this.toDtos(tx, rows);
     });
   }
@@ -104,6 +106,7 @@ export class MedicalRecordsService implements OnModuleInit {
           data,
           notes: input.notes ?? null,
           appointmentId: input.appointmentId ?? null,
+          occurredOn: input.occurredOn ?? businessToday(),
           authorId: userId!,
           authorName: await authorName(tx, userId!),
         })
@@ -137,6 +140,8 @@ export class MedicalRecordsService implements OnModuleInit {
           appointmentId: original.appointmentId,
           amendsId: original.id,
           amendReason: input.reason,
+          // A retificação tem a sua própria data (corrige também a data, se for o caso).
+          occurredOn: input.occurredOn ?? original.occurredOn,
           authorId: userId!,
           authorName: await authorName(tx, userId!),
         })
@@ -200,6 +205,7 @@ export class MedicalRecordsService implements OnModuleInit {
       amendedById: amendments.findLast((a) => a.amendsId === r.id)?.id ?? null,
       author: { id: r.authorId, name: r.authorName },
       attachments: attachments.filter((a) => a.ownerId === r.id).map((a) => ({ id: a.id, filename: a.filename, mime: a.mime, size: a.size })),
+      occurredOn: r.occurredOn,
       createdAt: r.createdAt.toISOString(),
     }));
   }

@@ -87,8 +87,10 @@ function ServiceModal({ service, onClose }: { service: Service | null; onClose: 
     price: service ? service.price.toFixed(2).replace('.', ',') : '',
     online: service?.online ?? true,
     active: service?.active ?? true,
+    requiresRoom: service?.requiresRoom ?? false,
     description: service?.description ?? '',
   });
+  const rooms = (resources.data ?? []).filter((r) => r.kind === 'room');
   const [resourceIds, setResourceIds] = useState<string[]>(service?.resourceIds ?? []);
   const save = useMutation({
     mutationFn: () =>
@@ -164,6 +166,27 @@ function ServiceModal({ service, onClose }: { service: Service | null; onClose: 
               ))}
           </div>
         </fieldset>
+        {rooms.length > 0 && (
+          <fieldset>
+            <legend className="mb-1.5 text-sm font-medium">Salas/equipamentos que servem</legend>
+            <p className="mb-2 text-xs text-fg-muted">Nenhuma marcada = qualquer sala.</p>
+            <div className="grid gap-1.5 sm:grid-cols-2">
+              {rooms.map((r) => (
+                <Checkbox
+                  key={r.id}
+                  label={r.name}
+                  checked={resourceIds.includes(r.id)}
+                  onChange={(e) => setResourceIds(e.target.checked ? [...resourceIds, r.id] : resourceIds.filter((id) => id !== r.id))}
+                />
+              ))}
+            </div>
+          </fieldset>
+        )}
+        <Checkbox
+          label="Precisa de sala/equipamento livre (a agenda só oferece horários com sala disponível)"
+          checked={form.requiresRoom}
+          onChange={(e) => set({ requiresRoom: e.target.checked })}
+        />
         <Checkbox label="Pode ser marcado online pelo cliente" checked={form.online} onChange={(e) => set({ online: e.target.checked })} />
         <Checkbox label="Ativo" checked={form.active} onChange={(e) => set({ active: e.target.checked })} />
       </form>

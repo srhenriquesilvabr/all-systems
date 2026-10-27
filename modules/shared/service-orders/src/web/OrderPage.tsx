@@ -26,7 +26,7 @@ export function OrderPage() {
     <>
       <PageHeader
         title={`Ordem nº ${o.number}`}
-        description={`Aberta em ${formatDateTime(o.createdAt)}${o.dueAt ? ` · previsão ${formatDateTime(o.dueAt)}` : ''}`}
+        description={`Recebida em ${formatDateTime(o.receivedAt)}${o.dueAt ? ` · previsão ${formatDateTime(o.dueAt)}` : ''}`}
         actions={<StatusBadge workflows={workflows.data} workflow={o.workflow} status={o.status} />}
       />
 

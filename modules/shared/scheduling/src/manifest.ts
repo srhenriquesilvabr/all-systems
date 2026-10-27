@@ -2,6 +2,8 @@ import { defineModule } from '@all/module-sdk';
 import { schedulingSettings } from './contracts';
 
 const vars = ['agendamento.id', 'agendamento.data', 'agendamento.hora', 'agendamento.servicos', 'agendamento.profissional', 'agendamento.total'];
+// Série (horário com repetição): uma mensagem só, com todas as datas.
+const seriesVars = [...vars, 'agendamento.datas', 'agendamento.quantidade'];
 
 export const schedulingManifest = defineModule({
   key: 'shared.scheduling',
@@ -79,6 +81,30 @@ export const schedulingManifest = defineModule({
       },
       whatsapp: {
         body: 'Olá, {{cliente.nome}}. Seu horário de {{agendamento.data}} às {{agendamento.hora}} ({{agendamento.servicos}}) foi cancelado. Quando quiser, é só marcar de novo. — {{empresa.nome}}',
+      },
+    },
+    {
+      key: 'shared.scheduling.series_booked',
+      label: 'Horários marcados (com repetição)',
+      variables: seriesVars,
+      email: {
+        subject: '{{agendamento.quantidade}} horários marcados, às {{agendamento.hora}}',
+        body: 'Olá, {{cliente.nome}}!\n\nSeus horários estão marcados:\n{{agendamento.servicos}}\nCom: {{agendamento.profissional}}\nÀs {{agendamento.hora}}, nos dias {{agendamento.datas}}\n\nVocê recebe um lembrete antes de cada um.\n{{empresa.nome}}',
+      },
+      whatsapp: {
+        body: 'Olá, {{cliente.nome}}! Seus horários estão marcados: {{agendamento.servicos}} com {{agendamento.profissional}}, às {{agendamento.hora}}, nos dias {{agendamento.datas}}. Você recebe um lembrete antes de cada um. — {{empresa.nome}}',
+      },
+    },
+    {
+      key: 'shared.scheduling.series_cancelled',
+      label: 'Horários cancelados (série)',
+      variables: seriesVars,
+      email: {
+        subject: 'Horários cancelados',
+        body: 'Olá, {{cliente.nome}}.\n\nOs seus horários das {{agendamento.hora}} ({{agendamento.servicos}}) nos dias {{agendamento.datas}} foram cancelados. Quando quiser, é só marcar de novo.\n\n{{empresa.nome}}',
+      },
+      whatsapp: {
+        body: 'Olá, {{cliente.nome}}. Os seus horários das {{agendamento.hora}} ({{agendamento.servicos}}) nos dias {{agendamento.datas}} foram cancelados. Quando quiser, é só marcar de novo. — {{empresa.nome}}',
       },
     },
   ],

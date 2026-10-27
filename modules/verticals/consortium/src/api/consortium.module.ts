@@ -4,10 +4,10 @@ import { customers } from '@all/core/schema';
 import type { Tx } from '@all/db';
 import { ModuleRoute, RequirePermission, requestContext } from '@all/module-sdk';
 import { NotificationsModule, NotificationsService } from '@all/notifications';
-import { BadRequestException, Body, Controller, Get, HttpCode, Injectable, Module, NotFoundException, OnModuleInit, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
-import { and, asc, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
+import { BadRequestException, Body, Controller, Get, HttpCode, Injectable, Module, NotFoundException, OnModuleInit, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
+import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { assemblyInput, quotaInput, type Assembly, type AssemblyInput, type Plan, type Quota, type QuotaInput, type QuotaStatus } from '../contracts';
+import { assemblyInput, quotaInput, sellerInput, type Assembly, type AssemblyInput, type Plan, type Quota, type QuotaInput, type QuotasSummary, type QuotaStatus } from '../contracts';
 import { consAssemblies, consPlans, consQuotas } from '../db/schema';
 import type { ConsortiumSettings } from '../manifest';
 
@@ -16,6 +16,14 @@ const SOURCE = 'consortium_quota';
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const badRequest = (code: string, message: string) => new BadRequestException({ code, message });
 const localToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+const dayStart = (date: string) => sql`(${date}::date)::timestamp at time zone 'America/Sao_Paulo'`;
+const dayEnd = (date: string) => sql`((${date}::date + 1)::timestamp at time zone 'America/Sao_Paulo')`;
+/** Período do resumo: sem datas, o mês corrente. */
+const periodOf = (from?: string, to?: string) => {
+  const today = localToday();
+  const [y, m] = today.split('-').map(Number) as [number, number];
+  return { from: from ?? `${today.slice(0, 7)}-01`, to: to ?? new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10) };
+};
 
 type PlanRow = typeof consPlans.$inferSelect;
 
@@ -97,9 +105,10 @@ export class ConsortiumService implements OnModuleInit {
       if (!customer || customer.anonymizedAt) throw badRequest('CUSTOMER_NOT_FOUND', 'Cliente não encontrado');
       const [plan] = await tx.select().from(consPlans).where(and(eq(consPlans.id, input.planId), eq(consPlans.active, true)));
       if (!plan) throw new NotFoundException({ code: 'PLAN_NOT_FOUND', message: 'Plano não encontrado ou fora de oferta' });
+      if (input.sellerId) await this.checkSeller(tx, tenantId, input.sellerId);
       const [quota] = await tx
         .insert(consQuotas)
-        .values({ tenantId, number: await nextSequence(tx, tenantId, 'cons_quota'), customerId: customer.id, planId: plan.id, dueDay: input.dueDay, sellerId: userId ?? null })
+        .values({ tenantId, number: await nextSequence(tx, tenantId, 'cons_quota'), customerId: customer.id, planId: plan.id, dueDay: input.dueDay, sellerId: input.sellerId ?? userId ?? null })
         .returning();
       await this.customers.addTimeline(tx, { customerId: customer.id, moduleKey: MODULE, type: 'quota.sold', title: `Consórcio: adesão ao plano ${plan.name} (${plan.institution})`, entity: 'cons_quota', entityId: quota!.id });
       return quota!.id;
@@ -126,7 +135,7 @@ export class ConsortiumService implements OnModuleInit {
     return this.get(quotaId);
   }
 
-  list(opts: { status?: string; customerId?: string; groupCode?: string }): Promise<Quota[]> {
+  list(opts: { status?: string; customerId?: string; groupCode?: string; sellerId?: string }): Promise<Quota[]> {
     return this.tdb.run(async (tx) => {
       const rows = await this.quotaQuery(tx)
         .where(
@@ -134,6 +143,7 @@ export class ConsortiumService implements OnModuleInit {
             opts.status ? eq(consQuotas.status, opts.status as QuotaStatus) : undefined,
             opts.customerId ? eq(consQuotas.customerId, opts.customerId) : undefined,
             opts.groupCode ? eq(consQuotas.groupCode, opts.groupCode) : undefined,
+            opts.sellerId === 'none' ? isNull(consQuotas.sellerId) : opts.sellerId ? eq(consQuotas.sellerId, opts.sellerId) : undefined,
           ),
         )
         .orderBy(desc(consQuotas.createdAt))
@@ -159,6 +169,54 @@ export class ConsortiumService implements OnModuleInit {
       await this.audit.log(tx, { action: 'consortium.quota.cancelled', entity: 'cons_quota', entityId: id, data: { reason } });
       return id;
     }).then((qid) => this.get(qid));
+  }
+
+  /** Troca o vendedor de uma cota ainda em andamento (em análise, ativa ou contemplada). */
+  assignSeller(id: string, sellerId: string): Promise<Quota> {
+    const { tenantId } = requestContext.requireTenant();
+    return this.tdb
+      .run(async (tx) => {
+        const [q] = await tx.select().from(consQuotas).where(eq(consQuotas.id, id)).for('update');
+        if (!q) throw new NotFoundException({ code: 'QUOTA_NOT_FOUND', message: 'Cota não encontrada' });
+        if (q.status === 'rejected' || q.status === 'cancelled') throw badRequest('QUOTA_CLOSED', 'Cota recusada ou cancelada');
+        await this.checkSeller(tx, tenantId, sellerId);
+        await tx.update(consQuotas).set({ sellerId }).where(eq(consQuotas.id, id));
+        await this.audit.log(tx, { action: 'consortium.quota.seller_changed', entity: 'cons_quota', entityId: id, data: { from: q.sellerId, to: sellerId } });
+      })
+      .then(() => this.get(id));
+  }
+
+  /** Por vendedor, cotas vendidas no período: em análise, aceitas (com o crédito) e perdidas. */
+  summary(opts: { from?: string; to?: string }): Promise<QuotasSummary> {
+    const { from, to } = periodOf(opts.from, opts.to);
+    const won = sql`${consQuotas.status} in ('active', 'contemplated')`;
+    return this.tdb.run(async (tx) => {
+      const sellers = await tx
+        .select({
+          sellerId: consQuotas.sellerId,
+          sellerName: coreSchema.users.name,
+          open: sql<number>`count(*) filter (where ${consQuotas.status} = 'proposal')`.mapWith(Number),
+          won: sql<number>`count(*) filter (where ${won})`.mapWith(Number),
+          wonValue: sql<number>`coalesce(sum(${consPlans.creditValue}) filter (where ${won}), 0)`.mapWith(Number),
+          lost: sql<number>`count(*) filter (where ${consQuotas.status} in ('rejected', 'cancelled'))`.mapWith(Number),
+        })
+        .from(consQuotas)
+        .innerJoin(consPlans, eq(consPlans.id, consQuotas.planId))
+        .leftJoin(coreSchema.users, eq(coreSchema.users.id, consQuotas.sellerId))
+        .where(and(gte(consQuotas.createdAt, dayStart(from)), lt(consQuotas.createdAt, dayEnd(to))))
+        .groupBy(consQuotas.sellerId, coreSchema.users.name);
+      sellers.sort((a, b) => b.wonValue - a.wonValue || b.open - a.open || (a.sellerName ?? '').localeCompare(b.sellerName ?? ''));
+      return { from, to, sellers };
+    });
+  }
+
+  /** O vendedor tem de estar ativo na equipe desta empresa. */
+  private async checkSeller(tx: Tx, tenantId: string, userId: string) {
+    const [m] = await tx
+      .select({ id: coreSchema.memberships.id })
+      .from(coreSchema.memberships)
+      .where(and(eq(coreSchema.memberships.tenantId, tenantId), eq(coreSchema.memberships.userId, userId), eq(coreSchema.memberships.status, 'active')));
+    if (!m) throw badRequest('SELLER_NOT_MEMBER', 'Vendedor não faz parte da equipe ativa');
   }
 
   /** Assembleia do grupo: cotas da carteira sorteadas ou com lance vencedor ficam contempladas e o cliente é avisado. */
@@ -311,13 +369,22 @@ function toQuota(row: { q: typeof consQuotas.$inferSelect; plan: PlanRow; custom
     contemplationType: q.contemplationType,
     bidPercent: q.bidPercent === null ? null : Number(q.bidPercent),
     commission: Math.round(Number(plan.creditValue) * commissionPercent) / 100,
+    sellerId: q.sellerId,
     sellerName: row.sellerName,
     createdAt: q.createdAt.toISOString(),
   };
 }
 
 const plansQuery = z.object({ assetType: z.string().max(20).optional(), minCredit: z.coerce.number().positive().optional(), maxCredit: z.coerce.number().positive().optional() });
-const quotasQuery = z.object({ status: z.string().max(20).optional(), customerId: z.string().uuid().optional(), groupCode: z.string().max(20).optional() });
+const quotasQuery = z.object({
+  status: z.string().max(20).optional(),
+  customerId: z.string().uuid().optional(),
+  groupCode: z.string().max(20).optional(),
+  /** 'none' = cotas sem vendedor. */
+  sellerId: z.string().uuid().or(z.literal('none')).optional(),
+});
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const summaryQuery = z.object({ from: isoDate.optional(), to: isoDate.optional() }).refine((q) => !q.from || !q.to || q.from <= q.to, 'Período inválido');
 
 @Controller('consortium')
 @ModuleRoute('consortium')
@@ -343,6 +410,13 @@ export class ConsortiumController {
     return this.consortium.list(q);
   }
 
+  /** Declarada antes de quotas/:id para "summary" não cair no ParseUUIDPipe. */
+  @Get('quotas/summary')
+  @RequirePermission('consortium.read')
+  summary(@Query(new ZodPipe(summaryQuery)) q: z.infer<typeof summaryQuery>) {
+    return this.consortium.summary(q);
+  }
+
   @Get('quotas/:id')
   @RequirePermission('consortium.read')
   quota(@Param('id', ParseUUIDPipe) id: string) {
@@ -353,6 +427,12 @@ export class ConsortiumController {
   @RequirePermission('consortium.sell')
   sell(@Body(new ZodPipe(quotaInput)) body: QuotaInput) {
     return this.consortium.sell(body);
+  }
+
+  @Patch('quotas/:id/seller')
+  @RequirePermission('consortium.manage')
+  assignSeller(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(sellerInput)) body: z.infer<typeof sellerInput>) {
+    return this.consortium.assignSeller(id, body.sellerId);
   }
 
   @Post('quotas/:id/cancel')

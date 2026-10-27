@@ -6,7 +6,9 @@ import { z } from 'zod';
 import {
   appointmentInput,
   appointmentPaymentInput,
+  appointmentSeriesInput,
   availabilityQuery,
+  cancelSeriesInput,
   onlineBookingInput,
   rescheduleInput,
   resourceInput,
@@ -15,6 +17,7 @@ import {
   timeOffInput,
   workingHoursInput,
   type AppointmentInput,
+  type AppointmentSeriesInput,
   type ResourceInput,
   type ServiceInput,
 } from '../contracts';
@@ -122,6 +125,20 @@ export class SchedulingController {
   @RequirePermission('shared.scheduling.write')
   create(@Body(new ZodPipe(appointmentInput)) body: AppointmentInput) {
     return this.scheduling.create(body);
+  }
+
+  /** Horário com repetição: cria a série inteira e devolve o que não coube. */
+  @Post('appointments/series')
+  @RequirePermission('shared.scheduling.write')
+  createSeries(@Body(new ZodPipe(appointmentSeriesInput)) body: AppointmentSeriesInput) {
+    return this.scheduling.createSeries(body);
+  }
+
+  @Post('appointments/:id/cancel-series')
+  @HttpCode(200)
+  @RequirePermission('shared.scheduling.write')
+  cancelSeries(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(cancelSeriesInput)) body: z.infer<typeof cancelSeriesInput>) {
+    return this.scheduling.cancelSeries(id, body.reason);
   }
 
   @Post('appointments/:id/reschedule')

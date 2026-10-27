@@ -107,6 +107,44 @@ describe('pets e pet shop', () => {
     expect(msgs.filter((m: { templateKey: string }) => m.templateKey === 'petshop.ready')).toEqual([]);
   });
 
+  it('agendamento online pede o pet: cadastra na primeira vez e reaproveita pelo nome depois', async () => {
+    const s = await shop();
+    const { body: me } = await s.as('get', '/me').expect(200);
+    const pub = `/api/public/booking/${me.tenant.slug}`;
+    await s.as('put', '/modules/shared.scheduling/settings').send({ onlineBooking: true, onlineMinNoticeHours: 0 }).expect(204);
+
+    const { body: info } = await t.http().get(pub).expect(200);
+    expect(info.subject.label).toBe('Pet');
+    expect(info.subject.fields.map((f: { key: string }) => f.key)).toEqual(['name', 'species']);
+    expect(info.subject.fields[1].options).toEqual(expect.arrayContaining([{ value: 'dog', label: 'Cachorro' }, { value: 'cat', label: 'Gato' }]));
+
+    const day = nextWeekday();
+    const serviceId = s.service('Banho — porte pequeno').id;
+    const book = (time: string, subjectFields?: Record<string, string>) =>
+      t.http().post(pub).send({ name: 'Tutor Online', phone: '48 98765-4321', resourceId: s.groomer.id, serviceIds: [serviceId], startsAt: at(day, time), subjectFields });
+
+    // Sem o nome do pet não marca (e não cria cliente nem pet).
+    expect((await book('09:00', { species: 'dog' }).expect(400)).body.code).toBe('VALIDATION');
+    expect((await book('09:00', { name: 'Thor', species: 'dinossauro' }).expect(400)).body.code).toBe('VALIDATION');
+
+    const first = await book('09:00', { name: 'Thor', species: 'dog' }).expect(201);
+    expect(first.body.subject).toBe('Thor');
+    // Mesmo pet, escrito diferente (maiúsculas, acento, espaços): não duplica.
+    const second = await book('11:00', { name: '  THÓR ', species: 'dog' }).expect(201);
+    expect(second.body.subject).toBe('Thor');
+
+    const { body: customers } = await s.as('get', `/customers?q=${encodeURIComponent('Tutor Online')}`).expect(200);
+    const customerId = customers.items[0].id;
+    const { body: petsOfTutor } = await s.as('get', `/pets?customerId=${customerId}`).expect(200);
+    expect(petsOfTutor).toEqual([expect.objectContaining({ name: 'Thor', species: 'dog' })]);
+
+    const { body: list } = await s.as('get', `/scheduling/appointments?customerId=${customerId}`).expect(200);
+    expect(list.map((a: { subject: unknown }) => a.subject)).toEqual([
+      { type: 'pet', id: petsOfTutor[0].id, label: 'Thor' },
+      { type: 'pet', id: petsOfTutor[0].id, label: 'Thor' },
+    ]);
+  });
+
   it('o salão não ativa o módulo de pets', async () => {
     const s = await ownerSession(t, ['beauty']);
     const { body: me } = await s.as('get', '/me').expect(200);

@@ -64,13 +64,20 @@ export function AppointmentDetails({ id, onClose }: { id: string; onClose: () =>
     queryFn: () => api<Message[]>('/notifications', { query: { relatedEntity: 'appointment', relatedId: id, limit: 20 } }),
     retry: false,
   });
-  const [mode, setMode] = useState<'view' | 'cancel' | 'reschedule' | 'pay'>('view');
+  const [mode, setMode] = useState<'view' | 'cancel' | 'cancel-series' | 'reschedule' | 'pay'>('view');
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: schedulingKey });
   };
   const status = useMutation({
     mutationFn: (body: { status: AppointmentStatus; reason?: string }) => api<Appointment>(`/scheduling/appointments/${id}/status`, { method: 'POST', body }),
+    onSuccess: () => {
+      setMode('view');
+      refresh();
+    },
+  });
+  const cancelSeries = useMutation({
+    mutationFn: (reason: string) => api<{ cancelled: number }>(`/scheduling/appointments/${id}/cancel-series`, { method: 'POST', body: { reason } }),
     onSuccess: () => {
       setMode('view');
       refresh();
@@ -91,10 +98,13 @@ export function AppointmentDetails({ id, onClose }: { id: string; onClose: () =>
       ) : a ? (
         <div className="space-y-4 text-sm">
           {status.error && <Alert>{status.error instanceof ApiError ? status.error.message : 'Erro'}</Alert>}
+          {cancelSeries.error && <Alert>{cancelSeries.error instanceof ApiError ? cancelSeries.error.message : 'Erro'}</Alert>}
+          {cancelSeries.data && <Alert tone="success">{cancelSeries.data.cancelled} horário(s) da série cancelado(s).</Alert>}
 
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone={statusTone[a.status]}>{appointmentStatusLabel[a.status]}</Badge>
             {a.source === 'online' && <Badge tone="brand">Marcado online</Badge>}
+            {a.seriesId && <Badge>Faz parte de uma série</Badge>}
             {a.confirmedAt && a.status === 'confirmed' && <span className="text-fg-muted">confirmado em {formatDateTime(a.confirmedAt)}</span>}
           </div>
 
@@ -118,6 +128,12 @@ export function AppointmentDetails({ id, onClose }: { id: string; onClose: () =>
             </dd>
             <dt className="text-fg-muted">Profissional</dt>
             <dd>{a.resourceName}</dd>
+            {a.roomName && (
+              <>
+                <dt className="text-fg-muted">Sala</dt>
+                <dd>{a.roomName}</dd>
+              </>
+            )}
             <dt className="text-fg-muted">Serviços</dt>
             <dd>
               {a.services.map((s) => (
@@ -169,10 +185,24 @@ export function AppointmentDetails({ id, onClose }: { id: string; onClose: () =>
                   Cancelar horário
                 </Button>
               )}
+              {canWrite && open && a.seriesId && (
+                <Button size="sm" variant="ghost" onClick={() => setMode('cancel-series')}>
+                  Cancelar esta e as próximas
+                </Button>
+              )}
             </div>
           )}
 
           {mode === 'cancel' && <CancelForm onBack={() => setMode('view')} busy={status.isPending} onConfirm={(reason) => status.mutate({ status: 'cancelled', reason })} />}
+          {mode === 'cancel-series' && (
+            <CancelForm
+              label="Cancelar esta e as próximas"
+              hint="Cancela este horário e os seguintes da série que ainda não aconteceram. O cliente recebe um aviso só, com as datas."
+              onBack={() => setMode('view')}
+              busy={cancelSeries.isPending}
+              onConfirm={(reason) => cancelSeries.mutate(reason)}
+            />
+          )}
           {mode === 'reschedule' && <RescheduleForm appointment={a} onDone={() => { setMode('view'); refresh(); }} onBack={() => setMode('view')} />}
           {mode === 'pay' && <PaymentForm appointment={a} balance={balance} onDone={() => { setMode('view'); refresh(); }} onBack={() => setMode('view')} />}
 
@@ -210,15 +240,27 @@ export function AppointmentDetails({ id, onClose }: { id: string; onClose: () =>
   );
 }
 
-function CancelForm({ onConfirm, onBack, busy }: { onConfirm: (reason: string) => void; onBack: () => void; busy: boolean }) {
+function CancelForm({
+  onConfirm,
+  onBack,
+  busy,
+  label = 'Cancelar horário',
+  hint = 'O cliente recebe um aviso de cancelamento.',
+}: {
+  onConfirm: (reason: string) => void;
+  onBack: () => void;
+  busy: boolean;
+  label?: string;
+  hint?: string;
+}) {
   const [reason, setReason] = useState('');
   return (
     <div className="space-y-3 border-t border-line pt-4">
       <Field label="Motivo do cancelamento">{(id) => <Textarea id={id} rows={2} value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />}</Field>
-      <p className="text-xs text-fg-muted">O cliente recebe um aviso de cancelamento.</p>
+      <p className="text-xs text-fg-muted">{hint}</p>
       <div className="flex gap-2">
         <Button size="sm" variant="danger" loading={busy} disabled={reason.trim().length < 3} onClick={() => onConfirm(reason)}>
-          Cancelar horário
+          {label}
         </Button>
         <Button size="sm" variant="ghost" onClick={onBack}>
           Voltar

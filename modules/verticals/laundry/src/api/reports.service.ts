@@ -27,7 +27,7 @@ export class LaundryReportsService {
             total: count(),
             withDueDate: sql<number>`count(*) filter (where ${soOrders.dueAt} is not null)::int`,
             onTime: sql<number>`count(*) filter (where ${soOrders.closedAt} <= ${soOrders.dueAt})::int`,
-            avgHours: sql<string | null>`avg(extract(epoch from ${soOrders.closedAt} - ${soOrders.createdAt}) / 3600)`,
+            avgHours: sql<string | null>`avg(extract(epoch from ${soOrders.closedAt} - ${soOrders.receivedAt}) / 3600)`,
           })
           .from(soOrders)
           .where(closedInRange),
@@ -46,7 +46,7 @@ export class LaundryReportsService {
           })
           .from(laundryPieceEvents)
           .where(eventsInRange),
-        // Receita contratada no período (ordens abertas no período, exceto canceladas).
+        // Receita contratada no período (ordens recebidas no período, exceto canceladas).
         tx
           .select({
             serviceName: laundryServices.name,
@@ -57,7 +57,7 @@ export class LaundryReportsService {
           .innerJoin(soItems, eq(soItems.id, laundryItemDetails.itemId))
           .innerJoin(soOrders, eq(soOrders.id, laundryItemDetails.orderId))
           .innerJoin(laundryServices, eq(laundryServices.id, laundryItemDetails.serviceId))
-          .where(and(gte(soOrders.createdAt, start(from)), lt(soOrders.createdAt, end(to)), sql`${soOrders.status} <> 'cancelled'`))
+          .where(and(gte(soOrders.receivedAt, start(from)), lt(soOrders.receivedAt, end(to)), sql`${soOrders.status} <> 'cancelled'`))
           .groupBy(laundryServices.name)
           .orderBy(desc(sql`3`)),
         tx

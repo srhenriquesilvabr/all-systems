@@ -5,12 +5,20 @@ import { NotificationsModule } from '@all/notifications';
 import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Module, Param, ParseUUIDPipe, Patch, Post, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { z } from 'zod';
-import { dealInput, vehicleInput, type DealInput, type VehicleInput } from '../contracts';
+import { dealInput, loseInput, sellerInput, vehicleInput, type DealInput, type LoseInput, type VehicleInput } from '../contracts';
 import { FipeHttp, VehiclesService } from './vehicles.service';
 
 const stockQuery = z.object({ q: z.string().max(100).optional(), status: z.string().max(20).optional() });
-const dealsQuery = z.object({ status: z.string().max(30).optional(), customerId: z.string().uuid().optional(), vehicleId: z.string().uuid().optional() });
-const dealUpdate = dealInput.pick({ price: true, discount: true, paymentType: true, downPayment: true, tradeIn: true, notes: true });
+const dealsQuery = z.object({
+  status: z.string().max(30).optional(),
+  customerId: z.string().uuid().optional(),
+  vehicleId: z.string().uuid().optional(),
+  /** 'none' = negociações sem vendedor. */
+  sellerId: z.string().uuid().or(z.literal('none')).optional(),
+});
+const dealUpdate = dealInput.pick({ price: true, discount: true, paymentType: true, downPayment: true, tradeIn: true, notes: true, sellerId: true });
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const summaryQuery = z.object({ from: isoDate.optional(), to: isoDate.optional() }).refine((q) => !q.from || !q.to || q.from <= q.to, 'Período inválido');
 
 @Controller('vehicles')
 @ModuleRoute('vehicles')
@@ -69,6 +77,13 @@ export class VehiclesController {
     return this.vehicles.listDeals(q);
   }
 
+  /** Declarada antes de deals/:id para "summary" não cair no ParseUUIDPipe. */
+  @Get('deals/summary')
+  @RequirePermission('vehicles.deals.read')
+  summary(@Query(new ZodPipe(summaryQuery)) q: z.infer<typeof summaryQuery>) {
+    return this.vehicles.summary(q);
+  }
+
   @Get('deals/:id')
   @RequirePermission('vehicles.deals.read')
   deal(@Param('id', ParseUUIDPipe) id: string) {
@@ -87,6 +102,12 @@ export class VehiclesController {
     return this.vehicles.updateDeal(id, body);
   }
 
+  @Patch('deals/:id/seller')
+  @RequirePermission('vehicles.deals.write')
+  assignSeller(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(sellerInput)) body: z.infer<typeof sellerInput>) {
+    return this.vehicles.assignSeller(id, body.sellerId);
+  }
+
   @Post('deals/:id/close')
   @HttpCode(200)
   @RequirePermission('vehicles.deals.write')
@@ -97,8 +118,8 @@ export class VehiclesController {
   @Post('deals/:id/lose')
   @HttpCode(200)
   @RequirePermission('vehicles.deals.write')
-  lose(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(z.object({ reason: z.string().trim().min(3).max(300) }))) body: { reason: string }) {
-    return this.vehicles.loseDeal(id, body.reason);
+  lose(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(loseInput)) body: LoseInput) {
+    return this.vehicles.loseDeal(id, body);
   }
 }
 

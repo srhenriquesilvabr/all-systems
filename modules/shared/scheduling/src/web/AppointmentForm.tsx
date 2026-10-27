@@ -2,7 +2,7 @@ import { api, ApiError, CustomerSearch, formatMoney, formatPhone, type CustomerO
 import { Alert, Button, Checkbox, Field, Input, Modal, Select, Spinner, Textarea } from '@all/ui';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, type ComponentType, type FormEvent } from 'react';
-import type { Appointment } from '../contracts';
+import { MAX_OCCURRENCES, recurrenceFrequencies, recurrenceLabel, type Appointment, type RecurrenceFrequency, type SeriesResult } from '../contracts';
 import { hhmmOf, localToUtc, minutesOf, schedulingKey, useAvailability, useResources, useServices } from './hooks';
 
 /** Seletor de "para quem é" (ex.: o pet), registrado pela vertical que precisa dele. */
@@ -30,7 +30,7 @@ export function AppointmentForm({
   onClose,
   onSaved,
 }: {
-  initial: { date: string; time?: string; resourceId?: string; customer?: CustomerOption | null };
+  initial: { date: string; time?: string; resourceId?: string; roomId?: string; customer?: CustomerOption | null };
   activeModules: string[];
   onClose: () => void;
   onSaved: (a: Appointment) => void;
@@ -45,10 +45,28 @@ export function AppointmentForm({
   const [time, setTime] = useState(initial.time ?? '');
   const [notes, setNotes] = useState('');
   const [subject, setSubject] = useState<SubjectValue | null>(null);
+  const [roomId, setRoomId] = useState(initial.roomId ?? '');
+  const [repeat, setRepeat] = useState<{ on: boolean; frequency: RecurrenceFrequency; end: 'count' | 'until'; count: string; until: string }>({
+    on: false,
+    frequency: 'weekly',
+    end: 'count',
+    count: '4',
+    until: '',
+  });
+  const [result, setResult] = useState<SeriesResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const professionals = (resources.data ?? []).filter((r) => r.active && r.kind === 'professional');
+  const allRooms = (resources.data ?? []).filter((r) => r.active && r.kind === 'room');
   const chosen = (services.data ?? []).filter((s) => serviceIds.includes(s.id));
+  // Salas que servem para todos os serviços (serviço sem sala ligada = qualquer sala).
+  const rooms = allRooms.filter((room) =>
+    chosen.every((s) => {
+      const linked = allRooms.filter((r) => s.resourceIds.includes(r.id));
+      return !linked.length || linked.some((r) => r.id === room.id);
+    }),
+  );
+  const needsRoom = chosen.some((s) => s.requiresRoom);
   const duration = chosen.reduce((sum, s) => sum + s.durationMin + s.bufferMin, 0);
   const total = chosen.reduce((sum, s) => sum + s.price, 0);
   const availability = useAvailability(date, serviceIds, resourceId || undefined);
@@ -59,15 +77,24 @@ export function AppointmentForm({
     if (!resourceId && professionals.length === 1) setResourceId(professionals[0]!.id);
   }, [professionals, resourceId]);
 
+  // A sala escolhida deixou de servir para os serviços marcados: limpa.
+  useEffect(() => {
+    if (roomId && resources.data && !rooms.some((r) => r.id === roomId)) setRoomId('');
+  }, [rooms, roomId, resources.data]);
+
   const save = useMutation({
-    mutationFn: () =>
-      api<Appointment>('/scheduling/appointments', {
-        method: 'POST',
-        body: { customerId: customer?.id, resourceId, serviceIds, startsAt: localToUtc(date, time).toISOString(), notes: notes || null, subject },
-      }),
-    onSuccess: (a) => {
+    mutationFn: async (): Promise<{ appointment: Appointment; series?: SeriesResult }> => {
+      const body = { customerId: customer?.id, resourceId, roomId: roomId || null, serviceIds, startsAt: localToUtc(date, time).toISOString(), notes: notes || null, subject };
+      if (!repeat.on) return { appointment: await api<Appointment>('/scheduling/appointments', { method: 'POST', body }) };
+      const recurrence = { frequency: repeat.frequency, ...(repeat.end === 'count' ? { count: Number(repeat.count) } : { until: repeat.until }) };
+      const series = await api<SeriesResult>('/scheduling/appointments/series', { method: 'POST', body: { ...body, recurrence } });
+      return { appointment: series.created[0]!, series };
+    },
+    onSuccess: ({ appointment, series }) => {
       queryClient.invalidateQueries({ queryKey: schedulingKey });
-      onSaved(a);
+      // Algumas datas não couberam: mostra quais antes de fechar.
+      if (series?.skipped.length) setResult(series);
+      else onSaved(appointment);
     },
     onError: (err) => setError(err instanceof ApiError ? err.message : 'Erro ao marcar'),
   });
@@ -78,8 +105,40 @@ export function AppointmentForm({
     if (!serviceIds.length) return setError('Escolha ao menos um serviço');
     if (!resourceId) return setError('Escolha o profissional');
     if (!time) return setError('Escolha o horário');
+    if (repeat.on && repeat.end === 'count' && !(Number(repeat.count) >= 2 && Number(repeat.count) <= MAX_OCCURRENCES)) return setError(`Repetir de 2 a ${MAX_OCCURRENCES} vezes`);
+    if (repeat.on && repeat.end === 'until' && !(repeat.until > date)) return setError('A data final precisa ser depois do primeiro dia');
     setError(null);
     save.mutate();
+  }
+
+  if (result) {
+    const fmt = (d: string) => d.split('-').reverse().join('/');
+    return (
+      <Modal
+        open
+        title="Horários marcados"
+        onClose={() => onSaved(result.created[0]!)}
+        footer={<Button onClick={() => onSaved(result.created[0]!)}>Ok</Button>}
+      >
+        <div className="space-y-3 text-sm">
+          <p>
+            <strong>{result.created.length}</strong> {result.created.length === 1 ? 'marcado' : 'marcados'}, <strong>{result.skipped.length}</strong> não{' '}
+            {result.skipped.length === 1 ? 'coube' : 'couberam'}:
+          </p>
+          <ul className="space-y-1">
+            {result.skipped.map((s) => (
+              <li key={s.date} className="flex justify-between gap-2 rounded-lg bg-muted px-3 py-1.5">
+                <span className="tabular-nums">
+                  {fmt(s.date)} às {s.time}
+                </span>
+                <span className="text-fg-muted">{s.reason}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-fg-muted">Essas datas podem ser marcadas avulsas, em outro horário.</p>
+        </div>
+      </Modal>
+    );
   }
 
   const freeLater = time && !slots.includes(time);
@@ -171,6 +230,21 @@ export function AppointmentForm({
           <Field label="Dia">{(id) => <Input id={id} type="date" value={date} onChange={(e) => setDate(e.target.value)} />}</Field>
         </div>
 
+        {(allRooms.length > 0 || needsRoom) && (
+          <Field label="Sala/equipamento" hint={needsRoom ? 'Algum serviço precisa de sala: sem escolher, fica a primeira livre.' : undefined}>
+            {(id) => (
+              <Select id={id} value={roomId} onChange={(e) => setRoomId(e.target.value)}>
+                <option value="">{needsRoom ? 'Automática (primeira livre)' : 'Nenhuma'}</option>
+                {rooms.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+        )}
+
         <div>
           <p className="mb-1.5 text-sm font-medium">Horário</p>
           {!serviceIds.length || !resourceId ? (
@@ -203,6 +277,54 @@ export function AppointmentForm({
             </>
           )}
         </div>
+
+        <fieldset className="space-y-3 rounded-lg border border-line p-3">
+          <Checkbox label="Repetir" checked={repeat.on} onChange={(e) => setRepeat({ ...repeat, on: e.target.checked })} />
+          {repeat.on && (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Frequência">
+                  {(id) => (
+                    <Select id={id} value={repeat.frequency} onChange={(e) => setRepeat({ ...repeat, frequency: e.target.value as RecurrenceFrequency })}>
+                      {recurrenceFrequencies.map((f) => (
+                        <option key={f} value={f}>
+                          {recurrenceLabel[f]}
+                        </option>
+                      ))}
+                    </Select>
+                  )}
+                </Field>
+                <Field label="Termina">
+                  {(id) => (
+                    <div className="flex gap-2">
+                      <Select id={id} className="w-40" value={repeat.end} onChange={(e) => setRepeat({ ...repeat, end: e.target.value as 'count' | 'until' })}>
+                        <option value="count">Depois de</option>
+                        <option value="until">Em</option>
+                      </Select>
+                      {repeat.end === 'count' ? (
+                        <Input
+                          type="number"
+                          aria-label="Quantas vezes"
+                          min={2}
+                          max={MAX_OCCURRENCES}
+                          className="w-24"
+                          value={repeat.count}
+                          onChange={(e) => setRepeat({ ...repeat, count: e.target.value })}
+                        />
+                      ) : (
+                        <Input type="date" aria-label="Até o dia" min={date} value={repeat.until} onChange={(e) => setRepeat({ ...repeat, until: e.target.value })} />
+                      )}
+                    </div>
+                  )}
+                </Field>
+              </div>
+              <p className="text-xs text-fg-muted">
+                {repeat.end === 'count' ? 'O total conta esta data e as que não couberem. ' : ''}Mesmo horário em todas. No mensal, vale o mesmo dia do mês (meses sem esse dia ficam de fora). Datas
+                ocupadas, de folga ou fora do expediente são puladas e aparecem no final. Máximo de {MAX_OCCURRENCES}.
+              </p>
+            </>
+          )}
+        </fieldset>
 
         <Field label="Observações">{(id) => <Textarea id={id} rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />}</Field>
       </form>

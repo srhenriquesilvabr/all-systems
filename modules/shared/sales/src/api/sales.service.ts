@@ -26,7 +26,8 @@ type ProductRow = typeof salesProducts.$inferSelect;
 type MoveKind = (typeof salesStockMoves.$inferInsert)['kind'];
 
 const badRequest = (code: string, message: string) => new BadRequestException({ code, message });
-const localToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+/** Dia (YYYY-MM-DD) de um momento no fuso do negócio. */
+const localDay = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(d);
 const dayStart = (date: string) => sql`(${date}::date)::timestamp at time zone 'America/Sao_Paulo'`;
 const dayEnd = (date: string) => sql`((${date}::date + 1)::timestamp at time zone 'America/Sao_Paulo')`;
 
@@ -97,7 +98,7 @@ export class SalesService {
         .from(salesStockMoves)
         .leftJoin(coreSchema.users, eq(coreSchema.users.id, salesStockMoves.userId))
         .where(eq(salesStockMoves.productId, productId))
-        .orderBy(desc(salesStockMoves.createdAt), desc(salesStockMoves.id))
+        .orderBy(desc(salesStockMoves.occurredAt), desc(salesStockMoves.createdAt), desc(salesStockMoves.id))
         .limit(200);
       return rows.map(({ m, userName }) => ({
         id: m.id,
@@ -106,6 +107,7 @@ export class SalesService {
         balance: Number(m.balance),
         reason: m.reason,
         userName,
+        occurredAt: m.occurredAt.toISOString(),
         createdAt: m.createdAt.toISOString(),
       }));
     });
@@ -118,7 +120,7 @@ export class SalesService {
       checkQuantity(product, input.quantity);
       const delta = input.kind === 'count' ? input.quantity - Number(product.stock) : input.kind === 'loss' ? -input.quantity : input.quantity;
       if (input.kind !== 'count' && input.quantity === 0) throw badRequest('INVALID_QUANTITY', 'Informe a quantidade');
-      await this.move(tx, product, input.kind, delta, { unitCost: input.unitCost ?? null, reason: input.reason ?? null });
+      await this.move(tx, product, input.kind, delta, { unitCost: input.unitCost ?? null, reason: input.reason ?? null, occurredAt: input.occurredAt });
       if (input.kind === 'purchase' && input.unitCost != null) {
         await tx.update(salesProducts).set({ cost: centsToDecimal(toCents(input.unitCost)) }).where(eq(salesProducts.id, product.id));
       }
@@ -159,6 +161,8 @@ export class SalesService {
       if (change > cash) throw badRequest('PAYMENT_OVER', 'Só pagamento em dinheiro pode ter troco');
       if (input.payments.some((p) => p.method === 'on_account') && !customer) throw badRequest('CUSTOMER_REQUIRED', 'Venda fiado precisa de cliente');
 
+      // Venda anterior (migração, caixa sem sistema): relatórios e financeiro usam a data informada.
+      const soldAt = input.soldAt ?? new Date();
       const number = await nextSequence(tx, tenantId, 'sale');
       const [sale] = await tx
         .insert(salesSales)
@@ -172,6 +176,7 @@ export class SalesService {
           change: centsToDecimal(change),
           notes: input.notes ?? null,
           sellerId: userId ?? null,
+          soldAt,
         })
         .returning();
       await tx.insert(salesItems).values(
@@ -193,7 +198,7 @@ export class SalesService {
 
       for (const l of lines) {
         if (!l.product.trackStock) continue;
-        await this.move(tx, l.product, 'sale', -l.quantity, { saleId: sale!.id, blockNegative: settings.blockNegativeStock });
+        await this.move(tx, l.product, 'sale', -l.quantity, { saleId: sale!.id, blockNegative: settings.blockNegativeStock, occurredAt: soldAt });
       }
       await this.recordFinance(tx, sale!, received, customer?.id ?? null, settings);
       if (customer) {
@@ -201,7 +206,7 @@ export class SalesService {
           customerId: customer.id,
           moduleKey: MODULE,
           type: 'sale.completed',
-          title: `Compra #${number}: ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(total / 100)}`,
+          title: `Compra #${number}: ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(total / 100)}${pastDayLabel(soldAt)}`,
           entity: 'sale',
           entityId: sale!.id,
         });
@@ -240,12 +245,12 @@ export class SalesService {
         .from(salesSales)
         .where(
           and(
-            gte(salesSales.createdAt, dayStart(opts.from)),
-            lt(salesSales.createdAt, dayEnd(opts.to)),
+            gte(salesSales.soldAt, dayStart(opts.from)),
+            lt(salesSales.soldAt, dayEnd(opts.to)),
             opts.customerId ? eq(salesSales.customerId, opts.customerId) : undefined,
           ),
         )
-        .orderBy(desc(salesSales.createdAt))
+        .orderBy(desc(salesSales.soldAt), desc(salesSales.number))
         .limit(opts.limit);
       return this.detailsInTx(tx, rows.map((r) => r.id));
     });
@@ -254,15 +259,15 @@ export class SalesService {
   /** Fechamento do período: total, ticket médio, por forma de pagamento, por dia e produtos mais vendidos. */
   summary(from: string, to: string): Promise<SalesSummary> {
     return this.tdb.run(async (tx) => {
-      const period = and(eq(salesSales.status, 'completed'), gte(salesSales.createdAt, dayStart(from)), lt(salesSales.createdAt, dayEnd(to)));
-      const localDay = sql<string>`to_char(${salesSales.createdAt} at time zone 'America/Sao_Paulo', 'YYYY-MM-DD')`;
+      const period = and(eq(salesSales.status, 'completed'), gte(salesSales.soldAt, dayStart(from)), lt(salesSales.soldAt, dayEnd(to)));
+      const saleDay = sql<string>`to_char(${salesSales.soldAt} at time zone 'America/Sao_Paulo', 'YYYY-MM-DD')`;
       const [byDay, byMethod, top] = await Promise.all([
         tx
-          .select({ date: localDay, count: sql<number>`count(*)::int`, total: sql<string>`sum(${salesSales.total})` })
+          .select({ date: saleDay, count: sql<number>`count(*)::int`, total: sql<string>`sum(${salesSales.total})` })
           .from(salesSales)
           .where(period)
-          .groupBy(localDay)
-          .orderBy(localDay),
+          .groupBy(saleDay)
+          .orderBy(saleDay),
         tx
           .select({ method: salesPayments.method, amount: sql<string>`sum(${salesPayments.amount})` })
           .from(salesPayments)
@@ -299,7 +304,7 @@ export class SalesService {
     product: ProductRow,
     kind: MoveKind,
     delta: number,
-    opts: { saleId?: string; reason?: string | null; unitCost?: number | null; blockNegative?: boolean } = {},
+    opts: { saleId?: string; reason?: string | null; unitCost?: number | null; blockNegative?: boolean; occurredAt?: Date } = {},
   ) {
     const { tenantId, userId } = requestContext.requireTenant();
     const [updated] = await tx
@@ -320,11 +325,13 @@ export class SalesService {
       reason: opts.reason ?? null,
       saleId: opts.saleId ?? null,
       userId: userId ?? null,
+      occurredAt: opts.occurredAt ?? new Date(),
     });
   }
 
   private async recordFinance(tx: Tx, sale: typeof salesSales.$inferSelect, received: { method: SalePaymentMethod; cents: number }[], customerId: string | null, settings: SalesSettings) {
-    const today = localToday();
+    // Venda lançada depois: vencimento, pagamento e competência ficam no dia da venda.
+    const day = localDay(sale.soldAt);
     const cashAccount = await this.finance.defaultAccountId(tx);
     for (const p of received) {
       if (p.cents <= 0) continue;
@@ -334,8 +341,8 @@ export class SalesService {
         status: onAccount ? 'pending' : 'paid',
         description: `Venda #${sale.number} (${salePaymentLabel[p.method]})`,
         amount: p.cents / 100,
-        dueDate: today,
-        paidAt: onAccount ? null : today,
+        dueDate: day,
+        paidAt: onAccount ? null : day,
         accountId: onAccount ? null : p.method === 'cash' ? cashAccount : (settings.bankAccountId ?? cashAccount),
         paymentMethod: onAccount ? null : p.method,
         customerId,
@@ -384,6 +391,7 @@ export class SalesService {
         notes: s.notes,
         sellerName,
         cancelReason: s.cancelReason,
+        soldAt: s.soldAt.toISOString(),
         createdAt: s.createdAt.toISOString(),
       }));
   }
@@ -404,6 +412,11 @@ export class SalesService {
       throw err;
     }
   }
+}
+
+/** " em 20/10/2026" quando o momento não é hoje (a linha do tempo do cliente não tem data própria). */
+function pastDayLabel(d: Date) {
+  return localDay(d) === localDay(new Date()) ? '' : ` em ${new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo' }).format(d)}`;
 }
 
 /** Soma por forma de pagamento e desconta o troco do dinheiro. */

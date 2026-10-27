@@ -76,7 +76,7 @@ export function SalesPage() {
               {list.data.map((s) => (
                 <tr key={s.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setOpen(s)}>
                   <Td className="tabular-nums">#{s.number}</Td>
-                  <Td className="whitespace-nowrap tabular-nums">{formatDateTime(s.createdAt)}</Td>
+                  <Td className="whitespace-nowrap tabular-nums">{formatDateTime(s.soldAt)}</Td>
                   <Td>{s.customer?.name ?? <span className="text-fg-subtle">—</span>}</Td>
                   <Td>{s.payments.map((p) => salePaymentLabel[p.method]).join(' + ')}</Td>
                   <Td className="text-right tabular-nums">
@@ -166,9 +166,10 @@ function SaleModal({ sale, onClose }: { sale: Sale; onClose: () => void }) {
     >
       <div className="space-y-3 text-sm">
         <p className="text-fg-muted">
-          {formatDateTime(sale.createdAt)}
+          {formatDateTime(sale.soldAt)}
           {sale.sellerName && ` · ${sale.sellerName}`}
           {sale.customer && ` · ${sale.customer.name}`}
+          {Math.abs(Date.parse(sale.createdAt) - Date.parse(sale.soldAt)) > 3_600_000 && ` · lançada em ${formatDateTime(sale.createdAt)}`}
         </p>
         {sale.status === 'cancelled' && <Alert tone="info">Cancelada: {sale.cancelReason}</Alert>}
         <ul className="divide-y divide-line">

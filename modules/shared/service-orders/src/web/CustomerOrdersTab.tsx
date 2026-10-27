@@ -28,6 +28,7 @@ export function CustomerOrdersTab({ customerId }: { customerId: string }) {
           <thead>
             <tr>
               <Th>Nº</Th>
+              <Th>Entrada</Th>
               <Th>Status</Th>
               <Th className="text-right">Total</Th>
               <Th>Pagamento</Th>

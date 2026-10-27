@@ -11,6 +11,20 @@ export const fractionalUnits: Unit[] = ['kg', 'l'];
 const money = z.coerce.number().min(0, 'Valor inválido').max(1_000_000).multipleOf(0.01, 'Use no máximo 2 casas decimais');
 const qty = z.coerce.number().positive('Quantidade inválida').max(100_000).multipleOf(0.001);
 
+/** Hoje no fuso do negócio (YYYY-MM-DD). */
+export const businessToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+
+/**
+ * Momento informado pelo usuário (venda ou movimento lançado depois): só a data (hoje vira agora,
+ * outro dia vira meio-dia no fuso de SP) ou data e hora completas. Não aceita data futura.
+ */
+const pastMoment = (futureMessage: string) =>
+  z
+    .union([z.string().trim(), z.date()])
+    .transform((v) => (v instanceof Date ? v : /^\d{4}-\d{2}-\d{2}$/.test(v) ? (v === businessToday() ? new Date() : new Date(`${v}T12:00:00-03:00`)) : new Date(v)))
+    .refine((d) => !Number.isNaN(d.getTime()), 'Data inválida')
+    .refine((d) => Number.isNaN(d.getTime()) || d.getTime() <= Date.now() + 5 * 60_000, futureMessage);
+
 export const productInput = z.object({
   name: z.string().trim().min(2, 'Informe o nome').max(120),
   sku: z.string().trim().max(40).nullish(),
@@ -56,6 +70,8 @@ export const stockMoveInput = z.object({
   quantity: z.coerce.number().min(0).max(1_000_000).multipleOf(0.001),
   unitCost: money.nullish(),
   reason: z.string().trim().max(200).nullish(),
+  /** Quando aconteceu; sem data, é agora. */
+  occurredAt: pastMoment('A data do movimento não pode ser no futuro').optional(),
 });
 export type StockMoveInput = z.infer<typeof stockMoveInput>;
 
@@ -66,6 +82,8 @@ export interface StockMove {
   balance: number;
   reason: string | null;
   userName: string | null;
+  /** Quando aconteceu (pode ser anterior ao registro). */
+  occurredAt: string;
   createdAt: string;
 }
 
@@ -92,6 +110,8 @@ export const saleInput = z.object({
     .min(1, 'Informe o pagamento')
     .max(5),
   notes: z.string().trim().max(500).nullish(),
+  /** Data da venda (lançar venda anterior); sem data, é agora. */
+  soldAt: pastMoment('A data da venda não pode ser no futuro').optional(),
 });
 export type SaleInput = z.infer<typeof saleInput>;
 
@@ -112,6 +132,8 @@ export interface Sale {
   notes: string | null;
   sellerName: string | null;
   cancelReason: string | null;
+  /** Quando a venda aconteceu (anterior ao registro nas vendas lançadas depois). */
+  soldAt: string;
   createdAt: string;
 }
 

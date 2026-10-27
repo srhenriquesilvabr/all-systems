@@ -4,6 +4,8 @@ import { parseCnj } from './cnj';
 export * from './cnj';
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data inválida');
+/** Hoje no fuso do escritório (YYYY-MM-DD). */
+export const localToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 const money = z.coerce.number().min(0).max(100_000_000).multipleOf(0.01);
 
 export const caseAreas = ['civil', 'labor', 'family', 'criminal', 'social_security', 'tax', 'consumer', 'business', 'other'] as const;
@@ -104,6 +106,12 @@ export const deadlineInput = z.object({
   notes: z.string().trim().max(1000).nullish(),
 });
 export type DeadlineInput = z.infer<typeof deadlineInput>;
+
+/** Data em que o prazo foi cumprido (padrão: hoje). Pode ser no passado, nunca no futuro. */
+export const deadlineDoneInput = z.preprocess(
+  (v) => v ?? {},
+  z.object({ doneOn: isoDate.refine((d) => d <= localToday(), 'A data de cumprimento não pode ser no futuro').optional() }),
+);
 
 export interface Deadline {
   id: string;

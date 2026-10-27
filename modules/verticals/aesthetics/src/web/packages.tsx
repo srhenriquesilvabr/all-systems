@@ -65,6 +65,7 @@ function PackagesTable({ packages, showCustomer }: { packages: SessionPackage[];
           <tr>
             {showCustomer && <Th>Cliente</Th>}
             <Th>Procedimento</Th>
+            <Th>Venda</Th>
             <Th>Sessões</Th>
             <Th className="text-right">Valor</Th>
             <Th>Validade</Th>
@@ -83,6 +84,7 @@ function PackagesTable({ packages, showCustomer }: { packages: SessionPackage[];
                 </Td>
               )}
               <Td>{p.service.name}</Td>
+              <Td className="whitespace-nowrap tabular-nums">{formatDate(p.soldOn)}</Td>
               <Td className="whitespace-nowrap">
                 <SessionMeter pkg={p} />
               </Td>
@@ -90,7 +92,12 @@ function PackagesTable({ packages, showCustomer }: { packages: SessionPackage[];
               <Td className="whitespace-nowrap tabular-nums">{p.expiresOn ? formatDate(p.expiresOn) : '—'}</Td>
               <Td>
                 <Badge tone={tone[p.status]}>{packageStatusLabel[p.status]}</Badge>
-                {p.cancelReason && <div className="text-xs text-fg-muted">{p.cancelReason}</div>}
+                {p.cancelReason && (
+                  <div className="text-xs text-fg-muted">
+                    {p.cancelledOn && `${formatDate(p.cancelledOn)}: `}
+                    {p.cancelReason}
+                  </div>
+                )}
               </Td>
               <Td className="text-right">
                 {canSell && p.status === 'active' && (
@@ -129,7 +136,7 @@ function SellModal({ customer: fixed, onClose }: { customer?: { id: string }; on
   const queryClient = useQueryClient();
   const services = useServices();
   const [customer, setCustomer] = useState<CustomerOption | { id: string; name?: string } | null>(fixed ?? null);
-  const [form, setForm] = useState({ serviceId: '', totalSessions: '10', price: '', installments: '1', firstDueOn: today(), expiresOn: '', notes: '' });
+  const [form, setForm] = useState({ serviceId: '', totalSessions: '10', price: '', installments: '1', soldOn: today(), firstDueOn: today(), expiresOn: '', notes: '' });
   const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
   const service = services.data?.find((s) => s.id === form.serviceId);
   const save = useMutation({
@@ -205,7 +212,20 @@ function SellModal({ customer: fixed, onClose }: { customer?: { id: string }; on
                 </Select>
               )}
             </Field>
-            <Field label="1º vencimento">{(id) => <Input id={id} type="date" required value={form.firstDueOn} onChange={(e) => set({ firstDueOn: e.target.value })} />}</Field>
+            <Field label="Data da venda">
+              {(id) => (
+                <Input
+                  id={id}
+                  type="date"
+                  required
+                  max={today()}
+                  value={form.soldOn}
+                  // O 1º vencimento acompanha a venda enquanto não for mudado à mão.
+                  onChange={(e) => set({ soldOn: e.target.value, firstDueOn: form.firstDueOn === form.soldOn ? e.target.value : form.firstDueOn })}
+                />
+              )}
+            </Field>
+            <Field label="1º vencimento">{(id) => <Input id={id} type="date" required min={form.soldOn} value={form.firstDueOn} onChange={(e) => set({ firstDueOn: e.target.value })} />}</Field>
             <Field label="Validade (opcional)">{(id) => <Input id={id} type="date" value={form.expiresOn} onChange={(e) => set({ expiresOn: e.target.value })} />}</Field>
           </div>
           <Field label="Observações">{(id) => <Textarea id={id} rows={2} value={form.notes} onChange={(e) => set({ notes: e.target.value })} />}</Field>
@@ -219,8 +239,9 @@ function SellModal({ customer: fixed, onClose }: { customer?: { id: string }; on
 function CancelModal({ pkg, onClose }: { pkg: SessionPackage; onClose: () => void }) {
   const queryClient = useQueryClient();
   const [reason, setReason] = useState('');
+  const [cancelledOn, setCancelledOn] = useState(today());
   const save = useMutation({
-    mutationFn: () => api(`/aesthetics/packages/${pkg.id}/cancel`, { method: 'POST', body: { reason } }),
+    mutationFn: () => api(`/aesthetics/packages/${pkg.id}/cancel`, { method: 'POST', body: { reason, cancelledOn } }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: key });
       onClose();
@@ -236,7 +257,7 @@ function CancelModal({ pkg, onClose }: { pkg: SessionPackage; onClose: () => voi
           <Button variant="secondary" onClick={onClose}>
             Voltar
           </Button>
-          <Button variant="danger" loading={save.isPending} disabled={reason.trim().length < 3} onClick={() => save.mutate()}>
+          <Button variant="danger" loading={save.isPending} disabled={reason.trim().length < 3 || !cancelledOn} onClick={() => save.mutate()}>
             Cancelar pacote
           </Button>
         </>
@@ -248,6 +269,7 @@ function CancelModal({ pkg, onClose }: { pkg: SessionPackage; onClose: () => voi
           {pkg.usedSessions} de {pkg.totalSessions} sessões usadas. As parcelas ainda em aberto são canceladas no financeiro; as já pagas ficam (faça o estorno, se houver, pelo financeiro).
         </p>
         <Field label="Motivo">{(id) => <Input id={id} value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />}</Field>
+        <Field label="Cancelado em">{(id) => <Input id={id} type="date" required min={pkg.soldOn} max={today()} value={cancelledOn} onChange={(e) => setCancelledOn(e.target.value)} />}</Field>
       </div>
     </Modal>
   );

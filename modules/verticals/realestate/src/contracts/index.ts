@@ -69,8 +69,30 @@ export const dealInput = z.object({
   fgtsAmount: money.default(0),
   commissionPercent: z.coerce.number().min(0).max(20).default(6),
   notes: z.string().trim().max(1000).nullish(),
+  /** Corretor responsável; sem informar, fica quem registrou a proposta. */
+  brokerId: z.string().uuid().nullish(),
 });
 export type DealInput = z.infer<typeof dealInput>;
+
+export const lostReasonKeys = ['price', 'financing_denied', 'bought_other', 'gave_up', 'documentation', 'no_contact', 'other'] as const;
+export type LostReasonKey = (typeof lostReasonKeys)[number];
+export const lostReasonLabel: Record<LostReasonKey, string> = {
+  price: 'Preço',
+  financing_denied: 'Financiamento negado',
+  bought_other: 'Comprou outro imóvel',
+  gave_up: 'Desistiu',
+  documentation: 'Documentação',
+  no_contact: 'Sem contato',
+  other: 'Outro',
+};
+
+/** Motivo padronizado; o texto é detalhe opcional, obrigatório só em "outro". */
+export const loseInput = z
+  .object({ reasonKey: z.enum(lostReasonKeys), reason: z.string().trim().max(300).nullish() })
+  .refine((v) => v.reasonKey !== 'other' || (v.reason?.length ?? 0) >= 3, { message: 'Descreva o motivo', path: ['reason'] });
+export type LoseInput = z.infer<typeof loseInput>;
+
+export const brokerInput = z.object({ brokerId: z.string().uuid('Escolha o corretor') });
 
 /** Quanto do valor do imóvel os bancos financiam, no máximo (SFH, SAC). */
 export const MAX_LTV = 0.8;
@@ -99,11 +121,24 @@ export interface Deal {
   commissionPercent: number;
   commission: number;
   status: DealStatus;
+  lostReasonKey: LostReasonKey | null;
+  /** Detalhe do motivo (nas perdidas antigas, o texto livre). */
   lostReason: string | null;
+  lostAt: string | null;
+  brokerId: string | null;
   brokerName: string | null;
   notes: string | null;
   closedAt: string | null;
   createdAt: string;
+}
+
+/** Por corretor: em aberto agora; vendidas (valor e comissão) e perdidas dentro do período. */
+export interface DealsSummary {
+  from: string;
+  to: string;
+  brokers: { brokerId: string | null; brokerName: string | null; open: number; won: number; wonValue: number; wonCommission: number; lost: number }[];
+  /** reasonKey nulo = perdidas antigas, sem motivo padronizado. */
+  lostByReason: { reasonKey: LostReasonKey | null; count: number }[];
 }
 
 export const addressOf = (p: { street: string; number?: string | null; district: string; city: string; state: string }) =>

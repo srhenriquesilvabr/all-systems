@@ -144,7 +144,7 @@ function VaccinationModal({ petId, onClose }: { petId: string; onClose: () => vo
           <Field label="Dose">{(id) => <Input id={id} value={form.dose} onChange={(e) => set({ dose: e.target.value })} placeholder="1ª dose, reforço…" />}</Field>
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Aplicada em">{(id) => <Input id={id} type="date" required value={form.appliedOn} onChange={(e) => set({ appliedOn: e.target.value })} />}</Field>
+          <Field label="Aplicada em">{(id) => <Input id={id} type="date" required max={today()} value={form.appliedOn} onChange={(e) => set({ appliedOn: e.target.value })} />}</Field>
           <Field label="Próximo reforço" hint="O tutor é lembrado antes.">
             {(id) => (
               <div className="flex gap-2">

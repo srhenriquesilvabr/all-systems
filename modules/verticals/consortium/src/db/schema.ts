@@ -50,10 +50,16 @@ export const consQuotas = pgTable(
     contemplatedOn: date('contemplated_on', { mode: 'string' }),
     contemplationType: text('contemplation_type', { enum: ['draw', 'bid'] }),
     bidPercent: numeric('bid_percent', { precision: 5, scale: 2 }),
-    sellerId: uuid('seller_id').references(() => users.id),
+    sellerId: uuid('seller_id').references(() => users.id, { onDelete: 'set null' }),
     createdAt: ts('created_at').notNull().defaultNow(),
   },
-  (t) => [uniqueIndex('cons_quotas_number_key').on(t.tenantId, t.number), index('cons_quotas_group_idx').on(t.tenantId, t.groupCode, t.quotaNumber), index('cons_quotas_customer_idx').on(t.customerId), tenantIsolation()],
+  (t) => [
+    uniqueIndex('cons_quotas_number_key').on(t.tenantId, t.number),
+    index('cons_quotas_group_idx').on(t.tenantId, t.groupCode, t.quotaNumber),
+    index('cons_quotas_customer_idx').on(t.customerId),
+    index('cons_quotas_seller_idx').on(t.tenantId, t.sellerId),
+    tenantIsolation(),
+  ],
 );
 
 export const consAssemblies = pgTable(

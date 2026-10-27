@@ -24,6 +24,18 @@ export const orderItemInput = z.object({
 });
 export type OrderItemInput = z.infer<typeof orderItemInput>;
 
+const spToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+
+/**
+ * Data de entrada da ordem, para registrar ordens antigas. Aceita 'YYYY-MM-DD' (hoje vira "agora",
+ * outro dia vira meio-dia no fuso de SP) ou data e hora completas. Não aceita data futura.
+ */
+export const receivedAtInput = z
+  .union([z.string().trim(), z.date()])
+  .transform((v) => (v instanceof Date ? v : /^\d{4}-\d{2}-\d{2}$/.test(v) ? (v === spToday() ? new Date() : new Date(`${v}T12:00:00-03:00`)) : new Date(v)))
+  .refine((d) => !Number.isNaN(d.getTime()), 'Data de entrada inválida')
+  .refine((d) => d.getTime() <= Date.now() + 5 * 60_000, 'A data de entrada não pode ser no futuro');
+
 export const createOrderInput = z.object({
   customerId: z.string().uuid('Escolha o cliente'),
   workflow: z.string().max(50).default('default'),
@@ -31,6 +43,8 @@ export const createOrderInput = z.object({
   items: z.array(orderItemInput).min(1, 'Inclua ao menos um item').max(200),
   discount: z.coerce.number().min(0).max(1_000_000).multipleOf(0.01).default(0),
   dueAt: z.coerce.date().nullish(),
+  /** Sem data, é agora. */
+  receivedAt: receivedAtInput.optional(),
   notesCustomer: z.string().trim().max(2000).nullish(),
   notesInternal: z.string().trim().max(2000).nullish(),
 });
@@ -95,6 +109,8 @@ export interface OrderSummary {
   paidAmount: number;
   paymentStatus: keyof typeof paymentStatusLabel;
   dueAt: string | null;
+  /** Quando a ordem entrou (anterior ao cadastro ao registrar ordens antigas). */
+  receivedAt: string;
   createdAt: string;
 }
 

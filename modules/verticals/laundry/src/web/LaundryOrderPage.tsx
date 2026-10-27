@@ -30,7 +30,7 @@ export function LaundryOrderPage() {
     <>
       <PageHeader
         title={`Ordem nº ${order.number}`}
-        description={`${order.customer.name} · aberta em ${formatDateTime(order.createdAt)}${order.dueAt ? ` · previsão ${formatDateTime(order.dueAt)}` : ''}`}
+        description={`${order.customer.name} · recebida em ${formatDateTime(order.receivedAt)}${order.dueAt ? ` · previsão ${formatDateTime(order.dueAt)}` : ''}`}
         actions={
           <>
             <Link to={`/lavanderia/ordens/${order.id}/comprovante`}>

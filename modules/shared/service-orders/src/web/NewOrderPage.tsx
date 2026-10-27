@@ -1,4 +1,4 @@
-import { api, ApiError, formatMoney, parseMoney, formatPhone, CustomerSearch, type CustomerOption } from '@all/module-sdk/web';
+import { api, ApiError, formatMoney, parseMoney, formatPhone, today, CustomerSearch, type CustomerOption } from '@all/module-sdk/web';
 import { Alert, Button, Card, Field, Input, PageHeader, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
@@ -22,6 +22,9 @@ export function NewOrderPage() {
   const [items, setItems] = useState<ItemDraft[]>([emptyItem()]);
   const [discount, setDiscount] = useState('');
   const [dueAt, setDueAt] = useState('');
+  // Registro de ordem antiga (migração de outro sistema): fica escondido no caminho rápido.
+  const [pastOrder, setPastOrder] = useState(false);
+  const [receivedAt, setReceivedAt] = useState(today());
   const [notesCustomer, setNotesCustomer] = useState('');
   const [notesInternal, setNotesInternal] = useState('');
   const [errors, setErrors] = useState<string[]>([]);
@@ -55,6 +58,7 @@ export function NewOrderPage() {
       items: lines,
       discount: discountValue,
       dueAt: dueAt ? new Date(dueAt).toISOString() : null,
+      receivedAt: pastOrder ? receivedAt : undefined,
       notesCustomer: notesCustomer || null,
       notesInternal: notesInternal || null,
     });
@@ -63,7 +67,7 @@ export function NewOrderPage() {
       return;
     }
     setErrors([]);
-    create.mutate({ ...parsed.data, dueAt: parsed.data.dueAt?.toISOString() ?? null });
+    create.mutate({ ...parsed.data, dueAt: parsed.data.dueAt?.toISOString() ?? null, receivedAt: pastOrder ? receivedAt : undefined });
   }
 
   const updateItem = (index: number, patch: Partial<ItemDraft>) => setItems(items.map((it, i) => (i === index ? { ...it, ...patch } : it)));
@@ -130,7 +134,15 @@ export function NewOrderPage() {
 
         <Card className="grid gap-4 p-5 sm:grid-cols-2">
           <Field label="Previsão de entrega">{(id) => <Input id={id} type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} />}</Field>
-          <div />
+          {pastOrder ? (
+            <Field label="Recebida em" hint="Em data passada, o cliente não é avisado.">
+              {(id) => <Input id={id} type="date" value={receivedAt} max={today()} onChange={(e) => setReceivedAt(e.target.value)} />}
+            </Field>
+          ) : (
+            <button type="button" className="self-end text-left text-sm text-brand-700 hover:underline" onClick={() => setPastOrder(true)}>
+              Registrar ordem antiga (outra data de entrada)
+            </button>
+          )}
           <Field label="Observações para o cliente" hint="Aparecem no comprovante.">
             {(id) => <Textarea id={id} value={notesCustomer} onChange={(e) => setNotesCustomer(e.target.value)} />}
           </Field>

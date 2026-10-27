@@ -1,5 +1,5 @@
 import { useCan, useSession } from '@all/module-sdk/web';
-import { Alert, Button, Card, EmptyState, Input, PageHeader, Spinner, cn } from '@all/ui';
+import { Alert, Badge, Button, Card, EmptyState, Input, PageHeader, Spinner, cn } from '@all/ui';
 import { useEffect, useMemo, useState, type MouseEvent } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { appointmentStatusLabel, type Appointment, type Resource } from '../contracts';
@@ -37,11 +37,14 @@ export function AgendaPage() {
   const resources = useResources();
   const appointments = useAppointments(from, to);
   const timeOff = useTimeOff(from, to);
-  const [creating, setCreating] = useState<{ time?: string; resourceId?: string } | null>(null);
+  const [creating, setCreating] = useState<{ time?: string; resourceId?: string; roomId?: string } | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
 
-  const columns = (resources.data ?? []).filter((r) => r.active && r.kind === 'professional');
-  const dayHours = columns.flatMap((r) => r.hours.filter((h) => h.weekday === weekday(date)));
+  const professionals = (resources.data ?? []).filter((r) => r.active && r.kind === 'professional');
+  // Salas/equipamentos vêm depois dos profissionais, com as reservas de cada uma.
+  const rooms = (resources.data ?? []).filter((r) => r.active && r.kind === 'room');
+  const columns = [...professionals, ...rooms];
+  const dayHours = professionals.flatMap((r) => r.hours.filter((h) => h.weekday === weekday(date)));
   const visible = (appointments.data ?? []).filter((a) => a.status !== 'cancelled');
 
   // Faixa visível: do primeiro expediente (ou atendimento) ao último, com folga de meia hora.
@@ -61,7 +64,7 @@ export function AgendaPage() {
     if (!canWrite || e.target !== e.currentTarget) return;
     const y = e.clientY - e.currentTarget.getBoundingClientRect().top;
     const minute = startMin + Math.floor(y / pxPerMin / SLOT_MIN) * SLOT_MIN;
-    setCreating({ time: hhmmOf(minute), resourceId: resource.id });
+    setCreating(resource.kind === 'room' ? { time: hhmmOf(minute), roomId: resource.id } : { time: hhmmOf(minute), resourceId: resource.id });
   }
 
   return (
@@ -90,7 +93,7 @@ export function AgendaPage() {
         <Spinner />
       ) : resources.isError ? (
         <Alert>{resources.error.message}</Alert>
-      ) : columns.length === 0 ? (
+      ) : professionals.length === 0 ? (
         <Card>
           <EmptyState
             title="Nenhum profissional cadastrado"
@@ -107,12 +110,20 @@ export function AgendaPage() {
           <div className="min-w-fit" style={{ display: 'grid', gridTemplateColumns: `3.5rem repeat(${columns.length}, minmax(11rem, 1fr))` }}>
             {/* Cabeçalho */}
             <div className="sticky left-0 z-20 border-b border-line bg-surface" />
-            {columns.map((r) => (
-              <div key={r.id} className="flex items-center gap-2 border-b border-l border-line px-3 py-2.5 text-sm font-medium">
-                <span className="size-2.5 rounded-full" style={{ background: r.color }} aria-hidden />
-                {r.name}
-              </div>
-            ))}
+            {columns.map((r) =>
+              r.kind === 'room' ? (
+                <div key={r.id} className={cn('flex items-center gap-2 border-b border-l border-line bg-muted px-3 py-2.5 text-sm font-medium text-fg-muted', r.id === rooms[0]?.id && 'border-l-2 border-l-fg-subtle')}>
+                  <span className="size-2.5 rounded-sm" style={{ background: r.color }} aria-hidden />
+                  {r.name}
+                  <Badge>Sala</Badge>
+                </div>
+              ) : (
+                <div key={r.id} className="flex items-center gap-2 border-b border-l border-line px-3 py-2.5 text-sm font-medium">
+                  <span className="size-2.5 rounded-full" style={{ background: r.color }} aria-hidden />
+                  {r.name}
+                </div>
+              ),
+            )}
 
             {/* Régua de horas */}
             <div className="sticky left-0 z-10 bg-surface" style={{ height }}>
@@ -128,9 +139,10 @@ export function AgendaPage() {
                 key={r.id}
                 date={date}
                 resource={r}
+                firstRoom={r.id === rooms[0]?.id}
                 startMin={startMin}
                 height={height}
-                appointments={visible.filter((a) => a.resourceId === r.id)}
+                appointments={visible.filter((a) => (r.kind === 'room' ? a.roomId === r.id : a.resourceId === r.id))}
                 timeOff={(timeOff.data ?? []).filter((t) => t.resourceId === r.id)}
                 clickable={canWrite}
                 onEmptyClick={(e) => onColumnClick(e, r)}
@@ -143,7 +155,7 @@ export function AgendaPage() {
 
       {creating && (
         <AppointmentForm
-          initial={{ date, time: creating.time, resourceId: creating.resourceId }}
+          initial={{ date, time: creating.time, resourceId: creating.resourceId, roomId: creating.roomId }}
           activeModules={session.modules.map((m) => m.key)}
           onClose={() => setCreating(null)}
           onSaved={(a) => {
@@ -160,6 +172,7 @@ export function AgendaPage() {
 function DayColumn({
   date,
   resource,
+  firstRoom,
   startMin,
   height,
   appointments,
@@ -170,6 +183,7 @@ function DayColumn({
 }: {
   date: string;
   resource: Resource;
+  firstRoom?: boolean;
   startMin: number;
   height: number;
   appointments: Appointment[];
@@ -187,10 +201,11 @@ function DayColumn({
   };
   const now = useNow();
   const nowMin = localDate(now) === date ? minutesOf(localTime(now)) : null;
+  const isRoom = resource.kind === 'room';
 
   return (
     <div
-      className={cn('relative border-l border-line bg-muted/60', clickable && 'cursor-cell')}
+      className={cn('relative border-l border-line bg-muted/60', firstRoom && 'border-l-2 border-l-fg-subtle', clickable && 'cursor-cell')}
       style={{ height, backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${60 * pxPerMin - 1}px, var(--color-line) ${60 * pxPerMin - 1}px, var(--color-line) ${60 * pxPerMin}px)` }}
       onClick={onEmptyClick}
       role="grid"
@@ -222,16 +237,19 @@ function DayColumn({
           onClick={() => onOpen(a.id)}
           className={cn(
             'absolute inset-x-1 overflow-hidden rounded-md border-l-4 bg-brand-50 px-2 py-1 text-left text-xs shadow-sm transition hover:brightness-95',
+            // Reserva de sala: mais discreta, para não parecer um segundo atendimento.
+            isRoom && 'border border-dashed border-l-4 border-line bg-surface shadow-none',
             a.status === 'done' && 'opacity-60',
             a.status === 'no_show' && 'bg-danger-50 line-through opacity-70',
           )}
           style={{ top: top(a.startsAt) + 1, height: span(a.startsAt, a.endsAt) - 2, borderLeftColor: resource.color }}
-          title={`${localTime(a.startsAt)}–${localTime(a.endsAt)} ${a.customer.name}`}
+          title={`${localTime(a.startsAt)}–${localTime(a.endsAt)} ${a.customer.name}${isRoom ? ` (${a.resourceName})` : ''}`}
         >
           <span className="block truncate font-semibold text-fg">
             {localTime(a.startsAt)} {a.customer.name}
           </span>
           <span className="block truncate text-fg-muted">
+            {isRoom ? `${a.resourceName} · ` : a.roomName ? `${a.roomName} · ` : ''}
             {a.subject ? `${a.subject.label} · ` : ''}
             {a.services.map((s) => s.name).join(', ')}
           </span>

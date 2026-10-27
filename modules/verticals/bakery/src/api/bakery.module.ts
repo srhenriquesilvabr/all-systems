@@ -31,6 +31,8 @@ const PRODUCTS = [
 
 const dayStart = (date: string) => sql`(${date}::date)::timestamp at time zone 'America/Sao_Paulo'`;
 const dayEnd = (date: string) => sql`((${date}::date + 1)::timestamp at time zone 'America/Sao_Paulo')`;
+/** Data (YYYY-MM-DD) no fuso de São Paulo. */
+const spDate = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(d);
 
 @Injectable()
 export class BakeryService implements OnModuleInit {
@@ -49,7 +51,13 @@ export class BakeryService implements OnModuleInit {
   /** Encomenda: itens do catálogo (com o preço do cadastro como sugestão) ou sob medida. */
   createOrder(input: BakeryOrderInput) {
     return this.tdb.run(async (tx) => {
-      if (input.dueAt.getTime() < Date.now() - 60 * 60_000) throw new BadRequestException({ code: 'DUE_IN_PAST', message: 'A retirada não pode ser no passado' });
+      // Encomenda nova não tem retirada no passado; ao registrar uma antiga, a retirada só não pode ser antes do pedido.
+      const receivedAt = input.receivedAt ?? new Date();
+      if (spDate(receivedAt) < spDate(new Date())) {
+        if (spDate(input.dueAt) < spDate(receivedAt)) throw new BadRequestException({ code: 'DUE_BEFORE_RECEIVED', message: 'A retirada não pode ser antes da data do pedido' });
+      } else if (input.dueAt.getTime() < Date.now() - 60 * 60_000) {
+        throw new BadRequestException({ code: 'DUE_IN_PAST', message: 'A retirada não pode ser no passado' });
+      }
       const ids = input.items.map((i) => i.productId).filter((id): id is string => !!id);
       const found = ids.length ? await tx.select({ id: salesProducts.id }).from(salesProducts).where(inArray(salesProducts.id, ids)) : [];
       if (found.length !== new Set(ids).size) throw new BadRequestException({ code: 'PRODUCT_NOT_FOUND', message: 'Produto não encontrado' });
@@ -60,6 +68,7 @@ export class BakeryService implements OnModuleInit {
         items: input.items.map((i) => ({ description: i.description, quantity: i.quantity, unitPrice: i.unitPrice, refType: i.productId ? 'sales_product' : null, refId: i.productId ?? null })),
         discount: input.discount,
         dueAt: input.dueAt,
+        receivedAt,
         notesCustomer: input.notesCustomer ?? null,
         notesInternal: input.notesInternal ?? null,
       });

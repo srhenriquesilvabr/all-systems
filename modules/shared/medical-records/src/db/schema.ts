@@ -1,6 +1,7 @@
 import { customers, users } from '@all/core/schema';
 import { id, tenantId, tenantIsolation } from '@all/db';
-import { index, jsonb, pgTable, text, timestamp, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import { date, index, jsonb, pgTable, text, timestamp, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
 
 const ts = (name: string) => timestamp(name, { withTimezone: true });
 
@@ -31,6 +32,10 @@ export const mrEntries = pgTable(
       .references(() => users.id),
     /** Nome do autor no momento do registro (o cadastro do usuário pode mudar). */
     authorName: text('author_name').notNull(),
+    /** Data do atendimento (pode ser anterior ao registro). createdAt fica como auditoria. */
+    occurredOn: date('occurred_on', { mode: 'string' })
+      .notNull()
+      .default(sql`(now() at time zone 'America/Sao_Paulo')::date`),
     createdAt: ts('created_at').notNull().defaultNow(),
   },
   (t) => [

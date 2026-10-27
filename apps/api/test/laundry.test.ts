@@ -1,7 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { auth, createTestApp, login, ownerSession, PASSWORD, tokenFromMail, uniqueEmail, type TestApp } from './helpers';
 
-const PNG_1PX = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+/** Data (YYYY-MM-DD) em São Paulo, `n` dias a partir de hoje. */
+const spDay = (n: number) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date(Date.now() + n * 86_400_000));
+
+const PNG_1PX =Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 
 describe('lavanderia — balcão e produção', () => {
   let t: TestApp;
@@ -202,6 +205,47 @@ describe('lavanderia — balcão e produção', () => {
       ]),
     );
     expect(r.byOperator[0].moves).toBe(5);
+  });
+
+  it('registra ordem antiga: prazo, aviso e relatório seguem a data de entrada', async () => {
+    const s = await setup();
+    const day = spDay(-20);
+    const { body } = await s
+      .as('post', '/laundry/orders')
+      .send({ customerId: s.customer.id, receivedAt: day, lines: [{ serviceId: s.service('Lavagem por quilo').id, quantity: 8, weightKg: 5.5 }] })
+      .expect(201);
+    const { order, pieces } = body as { order: { id: string; receivedAt: string; dueAt: string }; pieces: { itemId: string; statusChangedAt: string }[] };
+    expect(order.receivedAt).toBe(new Date(`${day}T12:00:00-03:00`).toISOString());
+    // Prazo padrão (48 h) contado da entrada, não de agora.
+    expect(new Date(order.dueAt).getTime() - new Date(order.receivedAt).getTime()).toBe(48 * 3600_000);
+    expect(pieces[0]!.statusChangedAt).toBe(order.receivedAt);
+
+    // Ordem antiga não manda "recebemos suas peças".
+    await t.relay.drain();
+    expect(t.mails.filter((m) => m.to === s.customerEmail)).toEqual([]);
+
+    // Receita por serviço entra no dia da entrada.
+    const { body: then } = await s.as('get', `/laundry/reports?from=${day}&to=${day}`).expect(200);
+    expect(then.byService).toEqual([{ serviceName: 'Lavagem por quilo', quantity: 5.5, revenue: 109.45 }]);
+    const today = spDay(0);
+    const { body: before } = await s.as('get', `/laundry/reports?from=${today}&to=${today}`).expect(200);
+    expect(before.byService).toEqual([]);
+
+    // Entregue hoje: o tempo de atendimento conta da entrada (uns 20 dias) e saiu fora do prazo.
+    await move(s, pieces.map((p) => p.itemId), 'ready').expect(200);
+    await s.as('post', `/service-orders/${order.id}/transition`).send({ to: 'delivered' }).expect(201);
+    const { body: now } = await s.as('get', `/laundry/reports?from=${today}&to=${today}`).expect(200);
+    expect(now.delivered).toMatchObject({ total: 1, onTime: 0, withDueDate: 1 });
+    expect(now.delivered.avgHours).toBeGreaterThan(19 * 24);
+  });
+
+  it('não aceita ordem com data de entrada no futuro', async () => {
+    const s = await setup();
+    const res = await s
+      .as('post', '/laundry/orders')
+      .send({ customerId: s.customer.id, receivedAt: spDay(2), lines: [{ serviceId: s.service('Só passar').id, quantity: 1 }] })
+      .expect(400);
+    expect(String(res.body.message)).toMatch(/não pode ser no futuro/);
   });
 
   it('operador move peças, mas não abre ordens', async () => {

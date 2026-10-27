@@ -34,12 +34,17 @@ export const schServices = pgTable(
     online: boolean('online').notNull().default(true),
     active: boolean('active').notNull().default(true),
     description: text('description'),
+    /** Só pode ser marcado com uma sala/equipamento livre. */
+    requiresRoom: boolean('requires_room').notNull().default(false),
     createdAt: ts('created_at').notNull().defaultNow(),
   },
   (t) => [tenantIsolation()],
 );
 
-/** Quem faz cada serviço. Serviço sem nenhuma linha aqui = qualquer profissional. */
+/**
+ * Quem faz cada serviço (profissionais) e onde pode ser feito (salas/equipamentos). Serviço sem
+ * nenhuma linha de um tipo = qualquer recurso daquele tipo.
+ */
 export const schServiceResources = pgTable(
   'sch_service_resources',
   {
@@ -88,8 +93,8 @@ export const schTimeOff = pgTable(
 );
 
 /**
- * Atendimentos. A sobreposição de horários do mesmo profissional é impedida pelo próprio banco
- * (constraint EXCLUDE na migration), inclusive entre duas marcações simultâneas.
+ * Atendimentos. A sobreposição de horários do mesmo profissional, e da mesma sala, é impedida
+ * pelo próprio banco (constraints EXCLUDE na migration), inclusive entre marcações simultâneas.
  */
 export const schAppointments = pgTable(
   'sch_appointments',
@@ -102,6 +107,10 @@ export const schAppointments = pgTable(
     resourceId: uuid('resource_id')
       .notNull()
       .references(() => schResources.id),
+    /** Sala/equipamento reservado junto (opcional). */
+    roomId: uuid('room_id').references(() => schResources.id),
+    /** Horários criados juntos por repetição. */
+    seriesId: uuid('series_id'),
     startsAt: ts('starts_at').notNull(),
     endsAt: ts('ends_at').notNull(),
     status: text('status', { enum: ['scheduled', 'confirmed', 'arrived', 'in_service', 'done', 'no_show', 'cancelled'] })
@@ -131,6 +140,8 @@ export const schAppointments = pgTable(
     index('sch_appointments_resource_idx').on(t.tenantId, t.resourceId, t.startsAt),
     index('sch_appointments_customer_idx').on(t.customerId),
     index('sch_appointments_starts_idx').on(t.tenantId, t.startsAt),
+    index('sch_appointments_room_idx').on(t.tenantId, t.roomId, t.startsAt),
+    index('sch_appointments_series_idx').on(t.seriesId),
     tenantIsolation(),
   ],
 );

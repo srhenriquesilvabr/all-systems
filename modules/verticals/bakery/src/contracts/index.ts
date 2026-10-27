@@ -28,10 +28,22 @@ export const bakeryWorkflow: ServiceOrderWorkflow = {
   notify: { received: 'bakery.order_received', ready: 'bakery.order_ready' },
 };
 
+const spToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+
+/** Mesma regra da ordem de serviço: 'YYYY-MM-DD' (hoje = agora; outro dia = meio-dia em SP) ou data e hora; nunca no futuro. */
+const receivedAtInput = z
+  .string()
+  .trim()
+  .transform((v) => (/^\d{4}-\d{2}-\d{2}$/.test(v) ? (v === spToday() ? new Date() : new Date(`${v}T12:00:00-03:00`)) : new Date(v)))
+  .refine((d) => !Number.isNaN(d.getTime()), 'Data do pedido inválida')
+  .refine((d) => d.getTime() <= Date.now() + 5 * 60_000, 'A data do pedido não pode ser no futuro');
+
 export const bakeryOrderInput = z.object({
   customerId: z.string().uuid('Escolha o cliente'),
   /** Retirada (data e hora). */
   dueAt: z.coerce.date({ errorMap: () => ({ message: 'Informe a data de retirada' }) }),
+  /** Quando a encomenda foi feita. Sem data, é agora; data passada registra uma encomenda antiga. */
+  receivedAt: receivedAtInput.optional(),
   items: z
     .array(
       z.object({

@@ -85,8 +85,30 @@ export const dealInput = z.object({
     })
     .nullish(),
   notes: z.string().trim().max(1000).nullish(),
+  /** Vendedor responsável; sem informar, fica quem abriu a negociação. */
+  sellerId: z.string().uuid().nullish(),
 });
 export type DealInput = z.infer<typeof dealInput>;
+
+export const lostReasonKeys = ['price', 'financing_denied', 'bought_elsewhere', 'gave_up', 'trade_rejected', 'no_contact', 'other'] as const;
+export type LostReasonKey = (typeof lostReasonKeys)[number];
+export const lostReasonLabel: Record<LostReasonKey, string> = {
+  price: 'Preço',
+  financing_denied: 'Financiamento negado',
+  bought_elsewhere: 'Comprou em outra loja',
+  gave_up: 'Desistiu',
+  trade_rejected: 'Troca não aceita',
+  no_contact: 'Sem contato',
+  other: 'Outro',
+};
+
+/** Motivo padronizado; o texto é detalhe opcional, obrigatório só em "outro". */
+export const loseInput = z
+  .object({ reasonKey: z.enum(lostReasonKeys), reason: z.string().trim().max(300).nullish() })
+  .refine((v) => v.reasonKey !== 'other' || (v.reason?.length ?? 0) >= 3, { message: 'Descreva o motivo', path: ['reason'] });
+export type LoseInput = z.infer<typeof loseInput>;
+
+export const sellerInput = z.object({ sellerId: z.string().uuid('Escolha o vendedor') });
 
 export const dealStatuses = ['negotiating', 'credit_analysis', 'credit_approved', 'credit_rejected', 'closed', 'lost'] as const;
 export type DealStatus = (typeof dealStatuses)[number];
@@ -112,11 +134,24 @@ export interface Deal {
   /** Preço - desconto - troca - entrada (só no financiamento). */
   financedAmount: number;
   status: DealStatus;
+  lostReasonKey: LostReasonKey | null;
+  /** Detalhe do motivo (nas perdidas antigas, o texto livre). */
   lostReason: string | null;
+  lostAt: string | null;
+  sellerId: string | null;
   sellerName: string | null;
   notes: string | null;
   closedAt: string | null;
   createdAt: string;
+}
+
+/** Por vendedor: em aberto agora; vendidas (valor líquido) e perdidas dentro do período. */
+export interface DealsSummary {
+  from: string;
+  to: string;
+  sellers: { sellerId: string | null; sellerName: string | null; open: number; won: number; wonValue: number; lost: number }[];
+  /** reasonKey nulo = perdidas antigas, sem motivo padronizado. */
+  lostByReason: { reasonKey: LostReasonKey | null; count: number }[];
 }
 
 export const vehicleTitle = (v: { brand: string; model: string; version?: string | null; yearManufacture: number; yearModel: number }) =>

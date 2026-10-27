@@ -120,6 +120,13 @@
       "when": 1793133068016,
       "tag": "0016_finance_settle_in_finance",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1793136325454,
+      "tag": "0017_vendedor_agenda_datas",
+      "breakpoints": true
     }
   ]
 }

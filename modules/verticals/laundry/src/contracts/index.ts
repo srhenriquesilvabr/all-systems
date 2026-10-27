@@ -62,12 +62,24 @@ export const orderLineInput = z.object({
 });
 export type OrderLineInput = z.infer<typeof orderLineInput>;
 
+const spToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+
+/** Mesma regra da ordem de serviço: 'YYYY-MM-DD' (hoje = agora; outro dia = meio-dia em SP) ou data e hora; nunca no futuro. */
+const receivedAtInput = z
+  .string()
+  .trim()
+  .transform((v) => (/^\d{4}-\d{2}-\d{2}$/.test(v) ? (v === spToday() ? new Date() : new Date(`${v}T12:00:00-03:00`)) : new Date(v)))
+  .refine((d) => !Number.isNaN(d.getTime()), 'Data de entrada inválida')
+  .refine((d) => d.getTime() <= Date.now() + 5 * 60_000, 'A data de entrada não pode ser no futuro');
+
 export const laundryOrderInput = z.object({
   customerId: z.string().uuid('Escolha o cliente'),
   lines: z.array(orderLineInput).min(1, 'Inclua ao menos uma peça').max(100),
   discount: z.coerce.number().min(0).max(1_000_000).multipleOf(0.01).default(0),
-  /** Sem data, usa o maior prazo entre os serviços escolhidos. */
+  /** Sem data, usa o maior prazo entre os serviços escolhidos, contado da entrada. */
   dueAt: z.coerce.date().nullish(),
+  /** Quando as peças chegaram. Sem data, é agora; data passada registra uma ordem antiga. */
+  receivedAt: receivedAtInput.optional(),
   notesCustomer: z.string().trim().max(2000).nullish(),
   notesInternal: z.string().trim().max(2000).nullish(),
 });

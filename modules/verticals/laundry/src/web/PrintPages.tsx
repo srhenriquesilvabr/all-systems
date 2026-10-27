@@ -64,7 +64,7 @@ export function PrintReceiptPage() {
       <div className="mx-auto max-w-[80mm] bg-white p-3 font-mono text-[12px] leading-snug text-black">
         <p className="text-center text-sm font-bold">{session.tenant.name}</p>
         <p className="mt-2 text-center text-base font-bold">ORDEM Nº {order.number}</p>
-        <p className="text-center">{formatDateTime(order.createdAt)}</p>
+        <p className="text-center">{formatDateTime(order.receivedAt)}</p>
         <hr className="my-2 border-dashed border-black" />
         <p>Cliente: {order.customer.name}</p>
         {order.customer.phone && <p>Tel.: {formatPhone(order.customer.phone)}</p>}

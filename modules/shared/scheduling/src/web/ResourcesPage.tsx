@@ -161,8 +161,8 @@ function ResourceModal({ resource, onClose }: { resource: Resource | null; onClo
           </div>
         </fieldset>
         <fieldset>
-          <legend className="mb-1.5 text-sm font-medium">Serviços que faz</legend>
-          <p className="mb-2 text-xs text-fg-muted">Nenhum marcado = faz todos.</p>
+          <legend className="mb-1.5 text-sm font-medium">{kind === 'room' ? 'Serviços feitos nesta sala/equipamento' : 'Serviços que faz'}</legend>
+          <p className="mb-2 text-xs text-fg-muted">{kind === 'room' ? 'Nenhum marcado = serve para todos.' : 'Nenhum marcado = faz todos.'}</p>
           <div className="grid max-h-48 gap-1.5 overflow-y-auto sm:grid-cols-2">
             {services.data?.map((s) => (
               <Checkbox

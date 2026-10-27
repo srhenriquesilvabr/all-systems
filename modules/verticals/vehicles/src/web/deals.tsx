@@ -1,12 +1,23 @@
 import { FinancingPanel, ProposalList, useProposals } from '@all/banking/web';
-import { api, ApiError, CustomerSearch, formatDateTime, formatMoney, parseMoney, useCan, type CustomerOption } from '@all/module-sdk/web';
+import { api, ApiError, CustomerSearch, formatDateTime, formatMoney, parseMoney, useCan, useSession, type CustomerOption } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router';
-import { dealStatuses, dealStatusLabel, type Deal, type DealStatus, type Vehicle } from '../contracts';
+import { dealStatuses, dealStatusLabel, lostReasonKeys, lostReasonLabel, type Deal, type DealsSummary, type DealStatus, type LostReasonKey, type Vehicle } from '../contracts';
 
 const key = ['vehicles'] as const;
+const thisMonth = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date()).slice(0, 7);
+const monthBounds = (ym: string) => {
+  const [y, m] = ym.split('-').map(Number) as [number, number];
+  return { from: `${ym}-01`, to: new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10) };
+};
+const reasonText = (d: Pick<Deal, 'lostReasonKey' | 'lostReason'>) =>
+  [d.lostReasonKey ? lostReasonLabel[d.lostReasonKey] : null, d.lostReason].filter(Boolean).join(' — ');
+
+function useTeam() {
+  return useQuery({ queryKey: [...key, 'team'], queryFn: () => api<{ id: string; name: string }[]>('/users/team'), staleTime: 5 * 60_000 });
+}
 export const dealTone: Record<DealStatus, 'brand' | 'warning' | 'success' | 'danger' | 'neutral'> = {
   negotiating: 'brand',
   credit_analysis: 'warning',
@@ -18,11 +29,17 @@ export const dealTone: Record<DealStatus, 'brand' | 'warning' | 'success' | 'dan
 
 export function DealsPage() {
   const [status, setStatus] = useState('');
-  const list = useQuery({ queryKey: [...key, 'deals', { status }], queryFn: () => api<Deal[]>('/vehicles/deals', { query: { status: status || undefined } }) });
+  const [sellerId, setSellerId] = useState('');
+  const team = useTeam();
+  const list = useQuery({
+    queryKey: [...key, 'deals', { status, sellerId }],
+    queryFn: () => api<Deal[]>('/vehicles/deals', { query: { status: status || undefined, sellerId: sellerId || undefined } }),
+  });
   return (
     <>
       <PageHeader title="Negociações" description="Abra a negociação na página do veículo. O financiamento é simulado e enviado aos bancos parceiros." />
-      <div className="mb-4">
+      <SellersSummary />
+      <div className="mb-4 flex flex-wrap gap-3">
         <Select aria-label="Situação" className="max-w-56" value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="">Todas</option>
           {dealStatuses.map((s) => (
@@ -30,6 +47,15 @@ export function DealsPage() {
               {dealStatusLabel[s]}
             </option>
           ))}
+        </Select>
+        <Select aria-label="Vendedor" className="max-w-56" value={sellerId} onChange={(e) => setSellerId(e.target.value)}>
+          <option value="">Todos os vendedores</option>
+          {team.data?.map((u) => (
+            <option key={u.id} value={u.id}>
+              {u.name}
+            </option>
+          ))}
+          <option value="none">Sem vendedor</option>
         </Select>
       </div>
       <Card>
@@ -48,6 +74,7 @@ export function DealsPage() {
                 <Th>Nº</Th>
                 <Th>Cliente</Th>
                 <Th>Veículo</Th>
+                <Th>Vendedor</Th>
                 <Th>Pagamento</Th>
                 <Th className="text-right">Valor</Th>
                 <Th>Situação</Th>
@@ -63,10 +90,12 @@ export function DealsPage() {
                   </Td>
                   <Td>{d.customer.name}</Td>
                   <Td>{d.vehicle.title}</Td>
+                  <Td>{d.sellerName ?? '—'}</Td>
                   <Td>{d.paymentType === 'cash' ? 'À vista' : `Financiado ${formatMoney(d.financedAmount)}`}</Td>
                   <Td className="text-right tabular-nums">{formatMoney(d.price - d.discount)}</Td>
                   <Td>
                     <Badge tone={dealTone[d.status]}>{dealStatusLabel[d.status]}</Badge>
+                    {d.status === 'lost' && (d.lostReasonKey || d.lostReason) && <div className="text-xs text-fg-muted">{reasonText(d)}</div>}
                   </Td>
                 </tr>
               ))}
@@ -78,6 +107,68 @@ export function DealsPage() {
   );
 }
 
+/** Resumo do mês por vendedor e perdas por motivo (calculado na API). */
+function SellersSummary() {
+  const [month, setMonth] = useState(thisMonth());
+  const summary = useQuery({ queryKey: [...key, 'deals-summary', month], queryFn: () => api<DealsSummary>('/vehicles/deals/summary', { query: monthBounds(month) }) });
+  const lostTotal = summary.data?.lostByReason.reduce((n, r) => n + r.count, 0) ?? 0;
+  return (
+    <Card className="mb-4 p-4 text-sm">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <span className="font-medium">Resultado por vendedor</span>
+        <Input aria-label="Mês" type="month" className="max-w-44" value={month} onChange={(e) => e.target.value && setMonth(e.target.value)} />
+      </div>
+      {summary.isPending ? (
+        <Spinner />
+      ) : summary.isError ? (
+        <Alert>{summary.error.message}</Alert>
+      ) : summary.data.sellers.length === 0 ? (
+        <p className="text-fg-muted">Nada em aberto nem encerrado neste mês.</p>
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-[1fr_16rem]">
+          <Table>
+            <thead>
+              <tr>
+                <Th>Vendedor</Th>
+                <Th className="text-right">Em aberto</Th>
+                <Th className="text-right">Vendidas</Th>
+                <Th className="text-right">Valor vendido</Th>
+                <Th className="text-right">Perdidas</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {summary.data.sellers.map((s) => (
+                <tr key={s.sellerId ?? 'none'}>
+                  <Td>{s.sellerName ?? 'Sem vendedor'}</Td>
+                  <Td className="text-right tabular-nums">{s.open}</Td>
+                  <Td className="text-right tabular-nums">{s.won}</Td>
+                  <Td className="text-right tabular-nums">{formatMoney(s.wonValue)}</Td>
+                  <Td className="text-right tabular-nums">{s.lost}</Td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+          <div>
+            <p className="mb-2 font-medium">Perdas por motivo</p>
+            {lostTotal === 0 ? (
+              <p className="text-fg-muted">Nenhuma perda no mês.</p>
+            ) : (
+              <ul className="space-y-1">
+                {summary.data.lostByReason.map((r) => (
+                  <li key={r.reasonKey ?? 'none'} className="flex justify-between gap-3">
+                    <span className="text-fg-muted">{r.reasonKey ? lostReasonLabel[r.reasonKey] : 'Sem motivo padronizado'}</span>
+                    <span className="tabular-nums">{r.count}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export function DealPage() {
   const { id = '' } = useParams();
   const queryClient = useQueryClient();
@@ -86,15 +177,18 @@ export function DealPage() {
   const proposals = useProposals('vehicle_deal', id);
   const [editing, setEditing] = useState(false);
   const [losing, setLosing] = useState(false);
+  const [reassigning, setReassigning] = useState(false);
+  const [reasonKey, setReasonKey] = useState<LostReasonKey | ''>('');
   const [reason, setReason] = useState('');
   const close = useMutation({ mutationFn: () => api(`/vehicles/deals/${id}/close`, { method: 'POST' }), onSuccess: () => queryClient.invalidateQueries() });
   const lose = useMutation({
-    mutationFn: () => api(`/vehicles/deals/${id}/lose`, { method: 'POST', body: { reason } }),
+    mutationFn: () => api(`/vehicles/deals/${id}/lose`, { method: 'POST', body: { reasonKey, reason: reason.trim() || null } }),
     onSuccess: () => {
       setLosing(false);
       queryClient.invalidateQueries();
     },
   });
+  const loseReady = reasonKey !== '' && (reasonKey !== 'other' || reason.trim().length >= 3);
 
   if (deal.isPending) return <Spinner />;
   if (deal.isError) return <Alert>{deal.error.message}</Alert>;
@@ -132,7 +226,18 @@ export function DealPage() {
       <div className="grid gap-6 lg:grid-cols-[20rem_1fr]">
         <Card className="h-fit space-y-2 p-5 text-sm">
           <Badge tone={dealTone[d.status]}>{dealStatusLabel[d.status]}</Badge>
-          {d.lostReason && <p className="text-fg-muted">Motivo: {d.lostReason}</p>}
+          {(d.lostReasonKey || d.lostReason) && <p className="text-fg-muted">Motivo: {reasonText(d)}</p>}
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-fg-muted">Vendedor</span>
+            <span>
+              {d.sellerName ?? '—'}
+              {canWrite && open && (
+                <button type="button" className="ml-2 text-brand-700 hover:underline" onClick={() => setReassigning(true)}>
+                  trocar
+                </button>
+              )}
+            </span>
+          </div>
           <Line label="Preço">{formatMoney(d.price)}</Line>
           {d.discount > 0 && <Line label="Desconto">-{formatMoney(d.discount)}</Line>}
           <Line label="Valor da venda" strong>
@@ -193,18 +298,75 @@ export function DealPage() {
               <Button variant="secondary" onClick={() => setLosing(false)}>
                 Voltar
               </Button>
-              <Button variant="danger" disabled={reason.trim().length < 3} loading={lose.isPending} onClick={() => lose.mutate()}>
+              <Button variant="danger" disabled={!loseReady} loading={lose.isPending} onClick={() => lose.mutate()}>
                 Confirmar
               </Button>
             </>
           }
         >
-          <Field label="Motivo" hint="O veículo volta a ficar disponível.">
-            {(fid) => <Input id={fid} value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />}
-          </Field>
+          <div className="space-y-4">
+            <Field label="Motivo" hint="O veículo volta a ficar disponível.">
+              {(fid) => (
+                <Select id={fid} value={reasonKey} onChange={(e) => setReasonKey(e.target.value as LostReasonKey | '')} autoFocus>
+                  <option value="">Escolha…</option>
+                  {lostReasonKeys.map((k) => (
+                    <option key={k} value={k}>
+                      {lostReasonLabel[k]}
+                    </option>
+                  ))}
+                </Select>
+              )}
+            </Field>
+            <Field label={reasonKey === 'other' ? 'Detalhes' : 'Detalhes (opcional)'}>{(fid) => <Input id={fid} maxLength={300} value={reason} onChange={(e) => setReason(e.target.value)} />}</Field>
+          </div>
         </Modal>
       )}
+      {reassigning && <SellerModal deal={d} onClose={() => setReassigning(false)} />}
     </>
+  );
+}
+
+function SellerModal({ deal, onClose }: { deal: Deal; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const team = useTeam();
+  const [sellerId, setSellerId] = useState(deal.sellerId ?? '');
+  const save = useMutation({
+    mutationFn: () => api<Deal>(`/vehicles/deals/${deal.id}/seller`, { method: 'PATCH', body: { sellerId } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: key });
+      onClose();
+    },
+  });
+  return (
+    <Modal
+      open
+      title="Trocar vendedor"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Voltar
+          </Button>
+          <Button disabled={!sellerId || sellerId === deal.sellerId} loading={save.isPending} onClick={() => save.mutate()}>
+            Salvar
+          </Button>
+        </>
+      }
+    >
+      {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao salvar'}</Alert>}
+      <Field label="Vendedor responsável">
+        {(fid) => (
+          <Select id={fid} value={sellerId} onChange={(e) => setSellerId(e.target.value)}>
+            <option value="">Escolha…</option>
+            {team.data?.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name}
+              </option>
+            ))}
+          </Select>
+        )}
+      </Field>
+    </Modal>
   );
 }
 
@@ -222,7 +384,11 @@ const money = (n: number | null | undefined) => (n == null ? '' : n.toFixed(2).r
 export function DealModal({ vehicle, deal, onClose, onSaved }: { vehicle?: Vehicle; deal?: Deal; onClose: () => void; onSaved?: (d: Deal) => void }) {
   const queryClient = useQueryClient();
   const [customer, setCustomer] = useState<CustomerOption | null>(null);
+  const { user } = useSession();
+  const team = useTeam();
   const [form, setForm] = useState({
+    // Nova negociação: quem está abrindo; na edição, o atual (vazio = mantém).
+    sellerId: deal ? (deal.sellerId ?? '') : user.id,
     price: money(deal?.price ?? vehicle?.price),
     discount: money(deal?.discount ?? 0),
     paymentType: deal?.paymentType ?? 'financing',
@@ -245,6 +411,7 @@ export function DealModal({ vehicle, deal, onClose, onSaved }: { vehicle?: Vehic
         downPayment: form.paymentType === 'financing' ? parseMoney(form.downPayment) || 0 : 0,
         tradeIn: form.hasTrade ? { brand: form.tradeBrand, model: form.tradeModel, yearModel: Number(form.tradeYear), plate: form.tradePlate || null, value: parseMoney(form.tradeValue) } : null,
         notes: form.notes || null,
+        sellerId: form.sellerId || null,
       };
       return deal ? api<Deal>(`/vehicles/deals/${deal.id}`, { method: 'PATCH', body }) : api<Deal>('/vehicles/deals', { method: 'POST', body: { ...body, customerId: customer?.id, vehicleId: vehicle!.id } });
     },
@@ -300,6 +467,20 @@ export function DealModal({ vehicle, deal, onClose, onSaved }: { vehicle?: Vehic
               )}
             </Field>
             {form.paymentType === 'financing' && <Field label="Entrada (R$)">{(id) => <Input id={id} inputMode="decimal" value={form.downPayment} onChange={(e) => set({ downPayment: e.target.value })} />}</Field>}
+            <Field label="Vendedor">
+              {(id) => (
+                <Select id={id} value={form.sellerId} onChange={(e) => set({ sellerId: e.target.value })}>
+                  {deal && !deal.sellerId && <option value="">Sem vendedor</option>}
+                  {team.data?.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.name}
+                    </option>
+                  ))}
+                  {/* Vendedor que saiu da equipe continua aparecendo até ser trocado. */}
+                  {deal?.sellerId && team.data && !team.data.some((u) => u.id === deal.sellerId) && <option value={deal.sellerId}>{deal.sellerName ?? 'Atual'}</option>}
+                </Select>
+              )}
+            </Field>
           </div>
           <Checkbox label="Tem carro na troca" checked={form.hasTrade} onChange={(e) => set({ hasTrade: e.target.checked })} />
           {form.hasTrade && (

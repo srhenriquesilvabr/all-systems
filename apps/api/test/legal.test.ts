@@ -96,6 +96,29 @@ describe('escritório de advocacia', () => {
     expect(c.nextDeadline.title).toBe('Memoriais');
   });
 
+  it('prazo cumprido em data passada: andamento com essa data; data futura é recusada', async () => {
+    const s = await office();
+    const { body: lc } = await s.newCase({ number: cnj(78) }).expect(201);
+    const lastWeek = plusDays(localToday(), -7);
+    const { body: d } = await s.as('post', '/legal/deadlines').send({ caseId: lc.id, title: 'Contestação', dueOn: plusDays(localToday(), -5) }).expect(201);
+
+    const future = await s.as('post', `/legal/deadlines/${d.id}/done`).send({ doneOn: plusDays(localToday(), 1) }).expect(400);
+    expect(String(future.body.message)).toMatch(/não pode ser no futuro/);
+
+    await s.as('post', `/legal/cases/${lc.id}/updates`).send({ occurredOn: localToday(), description: 'Juntada de documentos' }).expect(201);
+    await s.as('post', `/legal/deadlines/${d.id}/done`).send({ doneOn: lastWeek }).expect(204);
+
+    const { body: done } = await s.as('get', `/legal/deadlines?caseId=${lc.id}&status=done`).expect(200);
+    expect(done).toHaveLength(1);
+    expect(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date(done[0].doneAt))).toBe(lastWeek);
+    // Andamentos do mais recente ao mais antigo, pela data informada (não pela de cadastro).
+    const { body: updates } = await s.as('get', `/legal/cases/${lc.id}/updates`).expect(200);
+    expect(updates.map((u: { occurredOn: string; description: string }) => [u.occurredOn, u.description])).toEqual([
+      [localToday(), 'Juntada de documentos'],
+      [lastWeek, 'Prazo cumprido: Contestação'],
+    ]);
+  });
+
   it('honorários: parcelas fixas, êxito sobre o valor obtido e cancelamento', async () => {
     const s = await office();
     const { body: lc } = await s.newCase().expect(201);

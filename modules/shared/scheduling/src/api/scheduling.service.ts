@@ -18,17 +18,23 @@ import type { Tx } from '@all/db';
 import { requestContext } from '@all/module-sdk';
 import { NotificationsService } from '@all/notifications';
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
-import { and, asc, eq, gte, inArray, isNull, lt, notInArray, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, isNull, lt, ne, notInArray, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
+import { randomUUID } from 'node:crypto';
 import {
   appointmentStatusLabel,
+  MAX_OCCURRENCES,
   statusTransitions,
   type Appointment,
   type AppointmentInput,
+  type AppointmentSeriesInput,
   type AppointmentStatus,
   type AvailabilitySlots,
+  type BookingSubjectField,
   type Resource,
   type ResourceInput,
   type SchedulingSettings,
+  type SeriesResult,
   type Service,
   type ServiceInput,
 } from '../contracts';
@@ -42,11 +48,16 @@ import {
   schTimeOff,
   schWorkingHours,
 } from '../db/schema';
-import { addMinutes, freeSlots, localToUtc, utcToLocal, weekdayOf } from './time';
+import { addMinutes, freeSlots, localToUtc, seriesDates, utcToLocal, weekdayOf, type Interval } from './time';
 
 const MODULE = 'shared.scheduling';
 const SOURCE = 'appointment';
 export const STATUS_CHANGED = 'shared.scheduling.status_changed';
+/** Nome da constraint EXCLUDE de sala (SQL na migration). */
+const ROOM_CONSTRAINT = 'sch_appointments_room_no_overlap';
+/** Status que liberam o horário (mesma regra das constraints). */
+const RELEASED: AppointmentStatus[] = ['cancelled', 'no_show'];
+const room = alias(schResources, 'room');
 
 /** Evento publicado a cada mudança de status de um atendimento. */
 export interface AppointmentStatusChanged {
@@ -67,14 +78,29 @@ export interface ServicePricer {
   price(tx: Tx, ctx: { appointmentId: string; customerId: string; serviceId: string; price: number }): Promise<{ price: number; label?: string } | null>;
 }
 
+/**
+ * "Para quem é" no agendamento online (ex.: o pet): campos extras na página pública e como
+ * transformá-los no subject do horário. Registrado por outro módulo (a agenda não importa nenhum);
+ * vale o primeiro cujo módulo está ativo na empresa.
+ */
+export interface BookingSubjectProvider {
+  moduleKey: string;
+  label: string;
+  fields: BookingSubjectField[];
+  /** Roda na transação da marcação, com o cliente já encontrado/criado. */
+  resolve(tx: Tx, ctx: { customerId: string; values: Record<string, string> }): Promise<{ type: string; id: string; label: string }>;
+}
+
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const badRequest = (code: string, message: string) => new BadRequestException({ code, message });
+const roomTaken = (message = 'Esta sala/equipamento já está ocupado neste horário') => new ConflictException({ code: 'ROOM_TAKEN', message });
 
 type AppointmentRow = typeof schAppointments.$inferSelect;
 
 @Injectable()
 export class SchedulingService implements OnModuleInit {
   private readonly pricers: ServicePricer[] = [];
+  private readonly bookingSubjects: BookingSubjectProvider[] = [];
   private readonly logger = new Logger('Agenda');
 
   constructor(
@@ -241,7 +267,7 @@ export class SchedulingService implements OnModuleInit {
               inArray(schAppointments.resourceId, ids),
               lt(schAppointments.startsAt, dayEnd),
               sql`${schAppointments.endsAt} > ${dayStart}`,
-              notInArray(schAppointments.status, ['cancelled', 'no_show']),
+              notInArray(schAppointments.status, RELEASED),
             ),
           ),
         tx
@@ -250,20 +276,29 @@ export class SchedulingService implements OnModuleInit {
           .where(and(inArray(schTimeOff.resourceId, ids), lt(schTimeOff.startsAt, dayEnd), sql`${schTimeOff.endsAt} > ${dayStart}`)),
       ]);
 
+      // Serviço que precisa de sala: o horário só vale se alguma sala que serve estiver livre.
+      const needsRoom = services.some((s) => s.requiresRoom);
+      const rooms = needsRoom ? await this.eligibleResources(tx, services.map((s) => s.id), undefined, 'room') : [];
+      const roomBusy = needsRoom ? await this.busyIntervals(tx, rooms.map((r) => r.id), dayStart, dayEnd) : [];
+      const roomFree = (time: string) => {
+        const start = localToUtc(opts.date, time);
+        const end = addMinutes(start, duration);
+        return rooms.some((r) => !roomBusy.some((b) => b.resourceId === r.id && b.start < end && b.end > start));
+      };
+
       const now = new Date();
       const notBefore = opts.online ? addMinutes(now, settings.onlineMinNoticeHours * 60) : now;
-      return resources.map((r) => ({
-        resourceId: r.id,
-        resourceName: r.name,
-        slots: freeSlots({
+      return resources.map((r) => {
+        const slots = freeSlots({
           date: opts.date,
           hours: hours.filter((h) => h.resourceId === r.id).map((h) => ({ start: h.startTime, end: h.endTime })),
           busy: [...busyAppointments, ...timeOff].filter((b) => b.resourceId === r.id),
           durationMin: duration,
           stepMin: settings.slotMinutes,
           notBefore,
-        }),
-      }));
+        });
+        return { resourceId: r.id, resourceName: r.name, slots: needsRoom ? slots.filter(roomFree) : slots };
+      });
     });
   }
 
@@ -272,10 +307,11 @@ export class SchedulingService implements OnModuleInit {
   listAppointments(opts: { from: Date; to: Date; resourceId?: string; customerId?: string }): Promise<Appointment[]> {
     return this.tdb.run(async (tx) => {
       const rows = await tx
-        .select({ a: schAppointments, resourceName: schResources.name, customer: { id: customers.id, name: customers.name, phone: customers.phone, email: customers.email } })
+        .select(appointmentColumns)
         .from(schAppointments)
         .innerJoin(schResources, eq(schResources.id, schAppointments.resourceId))
         .innerJoin(customers, eq(customers.id, schAppointments.customerId))
+        .leftJoin(room, eq(room.id, schAppointments.roomId))
         .where(
           and(
             opts.customerId ? undefined : lt(schAppointments.startsAt, opts.to),
@@ -288,7 +324,7 @@ export class SchedulingService implements OnModuleInit {
       const services = rows.length
         ? await tx.select().from(schAppointmentServices).where(inArray(schAppointmentServices.appointmentId, rows.map((r) => r.a.id)))
         : [];
-      return rows.map((r) => toAppointmentDto(r.a, r.resourceName, r.customer, services.filter((s) => s.appointmentId === r.a.id)));
+      return rows.map((r) => toAppointmentDto(r.a, r.resourceName, r.roomName, r.customer, services.filter((s) => s.appointmentId === r.a.id)));
     });
   }
 
@@ -300,7 +336,11 @@ export class SchedulingService implements OnModuleInit {
     return this.tdb.run((tx) => this.createInTx(tx, input, opts));
   }
 
-  async createInTx(tx: Tx, input: AppointmentInput, opts: { source?: 'admin' | 'online' | 'whatsapp'; online?: boolean } = {}): Promise<Appointment> {
+  async createInTx(
+    tx: Tx,
+    input: AppointmentInput,
+    opts: { source?: 'admin' | 'online' | 'whatsapp'; online?: boolean; seriesId?: string; notify?: boolean } = {},
+  ): Promise<Appointment> {
     const { tenantId, userId } = requestContext.requireTenant();
     const customer = await this.customers.findInTx(tx, input.customerId);
     if (!customer || customer.anonymizedAt) throw badRequest('CUSTOMER_NOT_FOUND', 'Cliente não encontrado');
@@ -312,11 +352,14 @@ export class SchedulingService implements OnModuleInit {
 
     const duration = services.reduce((sum, s) => sum + s.durationMin + s.bufferMin, 0);
     const endsAt = addMinutes(input.startsAt, duration);
+    const roomId = await this.pickRoom(tx, services, input.roomId ?? null, input.startsAt, endsAt);
 
     const appointment = await this.insertAppointment(tx, {
       tenantId,
       customerId: customer.id,
       resourceId: resource.id,
+      roomId,
+      seriesId: opts.seriesId ?? null,
       startsAt: input.startsAt,
       endsAt,
       source: opts.source ?? 'admin',
@@ -341,14 +384,100 @@ export class SchedulingService implements OnModuleInit {
       entity: 'appointment',
       entityId: appointment.id,
     });
-    await this.notify(tx, appointment.id, 'shared.scheduling.booked');
-    await this.audit.log(tx, { action: 'appointment.created', entity: 'appointment', entityId: appointment.id, data: { source: opts.source ?? 'admin' } });
+    if (opts.notify !== false) await this.notify(tx, appointment.id, 'shared.scheduling.booked');
+    await this.audit.log(tx, {
+      action: 'appointment.created',
+      entity: 'appointment',
+      entityId: appointment.id,
+      data: { source: opts.source ?? 'admin', ...(opts.seriesId ? { seriesId: opts.seriesId } : {}) },
+    });
     return this.detailInTx(tx, appointment.id);
+  }
+
+  /**
+   * Série com repetição, numa transação só. Cada data passa pelo mesmo caminho de um horário
+   * avulso (preço, pacotes, histórico); as que não cabem (profissional ocupado, bloqueio, fora do
+   * expediente, sala ocupada) ficam de fora e voltam na resposta. O cliente recebe uma mensagem só.
+   */
+  createSeries(input: AppointmentSeriesInput): Promise<SeriesResult> {
+    return this.tdb.run(async (tx) => {
+      const { recurrence, ...base } = input;
+      const resource = await this.resourceOrFail(tx, base.resourceId);
+      const services = await this.servicesOrFail(tx, base.serviceIds);
+      const duration = services.reduce((sum, s) => sum + s.durationMin + s.bufferMin, 0);
+      const first = utcToLocal(base.startsAt);
+      const seriesId = randomUUID();
+      const created: Appointment[] = [];
+      const skipped: SeriesResult['skipped'] = [];
+
+      for (const { date, exists } of seriesDates(first.date, recurrence, MAX_OCCURRENCES)) {
+        if (!exists) {
+          skipped.push({ date, time: first.time, reason: `O mês não tem dia ${Number(date.slice(8))}` });
+          continue;
+        }
+        const startsAt = localToUtc(date, first.time);
+        const reason = await this.conflictReason(tx, resource.id, startsAt, addMinutes(startsAt, duration), base.roomId ?? null);
+        if (reason) {
+          skipped.push({ date, time: first.time, reason });
+          continue;
+        }
+        try {
+          // Savepoint: um conflito de última hora (constraint) desfaz só esta data.
+          created.push(await tx.transaction((sp) => this.createInTx(sp, { ...base, startsAt }, { seriesId, notify: false })));
+        } catch (err) {
+          if (!(err instanceof ConflictException)) throw err;
+          const body = err.getResponse() as { message?: string };
+          skipped.push({ date, time: first.time, reason: body.message ?? 'Horário ocupado' });
+        }
+      }
+      if (!created.length) throw new ConflictException({ code: 'SERIES_EMPTY', message: 'Nenhuma das datas coube na agenda', skipped });
+
+      if (created.length === 1) await this.notify(tx, created[0]!.id, 'shared.scheduling.booked');
+      else await this.notifySeries(tx, created, 'shared.scheduling.series_booked');
+      await this.audit.log(tx, { action: 'appointment.series_created', entity: 'appointment', entityId: created[0]!.id, data: { seriesId, recurrence, created: created.length, skipped: skipped.length } });
+      return { seriesId, created, skipped };
+    });
+  }
+
+  /** Cancela este horário e os seguintes da mesma série que ainda não aconteceram. */
+  cancelSeries(id: string, reason: string) {
+    return this.tdb.run(async (tx) => {
+      const current = await this.findOrFail(tx, id, true);
+      if (!current.seriesId) throw badRequest('NOT_IN_SERIES', 'Este horário não faz parte de uma série');
+      if (!reason.trim()) throw badRequest('REASON_REQUIRED', 'Informe o motivo do cancelamento');
+      const rows = await tx
+        .select({ id: schAppointments.id })
+        .from(schAppointments)
+        .where(
+          and(
+            eq(schAppointments.seriesId, current.seriesId),
+            gte(schAppointments.startsAt, current.startsAt),
+            inArray(schAppointments.status, ['scheduled', 'confirmed', 'arrived']),
+          ),
+        )
+        .orderBy(asc(schAppointments.startsAt));
+      if (!rows.length) throw badRequest('NOTHING_TO_CANCEL', 'Não há horários em aberto nesta série a partir deste');
+
+      const cancelled: Appointment[] = [];
+      for (const r of rows) cancelled.push(await this.setStatusInTx(tx, r.id, 'cancelled', reason, { notifyCancel: false }));
+      if (cancelled.length === 1) await this.notify(tx, cancelled[0]!.id, 'shared.scheduling.cancelled');
+      else await this.notifySeries(tx, cancelled, 'shared.scheduling.series_cancelled');
+      return { cancelled: cancelled.length };
+    });
   }
 
   /** Verticais registram ajustes de preço (ver ServicePricer). */
   registerPricer(pricer: ServicePricer) {
     this.pricers.push(pricer);
+  }
+
+  /** Outros módulos registram o "para quem é" do agendamento online (ver BookingSubjectProvider). */
+  registerBookingSubject(provider: BookingSubjectProvider) {
+    if (!this.bookingSubjects.some((p) => p.moduleKey === provider.moduleKey)) this.bookingSubjects.push(provider);
+  }
+
+  bookingSubjectFor(activeModules: ReadonlySet<string>): BookingSubjectProvider | null {
+    return this.bookingSubjects.find((p) => activeModules.has(p.moduleKey)) ?? null;
   }
 
   private async priceLines(tx: Tx, appointmentId: string, customerId: string, services: { id: string; name: string; durationMin: number; bufferMin: number; price: string }[]) {
@@ -385,6 +514,8 @@ export class SchedulingService implements OnModuleInit {
         if (!(await this.eligibleResources(tx, serviceIds, resourceId)).length) throw badRequest('RESOURCE_NOT_ELIGIBLE', 'Este profissional não faz todos os serviços do atendimento');
       }
       const duration = current.endsAt.getTime() - current.startsAt.getTime();
+      // A sala vai junto: precisa estar livre no novo horário.
+      if (current.roomId && (await this.busyIntervals(tx, [current.roomId], input.startsAt, new Date(input.startsAt.getTime() + duration), id)).length) throw roomTaken();
       await this.guardOverlap(() =>
         tx
           .update(schAppointments)
@@ -563,27 +694,130 @@ export class SchedulingService implements OnModuleInit {
     return row!;
   }
 
-  /** A constraint EXCLUDE do banco recusa horários sobrepostos do mesmo profissional. */
+  /** As constraints EXCLUDE do banco recusam horários sobrepostos do mesmo profissional ou da mesma sala. */
   private async guardOverlap<T>(fn: () => Promise<T>): Promise<T> {
     try {
       return await fn();
     } catch (err) {
-      const code = (err as { cause?: { code?: string }; code?: string }).cause?.code ?? (err as { code?: string }).code;
-      if (code === '23P01') throw new ConflictException({ code: 'SLOT_TAKEN', message: 'Este horário já está ocupado para este profissional' });
+      const e = err as { cause?: { code?: string; constraint?: string }; code?: string; constraint?: string };
+      if ((e.cause?.code ?? e.code) === '23P01') {
+        if ((e.cause?.constraint ?? e.constraint) === ROOM_CONSTRAINT) throw roomTaken();
+        throw new ConflictException({ code: 'SLOT_TAKEN', message: 'Este horário já está ocupado para este profissional' });
+      }
       throw err;
     }
   }
 
+  /**
+   * Sala do horário: a escolhida (precisa servir para os serviços e estar livre) ou, se algum
+   * serviço exige sala e nenhuma foi escolhida, a primeira livre entre as que servem.
+   */
+  private async pickRoom(tx: Tx, services: { id: string; requiresRoom: boolean }[], roomId: string | null, start: Date, end: Date): Promise<string | null> {
+    const serviceIds = services.map((s) => s.id);
+    if (roomId) {
+      const [r] = await tx.select().from(schResources).where(eq(schResources.id, roomId));
+      if (!r || r.kind !== 'room' || !r.active) throw badRequest('ROOM_NOT_FOUND', 'Sala/equipamento não encontrado ou inativo');
+      if (!(await this.eligibleResources(tx, serviceIds, roomId, 'room')).length) throw badRequest('ROOM_NOT_ELIGIBLE', `${r.name} não serve para todos os serviços escolhidos`);
+      if ((await this.busyIntervals(tx, [roomId], start, end)).length) throw roomTaken();
+      return roomId;
+    }
+    if (!services.some((s) => s.requiresRoom)) return null;
+    const rooms = await this.eligibleResources(tx, serviceIds, undefined, 'room');
+    const busy = await this.busyIntervals(tx, rooms.map((r) => r.id), start, end);
+    const free = rooms.find((r) => !busy.some((b) => b.resourceId === r.id));
+    if (!free) throw roomTaken('Nenhuma sala/equipamento livre neste horário');
+    return free.id;
+  }
+
+  /** Ocupação de salas no período: horários que as reservam e bloqueios delas. */
+  private async busyIntervals(tx: Tx, roomIds: string[], from: Date, to: Date, exceptAppointmentId?: string): Promise<(Interval & { resourceId: string })[]> {
+    if (!roomIds.length) return [];
+    const [appointments, timeOff] = await Promise.all([
+      tx
+        .select({ resourceId: schAppointments.roomId, start: schAppointments.startsAt, end: schAppointments.endsAt })
+        .from(schAppointments)
+        .where(
+          and(
+            inArray(schAppointments.roomId, roomIds),
+            lt(schAppointments.startsAt, to),
+            sql`${schAppointments.endsAt} > ${from}`,
+            notInArray(schAppointments.status, RELEASED),
+            exceptAppointmentId ? ne(schAppointments.id, exceptAppointmentId) : undefined,
+          ),
+        ),
+      tx
+        .select({ resourceId: schTimeOff.resourceId, start: schTimeOff.startsAt, end: schTimeOff.endsAt })
+        .from(schTimeOff)
+        .where(and(inArray(schTimeOff.resourceId, roomIds), lt(schTimeOff.startsAt, to), sql`${schTimeOff.endsAt} > ${from}`)),
+    ]);
+    return [...appointments.map((a) => ({ ...a, resourceId: a.resourceId! })), ...timeOff];
+  }
+
+  /** Por que uma data da série não cabe (ou null se cabe): expediente, bloqueio, outro horário, sala. */
+  private async conflictReason(tx: Tx, resourceId: string, start: Date, end: Date, roomId: string | null): Promise<string | null> {
+    const local = utcToLocal(start);
+    const hours = await tx
+      .select()
+      .from(schWorkingHours)
+      .where(and(eq(schWorkingHours.resourceId, resourceId), eq(schWorkingHours.weekday, weekdayOf(local.date))));
+    if (!hours.some((h) => localToUtc(local.date, h.startTime) <= start && end <= localToUtc(local.date, h.endTime))) return 'Fora do expediente';
+    const [off] = await tx
+      .select({ id: schTimeOff.id })
+      .from(schTimeOff)
+      .where(and(eq(schTimeOff.resourceId, resourceId), lt(schTimeOff.startsAt, end), sql`${schTimeOff.endsAt} > ${start}`))
+      .limit(1);
+    if (off) return 'Profissional de folga ou com horário bloqueado';
+    const [taken] = await tx
+      .select({ id: schAppointments.id })
+      .from(schAppointments)
+      .where(
+        and(
+          eq(schAppointments.resourceId, resourceId),
+          lt(schAppointments.startsAt, end),
+          sql`${schAppointments.endsAt} > ${start}`,
+          notInArray(schAppointments.status, RELEASED),
+        ),
+      )
+      .limit(1);
+    if (taken) return 'Profissional já tem horário marcado';
+    if (roomId && (await this.busyIntervals(tx, [roomId], start, end)).length) return 'Sala/equipamento ocupado';
+    return null;
+  }
+
+  /** Uma mensagem só para vários horários da mesma série (marcados ou cancelados). */
+  private async notifySeries(tx: Tx, list: Appointment[], templateKey: string) {
+    const first = list[0]!;
+    const local = utcToLocal(new Date(first.startsAt));
+    await this.notifications.enqueueInTx(tx, {
+      templateKey,
+      customerId: first.customer.id,
+      related: { entity: 'appointment', id: first.id },
+      data: {
+        agendamento: {
+          id: first.id,
+          data: formatDate(local.date),
+          hora: local.time,
+          servicos: first.services.map((s) => s.name).join(', '),
+          profissional: first.resourceName,
+          total: brl.format(first.total),
+          datas: list.map((a) => formatDate(utcToLocal(new Date(a.startsAt)).date)).join(', '),
+          quantidade: String(list.length),
+        },
+      },
+    });
+  }
+
   private async detailInTx(tx: Tx, id: string): Promise<Appointment> {
     const [row] = await tx
-      .select({ a: schAppointments, resourceName: schResources.name, customer: { id: customers.id, name: customers.name, phone: customers.phone, email: customers.email } })
+      .select(appointmentColumns)
       .from(schAppointments)
       .innerJoin(schResources, eq(schResources.id, schAppointments.resourceId))
       .innerJoin(customers, eq(customers.id, schAppointments.customerId))
+      .leftJoin(room, eq(room.id, schAppointments.roomId))
       .where(eq(schAppointments.id, id));
     if (!row) throw new NotFoundException({ code: 'APPOINTMENT_NOT_FOUND', message: 'Atendimento não encontrado' });
     const services = await tx.select().from(schAppointmentServices).where(eq(schAppointmentServices.appointmentId, id));
-    return toAppointmentDto(row.a, row.resourceName, row.customer, services);
+    return toAppointmentDto(row.a, row.resourceName, row.roomName, row.customer, services);
   }
 
   private async findOrFail(tx: Tx, id: string, lock = false) {
@@ -607,19 +841,26 @@ export class SchedulingService implements OnModuleInit {
     return ids.map((sid) => usable.find((s) => s.id === sid)!);
   }
 
-  /** Profissionais ativos que fazem todos os serviços (serviço sem vínculo = qualquer profissional). */
-  private async eligibleResources(tx: Tx, serviceIds: string[], resourceId?: string) {
+  /**
+   * Profissionais (ou salas) ativos que servem para todos os serviços. Vale o vínculo do mesmo
+   * tipo: serviço sem profissional ligado = qualquer profissional; sem sala ligada = qualquer sala.
+   */
+  private async eligibleResources(tx: Tx, serviceIds: string[], resourceId?: string, kind: 'professional' | 'room' = 'professional') {
     const [resources, links] = await Promise.all([
       tx
         .select()
         .from(schResources)
-        .where(and(eq(schResources.active, true), resourceId ? eq(schResources.id, resourceId) : eq(schResources.kind, 'professional')))
+        .where(and(eq(schResources.active, true), resourceId ? eq(schResources.id, resourceId) : eq(schResources.kind, kind)))
         .orderBy(asc(schResources.name)),
-      tx.select().from(schServiceResources).where(inArray(schServiceResources.serviceId, serviceIds)),
+      tx
+        .select({ serviceId: schServiceResources.serviceId, resourceId: schServiceResources.resourceId, kind: schResources.kind })
+        .from(schServiceResources)
+        .innerJoin(schResources, eq(schResources.id, schServiceResources.resourceId))
+        .where(inArray(schServiceResources.serviceId, serviceIds)),
     ]);
     return resources.filter((r) =>
       serviceIds.every((sid) => {
-        const allowed = links.filter((l) => l.serviceId === sid);
+        const allowed = links.filter((l) => l.serviceId === sid && l.kind === r.kind);
         return !allowed.length || allowed.some((l) => l.resourceId === r.id);
       }),
     );
@@ -647,13 +888,22 @@ function toServiceDto(s: typeof schServices.$inferSelect, resourceIds: string[])
     online: s.online,
     active: s.active,
     description: s.description,
+    requiresRoom: s.requiresRoom,
     resourceIds,
   };
 }
 
+const appointmentColumns = {
+  a: schAppointments,
+  resourceName: schResources.name,
+  roomName: room.name,
+  customer: { id: customers.id, name: customers.name, phone: customers.phone, email: customers.email },
+};
+
 function toAppointmentDto(
   a: AppointmentRow,
   resourceName: string,
+  roomName: string | null,
   customer: Appointment['customer'],
   services: (typeof schAppointmentServices.$inferSelect)[],
 ): Appointment {
@@ -662,6 +912,9 @@ function toAppointmentDto(
     customer,
     resourceId: a.resourceId,
     resourceName,
+    roomId: a.roomId,
+    roomName: a.roomId ? roomName : null,
+    seriesId: a.seriesId,
     startsAt: a.startsAt.toISOString(),
     endsAt: a.endsAt.toISOString(),
     status: a.status,

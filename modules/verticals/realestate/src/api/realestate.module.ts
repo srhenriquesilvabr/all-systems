@@ -26,9 +26,24 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { and, desc, eq, gte, ilike, lte, ne, or } from 'drizzle-orm';
+import { and, desc, eq, gte, ilike, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
-import { addressOf, dealInput, MAX_LTV, propertyInput, type Deal, type DealInput, type DealStatus, type Property, type PropertyInput } from '../contracts';
+import {
+  addressOf,
+  brokerInput,
+  dealInput,
+  loseInput,
+  MAX_LTV,
+  propertyInput,
+  type Deal,
+  type DealInput,
+  type DealsSummary,
+  type DealStatus,
+  type LoseInput,
+  type LostReasonKey,
+  type Property,
+  type PropertyInput,
+} from '../contracts';
 import { reDeals, reProperties } from '../db/schema';
 
 const MODULE = 'real_estate';
@@ -41,6 +56,15 @@ type DealRow = typeof reDeals.$inferSelect;
 const badRequest = (code: string, message: string) => new BadRequestException({ code, message });
 const localToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 const num = (v: string | null) => (v === null ? null : Number(v));
+const dayStart = (date: string) => sql`(${date}::date)::timestamp at time zone 'America/Sao_Paulo'`;
+const dayEnd = (date: string) => sql`((${date}::date + 1)::timestamp at time zone 'America/Sao_Paulo')`;
+/** Período do resumo: sem datas, o mês corrente. */
+const periodOf = (from?: string, to?: string) => {
+  const today = localToday();
+  const [y, m] = today.split('-').map(Number) as [number, number];
+  return { from: from ?? `${today.slice(0, 7)}-01`, to: to ?? new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10) };
+};
+const OPEN = sql`${reDeals.status} not in ('closed', 'lost')`;
 
 @Injectable()
 export class RealEstateService implements OnModuleInit {
@@ -137,7 +161,7 @@ export class RealEstateService implements OnModuleInit {
 
   // ---- Propostas ------------------------------------------------------------------------------
 
-  listDeals(opts: { status?: string; customerId?: string; propertyId?: string }): Promise<Deal[]> {
+  listDeals(opts: { status?: string; customerId?: string; propertyId?: string; brokerId?: string }): Promise<Deal[]> {
     return this.tdb.run(async (tx) => {
       const rows = await this.dealQuery(tx)
         .where(
@@ -145,6 +169,7 @@ export class RealEstateService implements OnModuleInit {
             opts.status ? eq(reDeals.status, opts.status as DealStatus) : undefined,
             opts.customerId ? eq(reDeals.customerId, opts.customerId) : undefined,
             opts.propertyId ? eq(reDeals.propertyId, opts.propertyId) : undefined,
+            opts.brokerId === 'none' ? isNull(reDeals.brokerId) : opts.brokerId ? eq(reDeals.brokerId, opts.brokerId) : undefined,
           ),
         )
         .orderBy(desc(reDeals.createdAt))
@@ -167,6 +192,7 @@ export class RealEstateService implements OnModuleInit {
       if (property.status !== 'available' || property.purpose === 'rent') throw new ConflictException({ code: 'PROPERTY_UNAVAILABLE', message: 'Imóvel não está disponível para venda' });
       if (property.ownerId === customer.id) throw badRequest('BUYER_IS_OWNER', 'O comprador é o próprio proprietário');
       checkAmounts(input, property.financeable);
+      if (input.brokerId) await this.checkBroker(tx, tenantId, input.brokerId);
       const [deal] = await tx
         .insert(reDeals)
         .values({
@@ -179,7 +205,7 @@ export class RealEstateService implements OnModuleInit {
           downPayment: centsToDecimal(toCents(input.downPayment)),
           fgtsAmount: centsToDecimal(toCents(input.fgtsAmount)),
           commissionPercent: input.commissionPercent.toFixed(2),
-          brokerId: userId ?? null,
+          brokerId: input.brokerId ?? userId ?? null,
           notes: input.notes ?? null,
         })
         .returning();
@@ -227,17 +253,66 @@ export class RealEstateService implements OnModuleInit {
     });
   }
 
-  loseDeal(id: string, reason: string): Promise<Deal> {
+  loseDeal(id: string, input: LoseInput): Promise<Deal> {
+    const reason = input.reason || null;
     return this.tdb.run(async (tx) => {
       const deal = await this.dealOrFail(tx, id, true);
       if (deal.status === 'closed' || deal.status === 'lost') throw badRequest('DEAL_CLOSED', 'Proposta já encerrada');
       if ((await this.banking.proposalsForInTx(tx, SOURCE, id)).some((p) => ['submitted', 'under_review', 'approved'].includes(p.status))) {
         throw badRequest('PROPOSAL_OPEN', 'Cancele a proposta de financiamento em andamento antes');
       }
-      await tx.update(reDeals).set({ status: 'lost', lostReason: reason }).where(eq(reDeals.id, id));
+      await tx.update(reDeals).set({ status: 'lost', lostReasonKey: input.reasonKey, lostReason: reason, lostAt: new Date() }).where(eq(reDeals.id, id));
       await tx.update(reProperties).set({ status: 'available' }).where(and(eq(reProperties.id, deal.propertyId), eq(reProperties.status, 'reserved')));
-      await this.audit.log(tx, { action: 'real_estate.deal.lost', entity: 're_deal', entityId: id, data: { reason } });
+      await this.audit.log(tx, { action: 'real_estate.deal.lost', entity: 're_deal', entityId: id, data: { reasonKey: input.reasonKey, reason } });
       return this.dealDetail(tx, id);
+    });
+  }
+
+  /** Troca o corretor responsável enquanto a proposta está aberta. */
+  assignBroker(id: string, brokerId: string): Promise<Deal> {
+    const { tenantId } = requestContext.requireTenant();
+    return this.tdb.run(async (tx) => {
+      const deal = await this.dealOrFail(tx, id, true);
+      if (deal.status === 'closed' || deal.status === 'lost') throw badRequest('DEAL_CLOSED', 'Proposta já encerrada');
+      await this.checkBroker(tx, tenantId, brokerId);
+      await tx.update(reDeals).set({ brokerId }).where(eq(reDeals.id, id));
+      await this.audit.log(tx, { action: 'real_estate.deal.broker_changed', entity: 're_deal', entityId: id, data: { from: deal.brokerId, to: brokerId } });
+      return this.dealDetail(tx, id);
+    });
+  }
+
+  /** Por corretor: em aberto agora, vendidas e perdidas no período; e as perdas por motivo. */
+  summary(opts: { from?: string; to?: string }): Promise<DealsSummary> {
+    const { from, to } = periodOf(opts.from, opts.to);
+    const inPeriod = (col: typeof reDeals.closedAt | SQL) => sql`${col} >= ${dayStart(from)} and ${col} < ${dayEnd(to)}`;
+    const won = sql`${reDeals.status} = 'closed' and ${inPeriod(reDeals.closedAt)}`;
+    // Perdidas antes de existir lost_at contam pela abertura.
+    const lost = sql`${reDeals.status} = 'lost' and ${inPeriod(sql`coalesce(${reDeals.lostAt}, ${reDeals.createdAt})`)}`;
+    return this.tdb.run(async (tx) => {
+      const [brokers, reasons] = await Promise.all([
+        tx
+          .select({
+            brokerId: reDeals.brokerId,
+            brokerName: coreSchema.users.name,
+            open: sql<number>`count(*) filter (where ${OPEN})`.mapWith(Number),
+            won: sql<number>`count(*) filter (where ${won})`.mapWith(Number),
+            wonValue: sql<number>`coalesce(sum(${reDeals.price}) filter (where ${won}), 0)`.mapWith(Number),
+            wonCommission: sql<number>`coalesce(round(sum(${reDeals.price} * ${reDeals.commissionPercent} / 100) filter (where ${won}), 2), 0)`.mapWith(Number),
+            lost: sql<number>`count(*) filter (where ${lost})`.mapWith(Number),
+          })
+          .from(reDeals)
+          .leftJoin(coreSchema.users, eq(coreSchema.users.id, reDeals.brokerId))
+          .where(sql`(${OPEN}) or (${won}) or (${lost})`)
+          .groupBy(reDeals.brokerId, coreSchema.users.name),
+        tx
+          .select({ reasonKey: reDeals.lostReasonKey, count: sql<number>`count(*)`.mapWith(Number) })
+          .from(reDeals)
+          .where(lost)
+          .groupBy(reDeals.lostReasonKey)
+          .orderBy(desc(sql`count(*)`)),
+      ]);
+      brokers.sort((a, b) => b.wonValue - a.wonValue || b.open - a.open || (a.brokerName ?? '').localeCompare(b.brokerName ?? ''));
+      return { from, to, brokers, lostByReason: reasons.map((r) => ({ reasonKey: r.reasonKey as LostReasonKey | null, count: r.count })) };
     });
   }
 
@@ -348,6 +423,15 @@ export class RealEstateService implements OnModuleInit {
     return row;
   }
 
+  /** O corretor tem de estar ativo na equipe desta empresa. */
+  private async checkBroker(tx: Tx, tenantId: string, userId: string) {
+    const [m] = await tx
+      .select({ id: coreSchema.memberships.id })
+      .from(coreSchema.memberships)
+      .where(and(eq(coreSchema.memberships.tenantId, tenantId), eq(coreSchema.memberships.userId, userId), eq(coreSchema.memberships.status, 'active')));
+    if (!m) throw badRequest('SELLER_NOT_MEMBER', 'Corretor não faz parte da equipe ativa');
+  }
+
   private async propertyOrFail(tx: Tx, id: string) {
     const row = await this.findInTx(tx, id);
     if (!row) throw new NotFoundException({ code: 'PROPERTY_NOT_FOUND', message: 'Imóvel não encontrado' });
@@ -395,7 +479,10 @@ function toDeal(row: { d: DealRow; customer: Deal['customer']; property: Propert
     commissionPercent: Number(d.commissionPercent),
     commission: Math.round(price * Number(d.commissionPercent)) / 100,
     status: d.status,
+    lostReasonKey: d.lostReasonKey as LostReasonKey | null,
     lostReason: d.lostReason,
+    lostAt: d.lostAt?.toISOString() ?? null,
+    brokerId: d.brokerId,
     brokerName: row.brokerName,
     notes: d.notes,
     closedAt: d.closedAt?.toISOString() ?? null,
@@ -440,7 +527,15 @@ const propertiesQuery = z.object({
   minBedrooms: z.coerce.number().int().min(0).max(20).optional(),
   maxPrice: z.coerce.number().positive().optional(),
 });
-const dealsQuery = z.object({ status: z.string().max(30).optional(), customerId: z.string().uuid().optional(), propertyId: z.string().uuid().optional() });
+const dealsQuery = z.object({
+  status: z.string().max(30).optional(),
+  customerId: z.string().uuid().optional(),
+  propertyId: z.string().uuid().optional(),
+  /** 'none' = propostas sem corretor. */
+  brokerId: z.string().uuid().or(z.literal('none')).optional(),
+});
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const summaryQuery = z.object({ from: isoDate.optional(), to: isoDate.optional() }).refine((q) => !q.from || !q.to || q.from <= q.to, 'Período inválido');
 
 @Controller('real-estate')
 @ModuleRoute('real_estate')
@@ -492,6 +587,13 @@ export class RealEstateController {
     return this.re.listDeals(q);
   }
 
+  /** Declarada antes de deals/:id para "summary" não cair no ParseUUIDPipe. */
+  @Get('deals/summary')
+  @RequirePermission('real_estate.deals.read')
+  summary(@Query(new ZodPipe(summaryQuery)) q: z.infer<typeof summaryQuery>) {
+    return this.re.summary(q);
+  }
+
   @Get('deals/:id')
   @RequirePermission('real_estate.deals.read')
   deal(@Param('id', ParseUUIDPipe) id: string) {
@@ -504,6 +606,12 @@ export class RealEstateController {
     return this.re.createDeal(body);
   }
 
+  @Patch('deals/:id/broker')
+  @RequirePermission('real_estate.deals.write')
+  assignBroker(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(brokerInput)) body: z.infer<typeof brokerInput>) {
+    return this.re.assignBroker(id, body.brokerId);
+  }
+
   @Post('deals/:id/close')
   @HttpCode(200)
   @RequirePermission('real_estate.deals.write')
@@ -514,8 +622,8 @@ export class RealEstateController {
   @Post('deals/:id/lose')
   @HttpCode(200)
   @RequirePermission('real_estate.deals.write')
-  lose(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(z.object({ reason: z.string().trim().min(3).max(300) }))) body: { reason: string }) {
-    return this.re.loseDeal(id, body.reason);
+  lose(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(loseInput)) body: LoseInput) {
+    return this.re.loseDeal(id, body);
   }
 }
 

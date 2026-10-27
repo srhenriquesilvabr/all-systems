@@ -1,4 +1,4 @@
-import { api, ApiError, formatMoney, parseMoney, formatPhone } from '@all/module-sdk/web';
+import { api, ApiError, formatMoney, parseMoney, formatPhone, today } from '@all/module-sdk/web';
 import { CustomerSearch, ordersKey, type CustomerOption } from '@all/service-orders/web';
 import { Alert, Button, Card, Field, Input, PageHeader, Select, Textarea } from '@all/ui';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -46,6 +46,9 @@ export function NewLaundryOrderPage() {
   const [lines, setLines] = useState<LineDraft[]>([emptyLine()]);
   const [discount, setDiscount] = useState('');
   const [dueAt, setDueAt] = useState('');
+  // Registro de ordem antiga (migração de outro sistema): fica escondido no caminho rápido do balcão.
+  const [pastOrder, setPastOrder] = useState(false);
+  const [receivedAt, setReceivedAt] = useState(today());
   const [notesCustomer, setNotesCustomer] = useState('');
   const [errors, setErrors] = useState<string[]>([]);
 
@@ -89,6 +92,7 @@ export function NewLaundryOrderPage() {
       customerId: customer?.id ?? '',
       discount: discountValue,
       dueAt: dueAt ? new Date(dueAt) : null,
+      receivedAt: pastOrder ? receivedAt : undefined,
       notesCustomer: notesCustomer || null,
       lines: lines.map((l) => {
         const unit = activeServices.find((s) => s.id === l.serviceId)?.pricingUnit;
@@ -109,7 +113,7 @@ export function NewLaundryOrderPage() {
       return;
     }
     setErrors([]);
-    create.mutate({ ...parsed.data, dueAt: parsed.data.dueAt?.toISOString() ?? null });
+    create.mutate({ ...parsed.data, dueAt: parsed.data.dueAt?.toISOString() ?? null, receivedAt: pastOrder ? receivedAt : undefined });
   }
 
   const update = (i: number, patch: Partial<LineDraft>) => setLines(lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
@@ -231,6 +235,15 @@ export function NewLaundryOrderPage() {
           <Field label="Observações para o cliente" hint="Saem no comprovante.">
             {(id) => <Textarea id={id} value={notesCustomer} onChange={(e) => setNotesCustomer(e.target.value)} />}
           </Field>
+          {pastOrder ? (
+            <Field label="Recebida em" hint="Em data passada, o cliente não é avisado e o prazo conta a partir dela.">
+              {(id) => <Input id={id} type="date" value={receivedAt} max={today()} onChange={(e) => setReceivedAt(e.target.value)} />}
+            </Field>
+          ) : (
+            <button type="button" className="text-left text-sm text-brand-700 hover:underline" onClick={() => setPastOrder(true)}>
+              Registrar ordem antiga (outra data de entrada)
+            </button>
+          )}
         </Card>
 
         <div className="flex justify-end gap-2">

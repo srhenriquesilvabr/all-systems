@@ -38,8 +38,22 @@ export const quotaInput = z.object({
   applicant: applicantInput,
   /** Data de vencimento desejada para as parcelas. */
   dueDay: z.coerce.number().int().min(1).max(28).default(10),
+  /** Vendedor responsável; sem informar, fica quem registrou a venda. */
+  sellerId: z.string().uuid().nullish(),
 });
 export type QuotaInput = z.infer<typeof quotaInput>;
+
+export const sellerInput = z.object({ sellerId: z.string().uuid('Escolha o vendedor') });
+
+/**
+ * Por vendedor, cotas vendidas no período (pela data da venda): em análise, aceitas (ativas ou
+ * contempladas, com o crédito somado) e perdidas (recusadas ou canceladas).
+ */
+export interface QuotasSummary {
+  from: string;
+  to: string;
+  sellers: { sellerId: string | null; sellerName: string | null; open: number; won: number; wonValue: number; lost: number }[];
+}
 
 export const quotaStatuses = ['proposal', 'active', 'contemplated', 'rejected', 'cancelled'] as const;
 export type QuotaStatus = (typeof quotaStatuses)[number];
@@ -65,6 +79,7 @@ export interface Quota {
   contemplationType: 'draw' | 'bid' | null;
   bidPercent: number | null;
   commission: number;
+  sellerId: string | null;
   sellerName: string | null;
   createdAt: string;
 }

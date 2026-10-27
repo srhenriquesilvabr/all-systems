@@ -2,6 +2,10 @@ import type { MedicalForm } from '@all/medical-records';
 import { z } from 'zod';
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data inválida');
+/** Hoje no fuso da clínica (YYYY-MM-DD). */
+export const localToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+/** Data do encerramento: pode ser no passado (registro de histórico), nunca no futuro. Padrão: hoje. */
+const closedOn = isoDate.refine((d) => d <= localToday(), 'A data não pode ser no futuro').optional();
 const money = z.coerce.number().min(0).max(1_000_000).multipleOf(0.01);
 
 export const appliances = ['fixed_metal', 'fixed_aesthetic', 'self_ligating', 'aligners', 'removable', 'other'] as const;
@@ -32,8 +36,10 @@ export type TreatmentInput = z.infer<typeof treatmentInput>;
 export const finishInput = z.object({
   /** Encerrado antes do previsto: cancela as mensalidades futuras ainda em aberto. */
   cancelFutureInstallments: z.boolean().default(true),
+  /** Dia em que o tratamento terminou (padrão hoje); as mensalidades canceladas são as que vencem depois dele. */
+  finishedOn: closedOn,
 });
-export const cancelTreatmentInput = z.object({ reason: z.string().trim().min(3, 'Explique o motivo').max(300) });
+export const cancelTreatmentInput = z.object({ reason: z.string().trim().min(3, 'Explique o motivo').max(300), cancelledOn: closedOn });
 export const extendInput = z.object({ months: z.coerce.number().int().min(1).max(24) });
 
 export type TreatmentStatus = 'active' | 'finished' | 'cancelled';

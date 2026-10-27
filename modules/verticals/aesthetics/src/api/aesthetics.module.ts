@@ -8,7 +8,7 @@ import { schServices } from '@all/scheduling/schema';
 import { BadRequestException, Body, Controller, Get, Injectable, Module, NotFoundException, OnModuleInit, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { and, asc, desc, eq, gte, inArray, isNull, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { aestheticsForms, cancelPackageInput, packageInput, type PackageInput, type SessionPackage } from '../contracts';
+import { aestheticsForms, cancelPackageInput, localToday, packageInput, type PackageInput, type SessionPackage } from '../contracts';
 import { aesPackages, aesPackageSessions } from '../db/schema';
 import type { AestheticsSettings } from '../manifest';
 
@@ -53,7 +53,7 @@ export class AestheticsService implements OnModuleInit {
     return this.tdb.run(async (tx) => {
       const rows = await this.query(tx)
         .where(and(opts.customerId ? eq(aesPackages.customerId, opts.customerId) : undefined, opts.status ? eq(aesPackages.status, opts.status as 'active') : undefined))
-        .orderBy(desc(aesPackages.createdAt));
+        .orderBy(desc(aesPackages.soldOn), desc(aesPackages.createdAt));
       return this.toDtos(tx, rows);
     });
   }
@@ -65,7 +65,12 @@ export class AestheticsService implements OnModuleInit {
       if (!customer || customer.anonymizedAt) throw badRequest('CUSTOMER_NOT_FOUND', 'Cliente não encontrado');
       const [service] = await tx.select().from(schServices).where(eq(schServices.id, input.serviceId));
       if (!service) throw badRequest('SERVICE_NOT_FOUND', 'Procedimento não encontrado');
-      if (input.expiresOn && input.expiresOn < input.firstDueOn) throw badRequest('INVALID_EXPIRY', 'A validade não pode ser antes do primeiro vencimento');
+      const soldOn = input.soldOn ?? localToday();
+      if (soldOn > localToday()) throw badRequest('INVALID_DATE', 'A data da venda não pode ser no futuro');
+      // As parcelas acompanham a data da venda (venda antiga, vencimentos antigos).
+      const firstDueOn = input.firstDueOn ?? soldOn;
+      if (firstDueOn < soldOn) throw badRequest('INVALID_DUE_DATE', 'O primeiro vencimento não pode ser antes da venda');
+      if (input.expiresOn && input.expiresOn < firstDueOn) throw badRequest('INVALID_EXPIRY', 'A validade não pode ser antes do primeiro vencimento');
 
       const [pkg] = await tx
         .insert(aesPackages)
@@ -75,6 +80,7 @@ export class AestheticsService implements OnModuleInit {
           serviceId: service.id,
           totalSessions: input.totalSessions,
           price: centsToDecimal(toCents(input.price)),
+          soldOn,
           expiresOn: input.expiresOn,
           notes: input.notes ?? null,
         })
@@ -87,7 +93,7 @@ export class AestheticsService implements OnModuleInit {
           status: 'pending',
           description: `Pacote ${service.name} (${input.totalSessions} sessões)${parts.length > 1 ? ` — parcela ${i + 1}/${parts.length}` : ''}`,
           amount: cents / 100,
-          dueDate: addMonths(input.firstDueOn, i),
+          dueDate: addMonths(firstDueOn, i),
           customerId: customer.id,
           sourceType: SOURCE,
           settleInFinance: true,
@@ -99,29 +105,31 @@ export class AestheticsService implements OnModuleInit {
         customerId: customer.id,
         moduleKey: MODULE,
         type: 'package.sold',
-        title: `Pacote vendido: ${input.totalSessions} sessões de ${service.name}`,
+        title: `Pacote vendido: ${input.totalSessions} sessões de ${service.name}${soldOn === localToday() ? '' : ` em ${soldOn.split('-').reverse().join('/')}`}`,
         entity: 'aes_package',
         entityId: pkg!.id,
       });
-      await this.audit.log(tx, { action: 'aesthetics.package.sold', entity: 'aes_package', entityId: pkg!.id, data: { price: input.price, installments: input.installments } });
+      await this.audit.log(tx, { action: 'aesthetics.package.sold', entity: 'aes_package', entityId: pkg!.id, data: { price: input.price, installments: input.installments, soldOn } });
       return (await this.toDtos(tx, await this.query(tx).where(eq(aesPackages.id, pkg!.id))))[0]!;
     });
   }
 
-  cancel(id: string, reason: string): Promise<SessionPackage> {
+  cancel(id: string, reason: string, cancelledOn = localToday()): Promise<SessionPackage> {
     return this.tdb.run(async (tx) => {
       const [pkg] = await tx.select().from(aesPackages).where(eq(aesPackages.id, id)).for('update');
       if (!pkg) throw new NotFoundException({ code: 'PACKAGE_NOT_FOUND', message: 'Pacote não encontrado' });
       if (pkg.status !== 'active') throw badRequest('PACKAGE_CLOSED', 'Este pacote já foi encerrado');
+      if (cancelledOn > localToday()) throw badRequest('INVALID_DATE', 'A data do cancelamento não pode ser no futuro');
+      if (cancelledOn < pkg.soldOn) throw badRequest('INVALID_DATE', 'O cancelamento não pode ser antes da venda');
       const [reserved] = await tx
         .select({ id: aesPackageSessions.id })
         .from(aesPackageSessions)
         .where(and(eq(aesPackageSessions.packageId, id), eq(aesPackageSessions.status, 'reserved')))
         .limit(1);
       if (reserved) throw badRequest('PACKAGE_HAS_BOOKINGS', 'Há horários marcados usando este pacote: cancele ou conclua antes');
-      await tx.update(aesPackages).set({ status: 'cancelled', cancelReason: reason }).where(eq(aesPackages.id, id));
+      await tx.update(aesPackages).set({ status: 'cancelled', cancelReason: reason, cancelledOn }).where(eq(aesPackages.id, id));
       const cancelled = await this.finance.cancelPendingBySourceInTx(tx, SOURCE, id);
-      await this.audit.log(tx, { action: 'aesthetics.package.cancelled', entity: 'aes_package', entityId: id, data: { reason, cancelledInstallments: cancelled } });
+      await this.audit.log(tx, { action: 'aesthetics.package.cancelled', entity: 'aes_package', entityId: id, data: { reason, cancelledOn, cancelledInstallments: cancelled } });
       return (await this.toDtos(tx, await this.query(tx).where(eq(aesPackages.id, id))))[0]!;
     });
   }
@@ -219,10 +227,12 @@ export class AestheticsService implements OnModuleInit {
       usedSessions: countOf(pkg.id, 'used'),
       reservedSessions: countOf(pkg.id, 'reserved'),
       price: Number(pkg.price),
+      soldOn: pkg.soldOn,
       expiresOn: pkg.expiresOn,
       status: pkg.status,
       notes: pkg.notes,
       cancelReason: pkg.cancelReason,
+      cancelledOn: pkg.cancelledOn,
       createdAt: pkg.createdAt.toISOString(),
     }));
   }
@@ -256,8 +266,8 @@ export class AestheticsController {
 
   @Post(':id/cancel')
   @RequirePermission('aesthetics.packages.sell')
-  cancel(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(cancelPackageInput)) body: { reason: string }) {
-    return this.aesthetics.cancel(id, body.reason);
+  cancel(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(cancelPackageInput)) body: { reason: string; cancelledOn?: string }) {
+    return this.aesthetics.cancel(id, body.reason, body.cancelledOn);
   }
 }
 

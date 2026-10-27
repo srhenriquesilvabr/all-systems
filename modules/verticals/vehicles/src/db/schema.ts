@@ -54,11 +54,21 @@ export const vehDeals = pgTable(
     downPayment: money('down_payment').notNull().default('0'),
     tradeIn: jsonb('trade_in'),
     status: text('status', { enum: ['negotiating', 'credit_analysis', 'credit_approved', 'credit_rejected', 'closed', 'lost'] }).notNull().default('negotiating'),
+    /** Detalhe do motivo (antes era o único campo, texto livre). */
     lostReason: text('lost_reason'),
-    sellerId: uuid('seller_id').references(() => users.id),
+    /** Motivo padronizado (lostReasonKeys dos contratos); nulo nas perdidas antigas. */
+    lostReasonKey: text('lost_reason_key'),
+    lostAt: ts('lost_at'),
+    sellerId: uuid('seller_id').references(() => users.id, { onDelete: 'set null' }),
     notes: text('notes'),
     closedAt: ts('closed_at'),
     createdAt: ts('created_at').notNull().defaultNow(),
   },
-  (t) => [uniqueIndex('veh_deals_number_key').on(t.tenantId, t.number), index('veh_deals_vehicle_idx').on(t.vehicleId), index('veh_deals_customer_idx').on(t.customerId), tenantIsolation()],
+  (t) => [
+    uniqueIndex('veh_deals_number_key').on(t.tenantId, t.number),
+    index('veh_deals_vehicle_idx').on(t.vehicleId),
+    index('veh_deals_customer_idx').on(t.customerId),
+    index('veh_deals_seller_idx').on(t.tenantId, t.sellerId),
+    tenantIsolation(),
+  ],
 );

@@ -59,6 +59,7 @@ export function BakeryOrdersPage() {
             <thead>
               <tr>
                 <Th>Nº</Th>
+                <Th>Pedido em</Th>
                 <Th>Cliente</Th>
                 <Th>Status</Th>
                 <Th className="text-right">Total</Th>
@@ -89,6 +90,9 @@ export function NewBakeryOrderPage() {
   const [customer, setCustomer] = useState<CustomerOption | null>(null);
   const [date, setDate] = useState(tomorrow());
   const [time, setTime] = useState('09:00');
+  // Encomenda antiga (migração de outro sistema): a data do pedido e a retirada podem estar no passado.
+  const [pastOrder, setPastOrder] = useState(false);
+  const [receivedAt, setReceivedAt] = useState(today());
   const [lines, setLines] = useState<Line[]>([]);
   const [q, setQ] = useState('');
   const products = useProducts({ q: q.trim() || undefined, active: true }, q.trim().length >= 2);
@@ -104,6 +108,7 @@ export function NewBakeryOrderPage() {
         body: {
           customerId: customer?.id,
           dueAt: new Date(`${date}T${time}:00-03:00`).toISOString(),
+          receivedAt: pastOrder ? receivedAt : undefined,
           items: lines.map((l) => ({ productId: l.productId, description: l.description, quantity: Number(l.quantity.replace(',', '.')), unitPrice: parseMoney(l.unitPrice) })),
           discount: parseMoney(discount) || 0,
           notesCustomer: notesCustomer || null,
@@ -190,9 +195,20 @@ export function NewBakeryOrderPage() {
         <Card className="h-fit space-y-4 p-5">
           {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao salvar'}</Alert>}
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Retirada">{(id) => <Input id={id} type="date" required min={today()} value={date} onChange={(e) => setDate(e.target.value)} />}</Field>
+            <Field label="Retirada">
+              {(id) => <Input id={id} type="date" required min={pastOrder && receivedAt < today() ? receivedAt : today()} value={date} onChange={(e) => setDate(e.target.value)} />}
+            </Field>
             <Field label="Horário">{(id) => <Input id={id} type="time" required value={time} onChange={(e) => setTime(e.target.value)} />}</Field>
           </div>
+          {pastOrder ? (
+            <Field label="Pedido em" hint="Em data passada, o cliente não é avisado e a retirada pode ser no passado.">
+              {(id) => <Input id={id} type="date" value={receivedAt} max={today()} onChange={(e) => setReceivedAt(e.target.value)} />}
+            </Field>
+          ) : (
+            <button type="button" className="text-left text-sm text-brand-700 hover:underline" onClick={() => setPastOrder(true)}>
+              Registrar encomenda antiga
+            </button>
+          )}
           <Field label="Desconto (R$)">{(id) => <Input id={id} inputMode="decimal" value={discount} onChange={(e) => setDiscount(e.target.value)} placeholder="0,00" />}</Field>
           <div className="flex items-baseline justify-between border-t border-line pt-4">
             <span className="font-medium">Total</span>

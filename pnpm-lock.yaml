@@ -571,6 +571,9 @@ importers:
       '@all/module-sdk':
         specifier: workspace:*
         version: link:../../../packages/module-sdk
+      '@all/scheduling':
+        specifier: workspace:*
+        version: link:../scheduling
       '@nestjs/common':
         specifier: ^11.1.3
         version: 11.2.7(reflect-metadata@0.2.2)(rxjs@7.8.2)
@@ -581,9 +584,6 @@ importers:
         specifier: ^3.25.0
         version: 3.25.76
     devDependencies:
-      '@all/scheduling':
-        specifier: workspace:*
-        version: link:../scheduling
       '@all/ui':
         specifier: workspace:*
         version: link:../../../packages/ui

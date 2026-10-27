@@ -70,6 +70,9 @@ export const serviceInput = z.object({
   online: z.boolean().default(true),
   active: z.boolean().default(true),
   description: z.string().trim().max(500).nullish(),
+  /** Precisa de uma sala/equipamento livre (entre as ligadas ao serviço, ou qualquer uma). */
+  requiresRoom: z.boolean().default(false),
+  /** Profissionais que fazem e salas/equipamentos que servem (nenhum de um tipo = qualquer um). */
   resourceIds: z.array(z.string().uuid()).optional(),
 });
 export type ServiceInput = z.infer<typeof serviceInput>;
@@ -82,8 +85,36 @@ export const appointmentInput = z.object({
   notes: z.string().trim().max(1000).nullish(),
   /** Para quem é o atendimento, quando não é o próprio cliente (ex.: o pet). Definido pela vertical. */
   subject: z.object({ type: z.string().max(40), id: z.string().max(100), label: z.string().max(120) }).nullish(),
+  /** Sala/equipamento reservado junto com o profissional. */
+  roomId: z.string().uuid().nullish(),
 });
 export type AppointmentInput = z.infer<typeof appointmentInput>;
+
+/**
+ * Repetição: toda semana, a cada 2 semanas ou todo mês no mesmo dia do mês (meses sem esse dia,
+ * como 31 de abril, ficam de fora). Termina depois de N vezes (contando as que não couberem) ou numa data.
+ */
+export const recurrenceFrequencies = ['weekly', 'biweekly', 'monthly'] as const;
+export type RecurrenceFrequency = (typeof recurrenceFrequencies)[number];
+export const recurrenceLabel: Record<RecurrenceFrequency, string> = {
+  weekly: 'Toda semana',
+  biweekly: 'A cada 2 semanas',
+  monthly: 'Todo mês (mesmo dia)',
+};
+export const MAX_OCCURRENCES = 52;
+export const recurrenceInput = z
+  .object({
+    frequency: z.enum(recurrenceFrequencies),
+    count: z.number().int().min(2).max(MAX_OCCURRENCES).nullish(),
+    until: isoDate.nullish(),
+  })
+  .refine((r) => !!r.count !== !!r.until, 'Informe quantas vezes ou até quando repetir');
+export type RecurrenceInput = z.infer<typeof recurrenceInput>;
+
+export const appointmentSeriesInput = appointmentInput.extend({ recurrence: recurrenceInput });
+export type AppointmentSeriesInput = z.infer<typeof appointmentSeriesInput>;
+
+export const cancelSeriesInput = z.object({ reason: z.string().trim().min(1, 'Informe o motivo do cancelamento').max(300) });
 
 export const rescheduleInput = z.object({ startsAt: z.coerce.date(), resourceId: z.string().uuid().optional() });
 export const statusInput = z.object({ status: z.enum(appointmentStatuses), reason: z.string().trim().max(300).nullish() });
@@ -113,6 +144,8 @@ export const onlineBookingInput = z.object({
   startsAt: z.coerce.date(),
   serviceIds: z.array(z.string().uuid()).min(1).max(5),
   notes: z.string().trim().max(500).nullish(),
+  /** Campos de "para quem é" pedidos pela página (ex.: nome e espécie do pet), por chave. */
+  subjectFields: z.record(z.string().max(40), z.string().trim().max(120)).nullish(),
 });
 
 export const schedulingSettings = z.object({
@@ -150,6 +183,7 @@ export interface Service {
   online: boolean;
   active: boolean;
   description: string | null;
+  requiresRoom: boolean;
   resourceIds: string[];
 }
 
@@ -158,6 +192,10 @@ export interface Appointment {
   customer: { id: string; name: string; phone: string | null; email: string | null };
   resourceId: string;
   resourceName: string;
+  roomId: string | null;
+  roomName: string | null;
+  /** Horários marcados juntos, com repetição, compartilham a série. */
+  seriesId: string | null;
   startsAt: string;
   endsAt: string;
   status: AppointmentStatus;
@@ -177,4 +215,21 @@ export interface AvailabilitySlots {
   resourceId: string;
   resourceName: string;
   slots: string[];
+}
+
+export interface SeriesResult {
+  seriesId: string;
+  created: Appointment[];
+  /** Datas (locais) que não couberam na agenda e o porquê. */
+  skipped: { date: string; time: string; reason: string }[];
+}
+
+/** Campo extra do agendamento online definido por outro módulo (ex.: nome e espécie do pet). */
+export interface BookingSubjectField {
+  key: string;
+  label: string;
+  required?: boolean;
+  maxLength?: number;
+  /** Com opções, vira uma lista de escolha. */
+  options?: { value: string; label: string }[];
 }

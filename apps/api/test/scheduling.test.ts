@@ -10,6 +10,10 @@ process.env.WHATSAPP_VERIFY_TOKEN = 'token-de-verificacao';
 
 const OFFSET = '-03:00';
 const at = (date: string, time: string) => new Date(`${date}T${time}:00${OFFSET}`).toISOString();
+const plusDays = (date: string, n: number) => {
+  const [y, m, d] = date.split('-').map(Number);
+  return new Date(Date.UTC(y!, m! - 1, d! + n)).toISOString().slice(0, 10);
+};
 
 /** Próximo dia útil a pelo menos 2 dias de hoje (no fuso de São Paulo). */
 function nextWeekday(): string {
@@ -206,6 +210,8 @@ describe('agenda, WhatsApp e salão', () => {
 
       const { body: info } = await t.http().get(pub()).expect(200);
       expect(info.services.map((x: { name: string }) => x.name)).toContain('Corte masculino');
+      // Salão não tem pets: a página não pede "para quem é".
+      expect(info.subject).toBeNull();
       const serviceId = info.services.find((x: { name: string }) => x.name === 'Corte masculino').id;
       const day = nextWeekday();
       const { body: avail } = await t.http().get(pub(`/availability?date=${day}&serviceIds=${serviceId}&resourceId=${s.bruno.id}`)).expect(200);
@@ -228,6 +234,116 @@ describe('agenda, WhatsApp e salão', () => {
       expect(customers.items[0].phone).toBe('+5548988776655');
       const { body: list } = await s.as('get', `/scheduling/appointments?customerId=${customers.items[0].id}`).expect(200);
       expect(list[0].source).toBe('online');
+    });
+  });
+
+  describe('horários com repetição', () => {
+    const series = (s: Awaited<ReturnType<typeof salon>>, body: Record<string, unknown>) =>
+      s.as('post', '/scheduling/appointments/series').send({ customerId: s.customer.id, resourceId: s.ana.id, serviceIds: [s.service('Corte feminino').id], ...body });
+
+    it('marca a série numa requisição e pula a data que não cabe, com uma mensagem só', async () => {
+      const s = await salon();
+      const day = nextWeekday();
+      // Na segunda semana a Ana já está ocupada às 10h.
+      await s.book({ startsAt: at(plusDays(day, 7), '10:30') }).expect(201);
+
+      const { body } = await series(s, { startsAt: at(day, '10:00'), recurrence: { frequency: 'weekly', count: 3 } }).expect(201);
+      expect(body.created).toHaveLength(2);
+      expect(body.created.map((a: { startsAt: string }) => a.startsAt)).toEqual([at(day, '10:00'), at(plusDays(day, 14), '10:00')]);
+      expect(new Set(body.created.map((a: { seriesId: string }) => a.seriesId))).toEqual(new Set([body.seriesId]));
+      expect(body.skipped).toEqual([{ date: plusDays(day, 7), time: '10:00', reason: 'Profissional já tem horário marcado' }]);
+
+      // Um aviso para a série (no primeiro horário), nenhum "horário marcado" avulso.
+      await t.relay.drain();
+      const messages = async (id: string) => (await s.as('get', `/notifications?relatedEntity=appointment&relatedId=${id}`).expect(200)).body as { templateKey: string }[];
+      const first = await messages(body.created[0].id);
+      expect(first.map((m) => m.templateKey)).toEqual(expect.arrayContaining(['shared.scheduling.series_booked']));
+      expect(first.map((m) => m.templateKey)).not.toContain('shared.scheduling.booked');
+      expect(await messages(body.created[1].id)).toEqual([]);
+    });
+
+    it('fora do expediente também fica de fora; nenhuma data livre = 409', async () => {
+      const s = await salon();
+      const day = nextWeekday();
+      // 11:30 + 60 min passa do fim da manhã (12h) em todas as semanas.
+      const empty = await series(s, { startsAt: at(day, '11:30'), recurrence: { frequency: 'biweekly', count: 2 } }).expect(409);
+      expect(empty.body.code).toBe('SERIES_EMPTY');
+      await series(s, { startsAt: at(day, '09:00'), recurrence: { frequency: 'weekly', count: 60 } }).expect(400); // máximo 52
+      await series(s, { startsAt: at(day, '09:00'), recurrence: { frequency: 'weekly' } }).expect(400); // sem fim
+    });
+
+    it('cancelar esta e as próximas exige motivo e mantém as anteriores', async () => {
+      const s = await salon();
+      const day = nextWeekday();
+      const { body } = await series(s, { startsAt: at(day, '15:00'), recurrence: { frequency: 'weekly', until: plusDays(day, 21) } }).expect(201);
+      expect(body.created).toHaveLength(4);
+      const second = body.created[1].id;
+
+      await s.as('post', `/scheduling/appointments/${second}/cancel-series`).send({}).expect(400);
+      const { body: res } = await s.as('post', `/scheduling/appointments/${second}/cancel-series`).send({ reason: 'Cliente mudou de cidade' }).expect(200);
+      expect(res.cancelled).toBe(3);
+
+      const statuses = await Promise.all(body.created.map(async (a: { id: string }) => (await s.as('get', `/scheduling/appointments/${a.id}`).expect(200)).body));
+      expect(statuses.map((a: { status: string }) => a.status)).toEqual(['scheduled', 'cancelled', 'cancelled', 'cancelled']);
+      expect(statuses[3].cancelReason).toBe('Cliente mudou de cidade');
+
+      await t.relay.drain();
+      const { body: msgs } = await s.as('get', `/notifications?relatedEntity=appointment&relatedId=${second}`).expect(200);
+      expect(msgs.map((m: { templateKey: string }) => m.templateKey)).toContain('shared.scheduling.series_cancelled');
+      expect(msgs.map((m: { templateKey: string }) => m.templateKey)).not.toContain('shared.scheduling.cancelled');
+
+      // Horário avulso não tem série.
+      const { body: single } = await s.book({ startsAt: at(day, '09:00') }).expect(201);
+      expect(single.seriesId).toBeNull();
+      expect((await s.as('post', `/scheduling/appointments/${single.id}/cancel-series`).send({ reason: 'x' }).expect(400)).body.code).toBe('NOT_IN_SERIES');
+    });
+  });
+
+  describe('salas e equipamentos', () => {
+    it('a mesma sala não fica com dois horários sobrepostos (ROOM_TAKEN)', async () => {
+      const s = await salon();
+      const day = nextWeekday();
+      const { body: sala } = await s.as('post', '/scheduling/resources').send({ name: 'Sala de lavagem', kind: 'room' }).expect(201);
+
+      const { body: a } = await s.book({ startsAt: at(day, '09:00'), roomId: sala.id }).expect(201);
+      expect(a).toMatchObject({ roomId: sala.id, roomName: 'Sala de lavagem' });
+
+      // Outro profissional, mesma sala, horário sobreposto.
+      const taken = await s.book({ startsAt: at(day, '09:30'), resourceId: s.bruno.id, roomId: sala.id }).expect(409);
+      expect(taken.body.code).toBe('ROOM_TAKEN');
+      // Sem sala, o Bruno pode.
+      await s.book({ startsAt: at(day, '09:30'), resourceId: s.bruno.id }).expect(201);
+
+      // Duas marcações simultâneas na mesma sala: o banco recusa uma (constraint sch_appointments_room_no_overlap).
+      const results = await Promise.all([
+        s.book({ startsAt: at(day, '14:00'), roomId: sala.id }),
+        s.book({ startsAt: at(day, '14:00'), resourceId: s.bruno.id, roomId: sala.id }),
+      ]);
+      expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+      expect(results.find((r) => r.status === 409)!.body.code).toBe('ROOM_TAKEN');
+
+      // Remarcar para cima de outra reserva da sala também não passa.
+      const { body: later } = await s.book({ startsAt: at(day, '16:00'), roomId: sala.id }).expect(201);
+      expect((await s.as('post', `/scheduling/appointments/${later.id}/reschedule`).send({ startsAt: at(day, '09:15') }).expect(409)).body.code).toBe('ROOM_TAKEN');
+    });
+
+    it('serviço que precisa de sala só oferece horário com sala livre e escolhe a sala sozinho', async () => {
+      const s = await salon();
+      const day = nextWeekday();
+      const { body: sala } = await s.as('post', '/scheduling/resources').send({ name: 'Sala única', kind: 'room' }).expect(201);
+      const corte = s.service('Corte feminino');
+      await s.as('patch', `/scheduling/services/${corte.id}`).send({ name: corte.name, durationMin: 60, price: 90, requiresRoom: true }).expect(200);
+
+      const { body: a } = await s.book({ startsAt: at(day, '09:00') }).expect(201);
+      expect(a.roomId).toBe(sala.id); // escolhida automaticamente
+
+      const { body: avail } = await s.as('get', `/scheduling/availability?date=${day}&serviceIds=${corte.id}&resourceId=${s.bruno.id}`).expect(200);
+      expect(avail[0].slots).not.toContain('09:00');
+      expect(avail[0].slots).not.toContain('09:30');
+      expect(avail[0].slots).toContain('10:00');
+
+      const busy = await s.book({ startsAt: at(day, '09:30'), resourceId: s.bruno.id }).expect(409);
+      expect(busy.body.code).toBe('ROOM_TAKEN');
     });
   });
 

@@ -1,4 +1,4 @@
-import { api, ApiError, CustomerSearch, parseMoney, useSession, type CustomerOption } from '@all/module-sdk/web';
+import { api, ApiError, CustomerSearch, formatDate, parseMoney, today, useSession, type CustomerOption } from '@all/module-sdk/web';
 import { Alert, Button, Card, Field, Input, Modal, Select } from '@all/ui';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
@@ -25,6 +25,8 @@ export function PosPage() {
   const [customer, setCustomer] = useState<CustomerOption | null>(null);
   const [pickingCustomer, setPickingCustomer] = useState(false);
   const [discount, setDiscount] = useState('');
+  // Venda anterior (migração, caixa sem sistema): vazio = agora.
+  const [soldOn, setSoldOn] = useState<string | null>(null);
   const [weighing, setWeighing] = useState<Product | null>(null);
   const [paying, setPaying] = useState(false);
   const [done, setDone] = useState<Sale | null>(null);
@@ -63,6 +65,7 @@ export function PosPage() {
     setCart([]);
     setCustomer(null);
     setDiscount('');
+    setSoldOn(null);
     setDone(null);
     searchRef.current?.focus();
   }
@@ -166,11 +169,34 @@ export function PosPage() {
               </dd>
             </div>
           </dl>
+          <div className="text-sm">
+            {soldOn === null ? (
+              <button type="button" className="text-fg-muted hover:text-brand-700 hover:underline" onClick={() => setSoldOn(today())}>
+                Lançar venda anterior
+              </button>
+            ) : (
+              <div className="flex items-center justify-between gap-3">
+                <label htmlFor="pos-sold-on" className="text-fg-muted">
+                  Data da venda
+                </label>
+                <div className="flex items-center gap-2">
+                  <Input id="pos-sold-on" type="date" className="h-8 w-40" max={today()} value={soldOn} onChange={(e) => setSoldOn(e.target.value)} />
+                  <Button variant="ghost" size="sm" aria-label="Usar a data de hoje" onClick={() => setSoldOn(null)}>
+                    ✕
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
           <div className="flex items-baseline justify-between border-t border-line pt-4">
             <span className="font-medium">Total</span>
             <span className="font-display text-3xl font-semibold tabular-nums">{brl(total / 100)}</span>
           </div>
-          <Button className="h-12 w-full text-base" disabled={!cart.length || cart.some((l) => !(l.quantity > 0))} onClick={() => setPaying(true)}>
+          <Button
+            className="h-12 w-full text-base"
+            disabled={!cart.length || cart.some((l) => !(l.quantity > 0)) || (soldOn !== null && (!soldOn || soldOn > today()))}
+            onClick={() => setPaying(true)}
+          >
             Receber
           </Button>
           {cart.length > 0 && (
@@ -204,12 +230,19 @@ export function PosPage() {
       {paying && (
         <PaymentModal
           totalCents={total}
+          soldOn={soldOn && soldOn !== today() ? soldOn : null}
           hasCustomer={!!customer}
           onClose={() => setPaying(false)}
           onPay={(payments) =>
             api<Sale>('/sales', {
               method: 'POST',
-              body: { customerId: customer?.id ?? null, items: cart.map((l) => ({ productId: l.product.id, quantity: l.quantity })), discount: discountCents / 100, payments },
+              body: {
+                customerId: customer?.id ?? null,
+                items: cart.map((l) => ({ productId: l.product.id, quantity: l.quantity })),
+                discount: discountCents / 100,
+                payments,
+                soldAt: soldOn || undefined,
+              },
             }).then((sale) => {
               queryClient.invalidateQueries({ queryKey: salesKey });
               setPaying(false);
@@ -257,7 +290,20 @@ function WeightModal({ product, onClose, onConfirm }: { product: Product; onClos
   );
 }
 
-function PaymentModal({ totalCents, hasCustomer, onClose, onPay }: { totalCents: number; hasCustomer: boolean; onClose: () => void; onPay: (p: { method: SalePaymentMethod; amount: number }[]) => Promise<void> }) {
+function PaymentModal({
+  totalCents,
+  soldOn,
+  hasCustomer,
+  onClose,
+  onPay,
+}: {
+  totalCents: number;
+  /** Venda anterior: só para lembrar no título. */
+  soldOn: string | null;
+  hasCustomer: boolean;
+  onClose: () => void;
+  onPay: (p: { method: SalePaymentMethod; amount: number }[]) => Promise<void>;
+}) {
   const [lines, setLines] = useState<{ method: SalePaymentMethod; amount: string }[]>([{ method: 'cash', amount: (totalCents / 100).toFixed(2).replace('.', ',') }]);
   const pay = useMutation({ mutationFn: () => onPay(lines.map((l) => ({ method: l.method, amount: parseMoney(l.amount) }))) });
   const paid = lines.reduce((sum, l) => sum + cents(parseMoney(l.amount) || 0), 0);
@@ -275,7 +321,7 @@ function PaymentModal({ totalCents, hasCustomer, onClose, onPay }: { totalCents:
   return (
     <Modal
       open
-      title={`Receber ${brl(totalCents / 100)}`}
+      title={`Receber ${brl(totalCents / 100)}${soldOn ? ` · venda de ${formatDate(soldOn)}` : ''}`}
       onClose={onClose}
       footer={
         <>
@@ -384,7 +430,7 @@ function Receipt({ sale }: { sale: Sale }) {
   return (
     <div className="hidden w-[72mm] font-mono text-[11px] leading-snug text-black print:block">
       <div className="text-center font-bold">{tenant.name}</div>
-      <div className="text-center">Venda #{sale.number} · {new Date(sale.createdAt).toLocaleString('pt-BR')}</div>
+      <div className="text-center">Venda #{sale.number} · {new Date(sale.soldAt).toLocaleString('pt-BR')}</div>
       <div className="my-1 border-t border-dashed border-black" />
       {sale.items.map((i) => (
         <div key={i.productId}>

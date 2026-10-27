@@ -39,6 +39,9 @@ const SERVICES = [
 ];
 
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+const brDate = (iso: string) => iso.split('-').reverse().join('/');
+/** " em 10/10/2026" quando o encerramento é registrado com data passada. */
+const onDay = (iso: string) => (iso === today() ? '' : ` em ${brDate(iso)}`);
 
 /** Vencimento da `n`-ésima mensalidade (1 = mês seguinte ao início), no dia escolhido. */
 export function installmentDue(startedOn: string, dueDay: number, n: number): string {
@@ -157,26 +160,27 @@ export class OrthodonticsService implements OnModuleInit {
     });
   }
 
-  finish(id: string, cancelFutureInstallments: boolean): Promise<TreatmentDetail> {
+  finish(id: string, cancelFutureInstallments: boolean, finishedOn = today()): Promise<TreatmentDetail> {
     return this.tdb.run(async (tx) => {
       const t = await this.activeOrFail(tx, id);
-      const now = today();
-      if (cancelFutureInstallments) await this.finance.cancelPendingBySourceInTx(tx, SOURCE, id, { dueAfter: now });
-      await tx.update(orthoTreatments).set({ status: 'finished', finishedOn: now }).where(eq(orthoTreatments.id, id));
-      await this.customers.addTimeline(tx, { customerId: t.customerId, moduleKey: MODULE, type: 'treatment.finished', title: 'Tratamento ortodôntico concluído', entity: 'ortho_treatment', entityId: id });
-      await this.audit.log(tx, { action: 'orthodontics.treatment.finished', entity: 'ortho_treatment', entityId: id, data: { cancelFutureInstallments } });
+      checkClosedOn(t, finishedOn);
+      if (cancelFutureInstallments) await this.finance.cancelPendingBySourceInTx(tx, SOURCE, id, { dueAfter: finishedOn });
+      await tx.update(orthoTreatments).set({ status: 'finished', finishedOn }).where(eq(orthoTreatments.id, id));
+      await this.customers.addTimeline(tx, { customerId: t.customerId, moduleKey: MODULE, type: 'treatment.finished', title: `Tratamento ortodôntico concluído${onDay(finishedOn)}`, entity: 'ortho_treatment', entityId: id });
+      await this.audit.log(tx, { action: 'orthodontics.treatment.finished', entity: 'ortho_treatment', entityId: id, data: { cancelFutureInstallments, finishedOn } });
       return this.detailInTx(tx, id);
     });
   }
 
-  cancel(id: string, reason: string): Promise<TreatmentDetail> {
+  cancel(id: string, reason: string, cancelledOn = today()): Promise<TreatmentDetail> {
     return this.tdb.run(async (tx) => {
       const t = await this.activeOrFail(tx, id);
+      checkClosedOn(t, cancelledOn);
       await this.finance.cancelPendingBySourceInTx(tx, SOURCE, id);
       await this.finance.cancelPendingBySourceInTx(tx, SOURCE_FEE, id);
-      await tx.update(orthoTreatments).set({ status: 'cancelled', cancelReason: reason, finishedOn: today() }).where(eq(orthoTreatments.id, id));
-      await this.customers.addTimeline(tx, { customerId: t.customerId, moduleKey: MODULE, type: 'treatment.cancelled', title: `Tratamento ortodôntico cancelado (${reason})`, entity: 'ortho_treatment', entityId: id });
-      await this.audit.log(tx, { action: 'orthodontics.treatment.cancelled', entity: 'ortho_treatment', entityId: id, data: { reason } });
+      await tx.update(orthoTreatments).set({ status: 'cancelled', cancelReason: reason, finishedOn: cancelledOn }).where(eq(orthoTreatments.id, id));
+      await this.customers.addTimeline(tx, { customerId: t.customerId, moduleKey: MODULE, type: 'treatment.cancelled', title: `Tratamento ortodôntico cancelado${onDay(cancelledOn)} (${reason})`, entity: 'ortho_treatment', entityId: id });
+      await this.audit.log(tx, { action: 'orthodontics.treatment.cancelled', entity: 'ortho_treatment', entityId: id, data: { reason, cancelledOn } });
       return this.detailInTx(tx, id);
     });
   }
@@ -260,6 +264,12 @@ export class OrthodonticsService implements OnModuleInit {
 
 const badRequest = (code: string, message: string) => new BadRequestException({ code, message });
 
+/** Encerramento entre o início do tratamento e hoje. */
+function checkClosedOn(t: TreatmentRow, on: string) {
+  if (on > today()) throw badRequest('INVALID_DATE', 'A data não pode ser no futuro');
+  if (on < t.startedOn) throw badRequest('INVALID_DATE', 'A data é anterior ao início do tratamento');
+}
+
 const listQuery = z.object({ customerId: z.string().uuid().optional(), status: z.enum(['active', 'finished', 'cancelled']).optional() });
 
 @Controller('orthodontics/treatments')
@@ -293,14 +303,14 @@ export class OrthodonticsController {
 
   @Post(':id/finish')
   @RequirePermission('orthodontics.treatments.manage')
-  finish(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(finishInput)) body: { cancelFutureInstallments: boolean }) {
-    return this.ortho.finish(id, body.cancelFutureInstallments);
+  finish(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(finishInput)) body: { cancelFutureInstallments: boolean; finishedOn?: string }) {
+    return this.ortho.finish(id, body.cancelFutureInstallments, body.finishedOn);
   }
 
   @Post(':id/cancel')
   @RequirePermission('orthodontics.treatments.manage')
-  cancel(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(cancelTreatmentInput)) body: { reason: string }) {
-    return this.ortho.cancel(id, body.reason);
+  cancel(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(cancelTreatmentInput)) body: { reason: string; cancelledOn?: string }) {
+    return this.ortho.cancel(id, body.reason, body.cancelledOn);
   }
 }
 

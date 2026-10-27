@@ -71,6 +71,37 @@ describe('saúde: prontuário, veterinária, estética e ortodontia', () => {
       expect(list[1]).toMatchObject({ amendedById: fix.id, data: { complaint: 'Vômito há 2 dias' } });
     });
 
+    it('atendimento com data passada entra na linha do tempo pela data do atendimento', async () => {
+      const s = await clinic(['vet']);
+      const { body: rex } = await s.as('post', '/pets').send({ customerId: s.customer.id, name: 'Rex' }).expect(201);
+      const today = localToday();
+      const note = (notes: string, occurredOn?: string) => s.as('post', '/medical-records').send({ subjectType: 'pet', subjectId: rex.id, formKey: 'note', notes, occurredOn });
+
+      const { body: recent } = await note('Consulta de hoje').expect(201);
+      expect(recent.occurredOn).toBe(today);
+      // Histórico trazido de outro sistema, lançado depois.
+      const { body: old } = await note('Consulta de março', plusDays(today, -200)).expect(201);
+      const { body: middle } = await note('Retorno', plusDays(today, -30)).expect(201);
+      expect(old.occurredOn).toBe(plusDays(today, -200));
+      expect(new Date(old.createdAt).getTime()).toBeGreaterThanOrEqual(new Date(recent.createdAt).getTime());
+
+      const future = await note('Amanhã', plusDays(today, 1)).expect(400);
+      expect(String(future.body.message)).toMatch(/não pode ser no futuro/);
+      await note('Data torta', '31/12/2024').expect(400);
+
+      // Retificação fica na data do original, a menos que corrija a data.
+      const { body: fix } = await s.as('post', `/medical-records/${middle.id}/amend`).send({ notes: 'Retorno (sem febre)', reason: 'Faltou a observação' }).expect(201);
+      expect(fix.occurredOn).toBe(middle.occurredOn);
+      const { body: moved } = await s
+        .as('post', `/medical-records/${old.id}/amend`)
+        .send({ notes: 'Consulta de março', reason: 'Data errada', occurredOn: plusDays(today, -199) })
+        .expect(201);
+      expect(moved.occurredOn).toBe(plusDays(today, -199));
+
+      const { body: list } = await s.as('get', `/medical-records?subjectType=pet&subjectId=${rex.id}`).expect(200);
+      expect(list.map((e: { id: string }) => e.id)).toEqual([recent.id, fix.id, middle.id, moved.id, old.id]);
+    });
+
     it('o banco recusa alterar ou apagar registros, mesmo vindo da aplicação', async () => {
       const s = await clinic(['vet']);
       const { body: rex } = await s.as('post', '/pets').send({ customerId: s.customer.id, name: 'Rex' }).expect(201);
@@ -135,6 +166,8 @@ describe('saúde: prontuário, veterinária, estética e ortodontia', () => {
       await vaccinate('Antirrábica', plusDays(today, -700), plusDays(today, 2));
       await vaccinate('Antirrábica', plusDays(today, -5), plusDays(today, 360));
       await s.as('post', '/vet/vaccinations').send({ petId: rex.id, vaccine: 'Giárdia', appliedOn: today, nextDueOn: plusDays(today, -1) }).expect(400);
+      const future = await s.as('post', '/vet/vaccinations').send({ petId: rex.id, vaccine: 'Giárdia', appliedOn: plusDays(today, 1) }).expect(400);
+      expect(String(future.body.message)).toMatch(/não pode ser no futuro/);
 
       await t.jobs.runOnce('vet.vaccine-reminders');
       await t.jobs.runOnce('vet.vaccine-reminders');
@@ -197,6 +230,30 @@ describe('saúde: prontuário, veterinária, estética e ortodontia', () => {
       const after = (await s.as('get', `/finance/entries?limit=100&customerId=${s.customer.id}`).expect(200)).body.items;
       expect(after.filter((e: { sourceId: string }) => [a1.id, a4.id].includes(e.sourceId))).toEqual([]);
     });
+
+    it('pacote vendido em data passada: parcelas a partir da venda; venda no futuro é recusada', async () => {
+      const s = await clinic(['aesthetics']);
+      const drainage = s.service('Drenagem linfática');
+      const soldOn = plusDays(localToday(), -40);
+      const sell = (body: Record<string, unknown>) => s.as('post', '/aesthetics/packages').send({ customerId: s.customer.id, serviceId: drainage.id, totalSessions: 4, price: 400, installments: 2, ...body });
+      const future = await sell({ soldOn: plusDays(localToday(), 1) }).expect(400);
+      expect(String(future.body.message)).toMatch(/não pode ser no futuro/);
+
+      const { body: pkg } = await sell({ soldOn }).expect(201);
+      expect(pkg.soldOn).toBe(soldOn);
+      const { body: entries } = await s.as('get', `/finance/entries?limit=100&customerId=${s.customer.id}`).expect(200);
+      const due = entries.items
+        .filter((e: { sourceId: string }) => e.sourceId === pkg.id)
+        .map((e: { dueDate: string; competenceDate: string }) => [e.dueDate, e.competenceDate])
+        .sort();
+      const second = new Date(`${soldOn}T12:00:00Z`);
+      second.setUTCMonth(second.getUTCMonth() + 1);
+      expect(due[0]).toEqual([soldOn, soldOn]);
+      expect(due[1]![0].slice(0, 7)).toBe(second.toISOString().slice(0, 7));
+
+      const { body: cancelled } = await s.as('post', `/aesthetics/packages/${pkg.id}/cancel`).send({ reason: 'Desistiu', cancelledOn: plusDays(localToday(), -10) }).expect(201);
+      expect(cancelled).toMatchObject({ status: 'cancelled', cancelledOn: plusDays(localToday(), -10) });
+    });
   });
 
   describe('ortodontia', () => {
@@ -228,6 +285,24 @@ describe('saúde: prontuário, veterinária, estética e ortodontia', () => {
       // Sem tratamento ativo, a manutenção volta a ser cobrada.
       const { body: later } = await s.book({ serviceIds: [s.service('Manutenção mensal').id], startsAt: at(nextWeekday(), '16:00') }).expect(201);
       expect(later.total).toBe(180);
+    });
+
+    it('tratamento concluído em data passada cancela só as mensalidades que vencem depois dela', async () => {
+      const s = await clinic(['orthodontics']);
+      const { body: tr } = await s
+        .as('post', '/orthodontics/treatments')
+        .send({ customerId: s.customer.id, appliance: 'aligners', startedOn: plusDays(localToday(), -150), expectedMonths: 12, monthlyFee: 150, dueDay: 10 })
+        .expect(201);
+      const finishedOn = plusDays(localToday(), -30);
+      await s.as('post', `/orthodontics/treatments/${tr.id}/finish`).send({ finishedOn: plusDays(localToday(), 1) }).expect(400);
+      await s.as('post', `/orthodontics/treatments/${tr.id}/finish`).send({ finishedOn: plusDays(localToday(), -200) }).expect(400); // antes do início
+
+      const { body: done } = await s.as('post', `/orthodontics/treatments/${tr.id}/finish`).send({ finishedOn }).expect(201);
+      expect(done).toMatchObject({ status: 'finished', finishedOn });
+      for (const i of done.installments as { dueDate: string; status: string }[]) {
+        expect(i.status).toBe(i.dueDate > finishedOn ? 'cancelled' : 'pending');
+      }
+      expect(done.installments.some((i: { status: string }) => i.status === 'pending')).toBe(true);
     });
   });
 });

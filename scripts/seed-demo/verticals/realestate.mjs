@@ -91,10 +91,10 @@ const DEALS = [
   { property: 'vmariana', buyer: 'p4', label: 'Vila Mariana financiado (contratado) e vendido', body: { price: 870000, paymentType: 'financing', downPayment: 190000, fgtsAmount: 40000, commissionPercent: 6 }, credit: { bank: 0, outcome: 'contracted' }, end: 'close' },
   { property: 'moema', buyer: 'p5', label: 'Moema com crédito aprovado', body: { price: 1300000, paymentType: 'financing', downPayment: 300000, commissionPercent: 5, notes: 'Proprietário aceitou R$ 1,3 mi com assinatura em até 30 dias.' }, credit: { bank: 0, outcome: 'approved' } },
   { property: 'pinheiros', buyer: 'p6', label: 'Pinheiros com crédito em análise', body: { price: 735000, paymentType: 'financing', downPayment: 160000, fgtsAmount: 30000, commissionPercent: 6 }, credit: { bank: 1, outcome: 'pending' } },
-  { property: 'morumbi', buyer: 'p7', label: 'Morumbi perdido por crédito recusado', body: { price: 1800000, paymentType: 'financing', downPayment: 400000, commissionPercent: 6 }, credit: { bank: 1, outcome: 'rejected' }, end: 'lose', reason: 'Financiamento recusado: parcela acima de 30% da renda; cliente vai juntar uma entrada maior' },
+  { property: 'morumbi', buyer: 'p7', label: 'Morumbi perdido por crédito recusado', body: { price: 1800000, paymentType: 'financing', downPayment: 400000, commissionPercent: 6 }, credit: { bank: 1, outcome: 'rejected' }, end: 'lose', reasonKey: 'financing_denied', reason: 'Financiamento recusado: parcela acima de 30% da renda; cliente vai juntar uma entrada maior' },
   { property: 'altopinheiros', buyer: 'p5', label: 'Alto de Pinheiros em negociação à vista', body: { price: 2250000, paymentType: 'cash', commissionPercent: 5, notes: 'Contraproposta do proprietário: R$ 2,32 mi. Comprador vende outro imóvel para pagar.' } },
   { property: 'vmadalena', buyer: 'p6', label: 'Vila Madalena vendido à vista', body: { price: 1550000, paymentType: 'cash', commissionPercent: 6 }, end: 'close' },
-  { property: 'augusta', buyer: 'c0', label: 'Ponto na Augusta perdido', body: { price: 1100000, paymentType: 'cash', commissionPercent: 6 }, end: 'lose', reason: 'Comprador desistiu após a vistoria (instalação elétrica precisa de reforma)' },
+  { property: 'augusta', buyer: 'c0', label: 'Ponto na Augusta perdido', body: { price: 1100000, paymentType: 'cash', commissionPercent: 6 }, end: 'lose', reasonKey: 'gave_up', reason: 'Comprador desistiu após a vistoria (instalação elétrica precisa de reforma)' },
 ];
 
 /** Visitas e outros horários na agenda: dia útil relativo a hoje, hora, imóvel, cliente e status final. */
@@ -183,7 +183,7 @@ async function runDeal({ api, rng, log }, s, property, customer, deals, connecti
     log(`    proposta em ${p.connection.name}: ${p.status}`);
   }
   if (s.end === 'close') await api.post(`/real-estate/deals/${deal.id}/close`);
-  if (s.end === 'lose') await api.post(`/real-estate/deals/${deal.id}/lose`, { reason: s.reason });
+  if (s.end === 'lose') await api.post(`/real-estate/deals/${deal.id}/lose`, { reasonKey: s.reasonKey, reason: s.reason });
 }
 
 async function seedVisits({ api, log, users }, props, who) {

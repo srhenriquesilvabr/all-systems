@@ -181,13 +181,14 @@ function TreatmentModal({ id, onClose }: { id: string; onClose: () => void }) {
   const [months, setMonths] = useState('6');
   const [cancelFuture, setCancelFuture] = useState(true);
   const [reason, setReason] = useState('');
+  const [closedOn, setClosedOn] = useState(today());
   const run = useMutation({
     mutationFn: () =>
       action === 'extend'
         ? api(`/orthodontics/treatments/${id}/extend`, { method: 'POST', body: { months: Number(months) } })
         : action === 'finish'
-          ? api(`/orthodontics/treatments/${id}/finish`, { method: 'POST', body: { cancelFutureInstallments: cancelFuture } })
-          : api(`/orthodontics/treatments/${id}/cancel`, { method: 'POST', body: { reason } }),
+          ? api(`/orthodontics/treatments/${id}/finish`, { method: 'POST', body: { cancelFutureInstallments: cancelFuture, finishedOn: closedOn } })
+          : api(`/orthodontics/treatments/${id}/cancel`, { method: 'POST', body: { reason, cancelledOn: closedOn } }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: key });
       setAction(null);
@@ -256,7 +257,14 @@ function TreatmentModal({ id, onClose }: { id: string; onClose: () => void }) {
                 {action === 'extend' && (
                   <Field label="Mais quantos meses?">{(fid) => <Input id={fid} type="number" min={1} max={24} value={months} onChange={(e) => setMonths(e.target.value)} />}</Field>
                 )}
-                {action === 'finish' && <Checkbox label="Cancelar as mensalidades que ainda vão vencer" checked={cancelFuture} onChange={(e) => setCancelFuture(e.target.checked)} />}
+                {(action === 'finish' || action === 'cancel') && (
+                  <Field label={action === 'finish' ? 'Concluído em' : 'Cancelado em'}>
+                    {(fid) => <Input id={fid} type="date" required min={t.startedOn} max={today()} value={closedOn} onChange={(e) => setClosedOn(e.target.value)} />}
+                  </Field>
+                )}
+                {action === 'finish' && (
+                  <Checkbox label="Cancelar as mensalidades que vencem depois dessa data" checked={cancelFuture} onChange={(e) => setCancelFuture(e.target.checked)} />
+                )}
                 {action === 'cancel' && (
                   <Field label="Motivo do cancelamento" hint="Todas as parcelas em aberto são canceladas.">
                     {(fid) => <Input id={fid} value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />}
@@ -266,7 +274,7 @@ function TreatmentModal({ id, onClose }: { id: string; onClose: () => void }) {
                   <Button size="sm" variant="secondary" onClick={() => setAction(null)}>
                     Voltar
                   </Button>
-                  <Button size="sm" variant={action === 'cancel' ? 'danger' : 'primary'} loading={run.isPending} disabled={action === 'cancel' && reason.trim().length < 3} onClick={() => run.mutate()}>
+                  <Button size="sm" variant={action === 'cancel' ? 'danger' : 'primary'} loading={run.isPending} disabled={(action === 'cancel' && reason.trim().length < 3) || (action !== 'extend' && !closedOn)} onClick={() => run.mutate()}>
                     Confirmar
                   </Button>
                 </div>

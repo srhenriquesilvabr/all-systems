@@ -107,6 +107,55 @@ describe('vendas (PDV e estoque) e padaria', () => {
     expect((await s.as('get', '/sales/products?q=Refrigerante').expect(200)).body[0].stock).toBe(20);
   });
 
+  it('venda anterior: entra no dia informado no fechamento e no financeiro; venda futura é recusada', async () => {
+    const s = await bakery();
+    const milk = s.product('Leite integral 1 L');
+    const today = localToday();
+    const past = plusDays(today, -5);
+
+    const future = await s
+      .as('post', '/sales')
+      .send({ items: [{ productId: milk.id, quantity: 1 }], payments: [{ method: 'pix', amount: 5.49 }], soldAt: plusDays(today, 1) })
+      .expect(400);
+    expect(JSON.stringify(future.body)).toContain('A data da venda não pode ser no futuro');
+
+    const { body: sale } = await s
+      .as('post', '/sales')
+      .send({ items: [{ productId: milk.id, quantity: 2 }], payments: [{ method: 'pix', amount: 10.98 }], soldAt: past })
+      .expect(201);
+    expect(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date(sale.soldAt))).toBe(past);
+    expect(Date.parse(sale.createdAt)).toBeGreaterThan(Date.parse(sale.soldAt));
+    await s.as('post', '/sales').send({ items: [{ productId: milk.id, quantity: 1 }], payments: [{ method: 'cash', amount: 5.49 }] }).expect(201);
+
+    const { body: onPast } = await s.as('get', `/sales/summary?from=${past}&to=${past}`).expect(200);
+    expect(onPast).toMatchObject({ count: 1, total: 10.98, byDay: [{ date: past, count: 1, total: 10.98 }] });
+    const { body: week } = await s.as('get', `/sales/summary?from=${past}&to=${today}`).expect(200);
+    expect(week.byDay.map((d: { date: string }) => d.date)).toEqual([past, today]);
+    const { body: onToday } = await s.as('get', `/sales/summary?from=${today}&to=${today}`).expect(200);
+    expect(onToday).toMatchObject({ count: 1, total: 5.49 });
+    const { body: listPast } = await s.as('get', `/sales?from=${past}&to=${past}`).expect(200);
+    expect(listPast.map((x: { id: string }) => x.id)).toEqual([sale.id]);
+
+    const { body: entries } = await s.as('get', '/finance/entries?limit=50').expect(200);
+    expect(entries.items.filter((e: { sourceId: string }) => e.sourceId === sale.id)).toEqual([
+      expect.objectContaining({ status: 'paid', amount: 10.98, dueDate: past, paidAt: past, competenceDate: past }),
+    ]);
+  });
+
+  it('movimento de estoque com data passada entra no histórico pela data', async () => {
+    const s = await bakery();
+    const soda = s.product('Refrigerante lata 350 ml');
+    const move = (body: Record<string, unknown>) => s.as('post', '/sales/stock-moves').send({ productId: soda.id, ...body });
+    await move({ kind: 'loss', quantity: 2 }).expect(201);
+    const past = plusDays(localToday(), -10);
+    expect((await move({ kind: 'purchase', quantity: 12, occurredAt: past }).expect(201)).body.stock).toBe(10);
+    await move({ kind: 'purchase', quantity: 1, occurredAt: plusDays(localToday(), 1) }).expect(400);
+
+    const { body: moves } = await s.as('get', `/sales/products/${soda.id}/moves`).expect(200);
+    expect(moves.map((m: { kind: string }) => m.kind)).toEqual(['loss', 'purchase']);
+    expect(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date(moves[1].occurredAt))).toBe(past);
+  });
+
   it('cancelar a venda devolve o estoque e estorna o financeiro', async () => {
     const s = await bakery();
     const soda = s.product('Refrigerante lata 350 ml');
@@ -176,5 +225,14 @@ describe('vendas (PDV e estoque) e padaria', () => {
     expect(keys).toEqual(['bakery.order_ready', 'bakery.order_received']);
 
     await s.as('post', '/bakery/orders').send({ customerId: customer.id, dueAt: '2020-01-01T10:00:00Z', items: [{ description: 'x', quantity: 1, unitPrice: 1 }] }).expect(400);
+
+    // Encomenda antiga (registrar histórico): retirada no passado vale se o pedido também for antigo.
+    const orderedOn = plusDays(localToday(), -10);
+    const pastDue = new Date(`${plusDays(localToday(), -9)}T15:00:00-03:00`).toISOString();
+    const old = { customerId: customer.id, items: [{ description: 'Bolo', quantity: 1, unitPrice: 80 }] };
+    await s.as('post', '/bakery/orders').send({ ...old, receivedAt: orderedOn, dueAt: pastDue }).expect(201);
+    expect((await s.as('post', '/bakery/orders').send({ ...old, dueAt: pastDue }).expect(400)).body.code).toBe('DUE_IN_PAST');
+    const beforeOrder = new Date(`${plusDays(localToday(), -11)}T15:00:00-03:00`).toISOString();
+    expect((await s.as('post', '/bakery/orders').send({ ...old, receivedAt: orderedOn, dueAt: beforeOrder }).expect(400)).body.code).toBe('DUE_BEFORE_RECEIVED');
   });
 });

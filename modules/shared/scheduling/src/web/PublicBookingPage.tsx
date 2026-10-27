@@ -1,9 +1,9 @@
 import { ApiError, formatMoney } from '@all/module-sdk/web';
-import { Alert, Button, Card, Field, Input, Spinner, Textarea, cn } from '@all/ui';
+import { Alert, Button, Card, Field, Input, Select, Spinner, Textarea, cn } from '@all/ui';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useParams } from 'react-router';
-import type { AvailabilitySlots } from '../contracts';
+import type { AvailabilitySlots, BookingSubjectField } from '../contracts';
 import { localToUtc, shiftDate, todayLocal } from './hooks';
 
 interface BookingInfo {
@@ -11,6 +11,8 @@ interface BookingInfo {
   maxDays: number;
   services: { id: string; name: string; category: string | null; durationMin: number; price: number; description: string | null }[];
   professionals: { id: string; name: string; color: string; serviceIds: string[] }[];
+  /** Campos extras de "para quem é" (ex.: o pet), definidos por outro módulo ativo na empresa. */
+  subject: { label: string; fields: BookingSubjectField[] } | null;
 }
 
 /** Página pública: sem login, fala direto com /api/public/booking/<slug>. */
@@ -37,6 +39,7 @@ export function PublicBookingPage() {
   const [date, setDate] = useState(todayLocal());
   const [slot, setSlot] = useState<{ time: string; resourceId: string } | null>(null);
   const [form, setForm] = useState({ name: '', phone: '', email: '', notes: '' });
+  const [subjectFields, setSubjectFields] = useState<Record<string, string>>({});
 
   const availability = useQuery({
     queryKey: ['booking', slug, 'availability', date, serviceIds.join(','), professionalId],
@@ -48,9 +51,17 @@ export function PublicBookingPage() {
   });
   const book = useMutation({
     mutationFn: () =>
-      publicApi<{ startsAt: string; professional: string; services: string[]; total: number }>(`/${slug}`, {
+      publicApi<{ startsAt: string; professional: string; services: string[]; subject: string | null; total: number }>(`/${slug}`, {
         method: 'POST',
-        body: { ...form, email: form.email || null, notes: form.notes || null, serviceIds, resourceId: slot!.resourceId, startsAt: localToUtc(date, slot!.time).toISOString() },
+        body: {
+          ...form,
+          email: form.email || null,
+          notes: form.notes || null,
+          serviceIds,
+          resourceId: slot!.resourceId,
+          startsAt: localToUtc(date, slot!.time).toISOString(),
+          subjectFields: info.data?.subject ? subjectFields : null,
+        },
       }),
     onError: (err) => {
       if (err instanceof ApiError && err.code === 'SLOT_UNAVAILABLE') {
@@ -68,7 +79,7 @@ export function PublicBookingPage() {
       </Shell>
     );
   }
-  const { company, services, professionals, maxDays } = info.data;
+  const { company, services, professionals, maxDays, subject } = info.data;
 
   if (book.data) {
     return (
@@ -76,7 +87,8 @@ export function PublicBookingPage() {
         <Card className="space-y-3 p-6 text-center">
           <p className="font-display text-2xl font-medium">Horário marcado!</p>
           <p className="text-fg-muted">
-            {book.data.services.join(', ')} com {book.data.professional}
+            {book.data.services.join(', ')}
+            {book.data.subject ? ` para ${book.data.subject}` : ''} com {book.data.professional}
             <br />
             {date.split('-').reverse().join('/')} às {slot?.time}
           </p>
@@ -174,6 +186,30 @@ export function PublicBookingPage() {
               {(id) => <Input id={id} required type="tel" autoComplete="tel" placeholder="(48) 99999-0000" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />}
             </Field>
             <Field label="E-mail (opcional)">{(id) => <Input id={id} type="email" autoComplete="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />}</Field>
+            {subject?.fields.map((f) => (
+              <Field key={f.key} label={f.required ? f.label : `${f.label} (opcional)`}>
+                {(id) =>
+                  f.options ? (
+                    <Select id={id} required={f.required} value={subjectFields[f.key] ?? ''} onChange={(e) => setSubjectFields({ ...subjectFields, [f.key]: e.target.value })}>
+                      <option value="">Escolha</option>
+                      {f.options.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </Select>
+                  ) : (
+                    <Input
+                      id={id}
+                      required={f.required}
+                      maxLength={f.maxLength}
+                      value={subjectFields[f.key] ?? ''}
+                      onChange={(e) => setSubjectFields({ ...subjectFields, [f.key]: e.target.value })}
+                    />
+                  )
+                }
+              </Field>
+            ))}
             <Field label="Observação (opcional)">{(id) => <Textarea id={id} rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />}</Field>
             <div className="rounded-xl bg-muted p-3 text-sm">
               <strong>{chosen.map((s) => s.name).join(', ')}</strong>

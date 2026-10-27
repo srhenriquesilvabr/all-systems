@@ -80,6 +80,7 @@ export function OrdersPage() {
             <thead>
               <tr>
                 <Th>Nº</Th>
+                <Th>Entrada</Th>
                 <Th>Cliente</Th>
                 <Th>Status</Th>
                 <Th className="text-right">Total</Th>

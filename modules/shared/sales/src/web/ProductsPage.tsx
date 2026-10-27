@@ -1,4 +1,4 @@
-import { api, ApiError, formatDateTime, parseMoney, SpreadsheetImport, useCan } from '@all/module-sdk/web';
+import { api, ApiError, formatDateTime, parseMoney, SpreadsheetImport, today, useCan } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
@@ -190,7 +190,7 @@ function ProductModal({ product, onClose }: { product: Product | null; onClose: 
 function StockModal({ product, onClose }: { product: Product; onClose: () => void }) {
   const queryClient = useQueryClient();
   const moves = useQuery({ queryKey: [...salesKey, 'moves', product.id], queryFn: () => api<StockMove[]>(`/sales/products/${product.id}/moves`) });
-  const [form, setForm] = useState({ kind: 'purchase' as (typeof stockMoveKinds)[number], quantity: '', unitCost: '', reason: '' });
+  const [form, setForm] = useState({ kind: 'purchase' as (typeof stockMoveKinds)[number], quantity: '', unitCost: '', reason: '', occurredOn: today() });
   const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
   const save = useMutation({
     mutationFn: () =>
@@ -202,6 +202,8 @@ function StockModal({ product, onClose }: { product: Product; onClose: () => voi
           quantity: Number(form.quantity.replace(',', '.')),
           unitCost: form.kind === 'purchase' && form.unitCost ? parseMoney(form.unitCost) : null,
           reason: form.reason || null,
+          // Hoje = agora; outro dia registra o movimento naquela data (ex.: nota de compra antiga).
+          occurredAt: form.occurredOn && form.occurredOn !== today() ? form.occurredOn : undefined,
         },
       }),
     onSuccess: () => {
@@ -236,6 +238,7 @@ function StockModal({ product, onClose }: { product: Product; onClose: () => voi
           </Field>
           {form.kind === 'purchase' && <Field label="Custo unitário (R$)">{(id) => <Input id={id} inputMode="decimal" value={form.unitCost} onChange={(e) => set({ unitCost: e.target.value })} />}</Field>}
           <Field label="Observação">{(id) => <Input id={id} value={form.reason} onChange={(e) => set({ reason: e.target.value })} placeholder="Nota fiscal, motivo…" />}</Field>
+          <Field label="Data">{(id) => <Input id={id} type="date" max={today()} value={form.occurredOn} onChange={(e) => set({ occurredOn: e.target.value })} />}</Field>
         </div>
         <div className="flex justify-end">
           <Button type="submit" size="sm" loading={save.isPending}>
@@ -258,8 +261,9 @@ function StockModal({ product, onClose }: { product: Product; onClose: () => voi
                 {stockMoveLabel[m.kind]}
                 {m.reason && <span className="text-fg-muted"> · {m.reason}</span>}
                 <div className="text-xs text-fg-muted">
-                  {formatDateTime(m.createdAt)}
+                  {formatDateTime(m.occurredAt)}
                   {m.userName && ` · ${m.userName}`}
+                  {Math.abs(Date.parse(m.createdAt) - Date.parse(m.occurredAt)) > 3_600_000 && ` · lançado em ${formatDateTime(m.createdAt)}`}
                 </div>
               </span>
               <span className="whitespace-nowrap text-right tabular-nums">

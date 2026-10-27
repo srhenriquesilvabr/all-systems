@@ -20,6 +20,37 @@ export function weekdayOf(date: string): number {
 
 export const addMinutes = (d: Date, min: number) => new Date(d.getTime() + min * 60_000);
 
+/**
+ * Datas locais de uma repetição a partir de `start` (inclusive): semanal, quinzenal ou mensal no
+ * mesmo dia do mês. Mês sem esse dia (ex.: 31/04) vem com `exists: false` e conta para o total.
+ */
+export function seriesDates(start: string, r: { frequency: 'weekly' | 'biweekly' | 'monthly'; count?: number | null; until?: string | null }, max = 52) {
+  const [y, m, d] = start.split('-').map(Number);
+  const limit = Math.min(r.count ?? max, max);
+  const out: { date: string; exists: boolean }[] = [];
+  for (let i = 0; out.length < limit; i++) {
+    let dt: Date;
+    if (r.frequency === 'monthly') {
+      dt = new Date(Date.UTC(y!, m! - 1 + i, d!));
+      const month = (((m! - 1 + i) % 12) + 12) % 12;
+      if (dt.getUTCMonth() !== month) {
+        // Dia não existe neste mês: registra a data "impossível" para mostrar na tela.
+        const year = y! + Math.floor((m! - 1 + i) / 12);
+        const date = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        if (r.until && date > r.until) break;
+        out.push({ date, exists: false });
+        continue;
+      }
+    } else {
+      dt = new Date(Date.UTC(y!, m! - 1, d! + i * (r.frequency === 'weekly' ? 7 : 14)));
+    }
+    const date = dt.toISOString().slice(0, 10);
+    if (r.until && date > r.until) break;
+    out.push({ date, exists: true });
+  }
+  return out;
+}
+
 const toMinutes = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
 const toHhmm = (min: number) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
 

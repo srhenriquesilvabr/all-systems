@@ -101,7 +101,8 @@ export class LaundryOrdersService implements OnModuleInit {
         }
       }
 
-      const dueAt = input.dueAt ?? (await this.defaultDueAt(tx, [...services.values()].map((s) => s.turnaroundHours)));
+      const receivedAt = input.receivedAt ?? new Date();
+      const dueAt = input.dueAt ?? (await this.defaultDueAt(tx, receivedAt, [...services.values()].map((s) => s.turnaroundHours)));
       const order = await this.orders.createInTx(tx, {
         customerId: input.customerId,
         workflow: LAUNDRY_WORKFLOW,
@@ -109,6 +110,7 @@ export class LaundryOrdersService implements OnModuleInit {
         items,
         discount: input.discount,
         dueAt,
+        receivedAt,
         notesCustomer: input.notesCustomer,
         notesInternal: input.notesInternal,
       });
@@ -121,6 +123,7 @@ export class LaundryOrdersService implements OnModuleInit {
           tenantId,
           orderId: order.id,
           tagCode: `${order.number}-${String(i + 1).padStart(2, '0')}`,
+          statusChangedAt: receivedAt,
         })),
       );
       await this.audit.log(tx, { action: 'laundry.order.created', entity: 'service_order', entityId: order.id, data: { pieces: items.length } });
@@ -293,10 +296,10 @@ export class LaundryOrdersService implements OnModuleInit {
     }));
   }
 
-  private async defaultDueAt(tx: Tx, turnarounds: number[]) {
+  private async defaultDueAt(tx: Tx, receivedAt: Date, turnarounds: number[]) {
     const settings = await this.settings.getInTx<{ defaultTurnaroundHours: number }>(tx, 'laundry');
     const hours = Math.max(...turnarounds, 0) || settings.defaultTurnaroundHours;
-    return new Date(Date.now() + hours * 3600_000);
+    return new Date(receivedAt.getTime() + hours * 3600_000);
   }
 }
 

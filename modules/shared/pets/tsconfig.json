@@ -7,5 +7,5 @@
   },
   "include": ["src"],
   "exclude": ["src/web"],
-  "references": [{ "path": "../../../packages/db" }, { "path": "../../../packages/module-sdk" }, { "path": "../../core" }]
+  "references": [{ "path": "../../../packages/db" }, { "path": "../../../packages/module-sdk" }, { "path": "../../core" }, { "path": "../scheduling" }]
 }

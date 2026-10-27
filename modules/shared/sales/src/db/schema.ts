@@ -48,9 +48,16 @@ export const salesSales = pgTable(
     sellerId: uuid('seller_id').references(() => users.id),
     cancelReason: text('cancel_reason'),
     cancelledAt: ts('cancelled_at'),
+    /** Quando a venda aconteceu; relatórios usam esta data. created_at é o registro (auditoria). */
+    soldAt: ts('sold_at').notNull().defaultNow(),
     createdAt: ts('created_at').notNull().defaultNow(),
   },
-  (t) => [uniqueIndex('sales_sales_number_key').on(t.tenantId, t.number), index('sales_sales_created_idx').on(t.tenantId, t.createdAt), tenantIsolation()],
+  (t) => [
+    uniqueIndex('sales_sales_number_key').on(t.tenantId, t.number),
+    index('sales_sales_created_idx').on(t.tenantId, t.createdAt),
+    index('sales_sales_sold_idx').on(t.tenantId, t.soldAt),
+    tenantIsolation(),
+  ],
 );
 
 export const salesItems = pgTable(
@@ -107,7 +114,9 @@ export const salesStockMoves = pgTable(
     reason: text('reason'),
     saleId: uuid('sale_id').references(() => salesSales.id),
     userId: uuid('user_id').references(() => users.id),
+    /** Quando o movimento aconteceu (compra lançada depois, venda anterior…). */
+    occurredAt: ts('occurred_at').notNull().defaultNow(),
     createdAt: ts('created_at').notNull().defaultNow(),
   },
-  (t) => [index('sales_stock_moves_product_idx').on(t.productId, t.createdAt), tenantIsolation()],
+  (t) => [index('sales_stock_moves_product_idx').on(t.productId, t.occurredAt), tenantIsolation()],
 );

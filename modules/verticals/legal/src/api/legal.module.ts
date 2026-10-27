@@ -2,7 +2,7 @@ import { ZodPipe } from '@all/core';
 import { ModuleRoute, RequireAnyPermission, RequirePermission } from '@all/module-sdk';
 import { Body, Controller, Get, HttpCode, Module, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { z } from 'zod';
-import { caseInput, deadlineInput, feeInput, successInput, updateInput, type CaseInput, type DeadlineInput, type FeeInput } from '../contracts';
+import { caseInput, deadlineDoneInput, deadlineInput, feeInput, successInput, updateInput, type CaseInput, type DeadlineInput, type FeeInput } from '../contracts';
 import { LegalService } from './legal.service';
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -81,8 +81,8 @@ export class LegalController {
   @Post('deadlines/:id/done')
   @HttpCode(204)
   @RequirePermission('legal.cases.write')
-  done(@Param('id', ParseUUIDPipe) id: string) {
-    return this.legal.completeDeadline(id, true);
+  done(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(deadlineDoneInput)) body: { doneOn?: string }) {
+    return this.legal.completeDeadline(id, true, body.doneOn);
   }
 
   @Post('deadlines/:id/reopen')

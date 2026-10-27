@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestApp, login, ownerSession, PASSWORD, tokenFromMail, uniqueEmail, auth, type TestApp } from './helpers';
 
+/** Data (YYYY-MM-DD) em São Paulo, `n` dias a partir de hoje. */
+const spDay = (n: number) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date(Date.now() + n * 86_400_000));
+
 describe('ordens de serviço', () => {
   let t: TestApp;
   beforeAll(async () => {
@@ -174,6 +177,45 @@ describe('ordens de serviço', () => {
       .send({ amount: 15, method: 'cash', accountId: s.accountId, paidAt: '2026-10-21' })
       .expect(201);
     await t.http().get('/api/finance/summary?from=2026-10-01&to=2026-10-31').set(auth(access)).expect(403);
+  });
+
+  it('registra ordem antiga com a data de entrada informada, sem avisar o cliente', async () => {
+    const s = await setup();
+    const day = spDay(-10);
+    const old = await s.newOrder({ receivedAt: day });
+    expect(old.receivedAt).toBe(new Date(`${day}T12:00:00-03:00`).toISOString());
+    expect(old.history).toEqual([expect.objectContaining({ to: 'open', createdAt: old.receivedAt })]);
+
+    // Sem previsão de entrega, o "a receber" vence na data de entrada.
+    const entries = await receivablesOf(s, old.id);
+    expect(entries).toEqual([expect.objectContaining({ status: 'pending', dueDate: day, competenceDate: day })]);
+
+    const log = await s.as('get', '/notifications').expect(200);
+    expect(log.body).toEqual([]);
+    const timeline = await s.as('get', `/customers/${s.customer.id}/timeline`).expect(200);
+    expect(timeline.body.map((e: { title: string }) => e.title).join('\n')).toMatch(new RegExp(`Ordem nº ${old.number} aberta em `));
+
+    // A lista segue a data de entrada (mais recente primeiro), não a ordem de cadastro.
+    const current = await s.newOrder();
+    const list = await s.as('get', '/service-orders').expect(200);
+    expect(list.body.items.map((o: { id: string }) => o.id)).toEqual([current.id, old.id]);
+  });
+
+  it('recusa data de entrada no futuro e previsão antes da entrada', async () => {
+    const s = await setup();
+    const items = [{ description: 'Camisa', quantity: 1, unitPrice: 10 }];
+    const future = await s.as('post', '/service-orders').send({ customerId: s.customer.id, items, receivedAt: spDay(1) }).expect(400);
+    expect(String(future.body.message)).toMatch(/não pode ser no futuro/);
+
+    const before = await s
+      .as('post', '/service-orders')
+      .send({ customerId: s.customer.id, items, receivedAt: spDay(-5), dueAt: new Date(`${spDay(-7)}T12:00:00-03:00`).toISOString() })
+      .expect(400);
+    expect(before.body.code).toBe('DUE_BEFORE_RECEIVED');
+
+    // Hoje (só a data) vale como "agora".
+    const today = await s.newOrder({ receivedAt: spDay(0) });
+    expect(Math.abs(new Date(today.receivedAt).getTime() - Date.now())).toBeLessThan(60_000);
   });
 
   it('sem o módulo contratado, não há ordens de serviço', async () => {

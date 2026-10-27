@@ -2,13 +2,17 @@ import { AuditService, CustomerDataRegistry, CustomersService, TenantDb, ZodPipe
 import { customers } from '@all/core/schema';
 import type { Tx } from '@all/db';
 import { ModuleRoute, RequirePermission, requestContext } from '@all/module-sdk';
+import { SchedulingModule, SchedulingService } from '@all/scheduling';
 import { BadRequestException, Body, Controller, Get, Injectable, Module, NotFoundException, OnModuleInit, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
-import { and, asc, eq, ilike, or, sql } from 'drizzle-orm';
+import { and, asc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { petInput, speciesLabel, type Pet, type PetInput } from '../contracts';
+import { petInput, species, speciesLabel, type Pet, type PetInput, type Species } from '../contracts';
 import { pets } from '../db/schema';
 
 type PetRow = typeof pets.$inferSelect;
+
+/** Nome comparável: sem acento, sem diferença de maiúsculas e espaços extras. */
+const sameName = (name: string) => name.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
 
 @Injectable()
 export class PetsService implements OnModuleInit {
@@ -17,6 +21,7 @@ export class PetsService implements OnModuleInit {
     private readonly customers: CustomersService,
     private readonly audit: AuditService,
     private readonly customerData: CustomerDataRegistry,
+    private readonly scheduling: SchedulingService,
   ) {}
 
   onModuleInit() {
@@ -27,6 +32,39 @@ export class PetsService implements OnModuleInit {
         await tx.update(pets).set({ notes: null, microchip: null }).where(eq(pets.customerId, customerId));
       },
     });
+    // Agendamento online: com pets ativo, o cliente diz o nome e a espécie do pet; o horário fica para ele.
+    this.scheduling.registerBookingSubject({
+      moduleKey: 'shared.pets',
+      label: 'Pet',
+      fields: [
+        { key: 'name', label: 'Nome do pet', required: true, maxLength: 60 },
+        { key: 'species', label: 'Espécie', required: true, options: species.map((s) => ({ value: s, label: speciesLabel[s] })) },
+      ],
+      resolve: async (tx, { customerId, values }) => {
+        const pet = await this.findOrCreateByNameInTx(tx, customerId, values.name!, values.species as Species);
+        return { type: 'pet', id: pet.id, label: pet.name };
+      },
+    });
+  }
+
+  /** Pet do tutor com o mesmo nome (sem diferenciar acento/maiúscula) ou um novo, só com nome e espécie. */
+  async findOrCreateByNameInTx(tx: Tx, customerId: string, name: string, kind: Species): Promise<{ id: string; name: string }> {
+    const { tenantId } = requestContext.requireTenant();
+    const mine = await tx.select({ id: pets.id, name: pets.name }).from(pets).where(and(eq(pets.customerId, customerId), isNull(pets.deceasedAt)));
+    const found = mine.find((p) => sameName(p.name) === sameName(name));
+    if (found) return found;
+    const clean = name.replace(/\s+/g, ' ').trim();
+    const [row] = await tx.insert(pets).values({ tenantId, customerId, name: clean, species: kind }).returning({ id: pets.id, name: pets.name });
+    await this.customers.addTimeline(tx, {
+      customerId,
+      moduleKey: 'shared.pets',
+      type: 'pet.created',
+      title: `Pet cadastrado: ${clean} (${speciesLabel[kind]})`,
+      entity: 'pet',
+      entityId: row!.id,
+    });
+    await this.audit.log(tx, { action: 'pet.created', entity: 'pet', entityId: row!.id, data: { source: 'online_booking' } });
+    return row!;
   }
 
   list(opts: { q?: string; customerId?: string; limit: number }) {
@@ -169,5 +207,5 @@ export class PetsController {
   }
 }
 
-@Module({ controllers: [PetsController], providers: [PetsService], exports: [PetsService] })
+@Module({ imports: [SchedulingModule], controllers: [PetsController], providers: [PetsService], exports: [PetsService] })
 export class PetsModule {}

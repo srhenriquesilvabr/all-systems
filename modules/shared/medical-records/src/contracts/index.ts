@@ -24,6 +24,15 @@ export interface MedicalForm {
   fields: FormField[];
 }
 
+/** Hoje no fuso do negócio (YYYY-MM-DD). */
+export const businessToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+
+/** Data do atendimento: pode ser passada (histórico), nunca futura. */
+const careDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Data inválida')
+  .refine((d) => d <= businessToday(), 'A data do atendimento não pode ser no futuro');
+
 export const entryInput = z.object({
   subjectType: z.string().min(1).max(40),
   subjectId: z.string().uuid(),
@@ -31,6 +40,8 @@ export const entryInput = z.object({
   data: z.record(z.unknown()).default({}),
   notes: z.string().trim().max(20_000).nullish(),
   appointmentId: z.string().uuid().nullish(),
+  /** Padrão: hoje. */
+  occurredOn: careDate.optional(),
 });
 export type EntryInput = z.infer<typeof entryInput>;
 
@@ -38,6 +49,8 @@ export const amendInput = z.object({
   data: z.record(z.unknown()).default({}),
   notes: z.string().trim().max(20_000).nullish(),
   reason: z.string().trim().min(3, 'Explique o motivo da retificação').max(500),
+  /** Padrão: a mesma data do registro retificado. */
+  occurredOn: careDate.optional(),
 });
 export type AmendInput = z.infer<typeof amendInput>;
 
@@ -64,6 +77,9 @@ export interface MedicalEntry {
   amendedById: string | null;
   author: { id: string; name: string };
   attachments: EntryAttachment[];
+  /** Data do atendimento (YYYY-MM-DD): a timeline segue esta data. */
+  occurredOn: string;
+  /** Quando foi registrado no sistema (auditoria). */
   createdAt: string;
 }
 

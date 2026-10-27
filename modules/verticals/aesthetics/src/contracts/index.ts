@@ -3,6 +3,10 @@ import { z } from 'zod';
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data inválida');
 
+/** Hoje no fuso da clínica (YYYY-MM-DD). */
+export const localToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+const pastDate = (message: string) => isoDate.refine((d) => d <= localToday(), message);
+
 export const packageInput = z.object({
   customerId: z.string().uuid('Escolha o cliente'),
   serviceId: z.string().uuid('Escolha o procedimento'),
@@ -11,13 +15,19 @@ export const packageInput = z.object({
   price: z.coerce.number().min(0).max(1_000_000).multipleOf(0.01),
   /** Parcelas mensais lançadas como "a receber" no financeiro (vencimento da 1ª em `firstDueOn`). */
   installments: z.coerce.number().int().min(1).max(24).default(1),
-  firstDueOn: isoDate,
+  /** Dia da venda (padrão hoje); pode ser no passado para registrar histórico. */
+  soldOn: pastDate('A data da venda não pode ser no futuro').optional(),
+  /** Padrão: o dia da venda. */
+  firstDueOn: isoDate.optional(),
   expiresOn: isoDate.nullish().or(z.literal('')).transform((v) => v || null),
   notes: z.string().trim().max(500).nullish(),
 });
 export type PackageInput = z.infer<typeof packageInput>;
 
-export const cancelPackageInput = z.object({ reason: z.string().trim().min(3, 'Explique o motivo').max(300) });
+export const cancelPackageInput = z.object({
+  reason: z.string().trim().min(3, 'Explique o motivo').max(300),
+  cancelledOn: pastDate('A data do cancelamento não pode ser no futuro').optional(),
+});
 
 export type PackageStatus = 'active' | 'finished' | 'cancelled';
 export const packageStatusLabel: Record<PackageStatus, string> = { active: 'Ativo', finished: 'Concluído', cancelled: 'Cancelado' };
@@ -31,10 +41,12 @@ export interface SessionPackage {
   /** Sessões já marcadas na agenda, ainda não realizadas. */
   reservedSessions: number;
   price: number;
+  soldOn: string;
   expiresOn: string | null;
   status: PackageStatus;
   notes: string | null;
   cancelReason: string | null;
+  cancelledOn: string | null;
   createdAt: string;
 }
 

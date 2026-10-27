@@ -24,6 +24,8 @@ export const soOrders = pgTable(
     total: money('total').notNull(),
     paidAmount: money('paid_amount').notNull().default('0'),
     paymentStatus: text('payment_status', { enum: ['pending', 'partial', 'paid'] }).notNull().default('pending'),
+    /** Data de entrada informada pelo negócio (padrão: agora). created_at fica como auditoria. */
+    receivedAt: ts('received_at').notNull().defaultNow(),
     dueAt: ts('due_at'),
     closedAt: ts('closed_at'),
     cancelReason: text('cancel_reason'),
@@ -40,6 +42,7 @@ export const soOrders = pgTable(
     uniqueIndex('so_orders_tenant_number').on(t.tenantId, t.number),
     index('so_orders_tenant_status_idx').on(t.tenantId, t.status),
     index('so_orders_customer_idx').on(t.customerId),
+    index('so_orders_tenant_received_idx').on(t.tenantId, t.receivedAt),
     tenantIsolation(),
   ],
 );

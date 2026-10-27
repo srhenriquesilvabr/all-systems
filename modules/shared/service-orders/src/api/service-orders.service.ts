@@ -13,6 +13,7 @@ import { ServiceOrderWorkflows } from './workflows';
 const SOURCE = 'service_order';
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const dateTime = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' });
+const dateOnly = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeZone: 'America/Sao_Paulo' });
 
 type OrderRow = typeof soOrders.$inferSelect;
 
@@ -64,7 +65,7 @@ export class ServiceOrdersService implements OnModuleInit {
           .from(soOrders)
           .innerJoin(customers, eq(customers.id, soOrders.customerId))
           .where(where)
-          .orderBy(desc(soOrders.number))
+          .orderBy(desc(soOrders.receivedAt), desc(soOrders.number))
           .limit(opts.limit)
           .offset(opts.offset),
         tx.select({ total: count() }).from(soOrders).innerJoin(customers, eq(customers.id, soOrders.customerId)).where(where),
@@ -94,6 +95,13 @@ export class ServiceOrdersService implements OnModuleInit {
     if (!customer) throw badRequest('CUSTOMER_NOT_FOUND', 'Cliente não encontrado');
     if (customer.anonymizedAt) throw badRequest('CUSTOMER_ANONYMIZED', 'Cliente anonimizado não pode abrir ordens');
 
+    // Ordem antiga (registro de histórico): entra com a data informada e não avisa o cliente.
+    const receivedAt = input.receivedAt ?? new Date();
+    const backdated = toDateOnly(receivedAt) < toDateOnly(new Date());
+    if (input.dueAt && toDateOnly(input.dueAt) < toDateOnly(receivedAt)) {
+      throw badRequest('DUE_BEFORE_RECEIVED', 'A previsão de entrega não pode ser antes da data de entrada');
+    }
+
     const totals = computeTotals(input.items, input.discount);
     const [order] = await tx
       .insert(soOrders)
@@ -107,6 +115,7 @@ export class ServiceOrdersService implements OnModuleInit {
         subtotal: centsToDecimal(totals.subtotal),
         discount: centsToDecimal(totals.discount),
         total: centsToDecimal(totals.total),
+        receivedAt,
         dueAt: input.dueAt ?? null,
         notesCustomer: input.notesCustomer ?? null,
         notesInternal: input.notesInternal ?? null,
@@ -114,18 +123,18 @@ export class ServiceOrdersService implements OnModuleInit {
       })
       .returning();
     await this.replaceItems(tx, order!.id, input.items);
-    await tx.insert(soStatusHistory).values({ tenantId, orderId: order!.id, toStatus: workflow.initial, userId: userId ?? null });
+    await tx.insert(soStatusHistory).values({ tenantId, orderId: order!.id, toStatus: workflow.initial, userId: userId ?? null, createdAt: receivedAt });
 
     await this.syncReceivable(tx, order!);
     await this.customers.addTimeline(tx, {
       customerId: customer.id,
       moduleKey: 'shared.service-orders',
       type: 'service_order.created',
-      title: `Ordem nº ${order!.number} aberta (${brl.format(centsToNumber(totals.total))})`,
+      title: `Ordem nº ${order!.number} aberta${backdated ? ` em ${dateOnly.format(receivedAt)}` : ''} (${brl.format(centsToNumber(totals.total))})`,
       entity: 'service_order',
       entityId: order!.id,
     });
-    await this.notify(tx, order!, workflow);
+    if (!backdated) await this.notify(tx, order!, workflow);
     await this.audit.log(tx, { action: 'service_order.created', entity: 'service_order', entityId: order!.id, data: { number: order!.number } });
     return this.detail(tx, order!.id);
   }
@@ -269,7 +278,7 @@ export class ServiceOrdersService implements OnModuleInit {
       sourceId: order.id,
       amountCents: outstanding,
       description: `Ordem de serviço nº ${order.number}`,
-      dueDate: toDateOnly(order.dueAt ?? order.createdAt),
+      dueDate: toDateOnly(order.dueAt ?? order.receivedAt),
       customerId: order.customerId,
       categoryKey: 'services',
     });
@@ -330,7 +339,7 @@ export class ServiceOrdersService implements OnModuleInit {
         .from(soStatusHistory)
         .leftJoin(users, eq(users.id, soStatusHistory.userId))
         .where(eq(soStatusHistory.orderId, id))
-        .orderBy(asc(soStatusHistory.createdAt)),
+        .orderBy(asc(soStatusHistory.createdAt), asc(soStatusHistory.id)),
     ]);
     return {
       ...toSummary(order, customer.name),
@@ -391,6 +400,7 @@ function toSummary(o: OrderRow, customerName: string): OrderSummary {
     paidAmount: Number(o.paidAmount),
     paymentStatus: o.paymentStatus,
     dueAt: o.dueAt?.toISOString() ?? null,
+    receivedAt: o.receivedAt.toISOString(),
     createdAt: o.createdAt.toISOString(),
   };
 }

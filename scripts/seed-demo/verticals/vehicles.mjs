@@ -49,8 +49,8 @@ const DEALS = [
     label: 'Compass em negociação com troca',
     body: { price: 139900, discount: 3000, paymentType: 'cash', tradeIn: { brand: 'Volkswagen', model: 'Gol 1.6 MSI', yearModel: 2018, plate: 'EZT8B14', km: 76000, value: 42000 }, notes: 'Cliente pediu R$ 45 mil na troca; contraproposta de R$ 42 mil.' },
   },
-  { plate: 'QPL9G54', buyer: 'p5', label: 'HB20 perdido para concorrente', body: { price: 64900, discount: 1500, paymentType: 'cash' }, end: 'lose', reason: 'Cliente comprou em outra loja por R$ 3 mil a menos' },
-  { plate: 'SEF3D28', buyer: 'p6', label: 'Kwid perdido por crédito recusado', body: { price: 59900, discount: 0, paymentType: 'financing', downPayment: 6000 }, credit: { bank: 1, outcome: 'rejected', term: 48 }, end: 'lose', reason: 'Financiamento recusado e cliente sem entrada maior' },
+  { plate: 'QPL9G54', buyer: 'p5', label: 'HB20 perdido para concorrente', body: { price: 64900, discount: 1500, paymentType: 'cash' }, end: 'lose', reasonKey: 'bought_elsewhere', reason: 'Cliente comprou em outra loja por R$ 3 mil a menos' },
+  { plate: 'SEF3D28', buyer: 'p6', label: 'Kwid perdido por crédito recusado', body: { price: 59900, discount: 0, paymentType: 'financing', downPayment: 6000 }, credit: { bank: 1, outcome: 'rejected', term: 48 }, end: 'lose', reasonKey: 'financing_denied', reason: 'Financiamento recusado e cliente sem entrada maior' },
   { plate: 'SHK0A92', buyer: 'p7', label: 'Fazer FZ25 vendida à vista', body: { price: 22900, discount: 400, paymentType: 'cash' }, end: 'close' },
 ];
 
@@ -103,5 +103,5 @@ async function runDeal({ api, rng, log }, s, vehicle, customer, deals, connectio
     log(`    proposta em ${p.connection.name}: ${p.status}`);
   }
   if (s.end === 'close') await api.post(`/vehicles/deals/${deal.id}/close`);
-  if (s.end === 'lose') await api.post(`/vehicles/deals/${deal.id}/lose`, { reason: s.reason });
+  if (s.end === 'lose') await api.post(`/vehicles/deals/${deal.id}/lose`, { reasonKey: s.reasonKey, reason: s.reason });
 }

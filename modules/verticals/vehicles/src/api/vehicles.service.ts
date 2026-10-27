@@ -5,8 +5,19 @@ import type { Tx } from '@all/db';
 import { requestContext } from '@all/module-sdk';
 import { NotificationsService } from '@all/notifications';
 import { BadRequestException, BadGatewayException, ConflictException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
-import { and, desc, eq, ilike, ne, or } from 'drizzle-orm';
-import { vehicleTitle, type Deal, type DealInput, type DealStatus, type FipePrice, type Vehicle, type VehicleInput } from '../contracts';
+import { and, desc, eq, ilike, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
+import {
+  vehicleTitle,
+  type Deal,
+  type DealInput,
+  type DealsSummary,
+  type DealStatus,
+  type FipePrice,
+  type LoseInput,
+  type LostReasonKey,
+  type Vehicle,
+  type VehicleInput,
+} from '../contracts';
 import { vehDeals, vehVehicles } from '../db/schema';
 
 const MODULE = 'vehicles';
@@ -23,6 +34,15 @@ const plusDays = (iso: string, n: number) => {
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 };
+const dayStart = (date: string) => sql`(${date}::date)::timestamp at time zone 'America/Sao_Paulo'`;
+const dayEnd = (date: string) => sql`((${date}::date + 1)::timestamp at time zone 'America/Sao_Paulo')`;
+/** Período do resumo: sem datas, o mês corrente. */
+const periodOf = (from?: string, to?: string) => {
+  const today = localToday();
+  const [y, m] = today.split('-').map(Number) as [number, number];
+  return { from: from ?? `${today.slice(0, 7)}-01`, to: to ?? new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10) };
+};
+const OPEN = sql`${vehDeals.status} not in ('closed', 'lost')`;
 
 /** Tabela FIPE pela BrasilAPI (pública, sem chave). Isolada para ser trocada nos testes. */
 @Injectable()
@@ -119,7 +139,7 @@ export class VehiclesService implements OnModuleInit {
 
   // ---- Negociações ----------------------------------------------------------------------------
 
-  listDeals(opts: { status?: string; customerId?: string; vehicleId?: string }): Promise<Deal[]> {
+  listDeals(opts: { status?: string; customerId?: string; vehicleId?: string; sellerId?: string }): Promise<Deal[]> {
     return this.tdb.run(async (tx) => {
       const rows = await this.dealQuery(tx)
         .where(
@@ -127,6 +147,7 @@ export class VehiclesService implements OnModuleInit {
             opts.status ? eq(vehDeals.status, opts.status as DealStatus) : undefined,
             opts.customerId ? eq(vehDeals.customerId, opts.customerId) : undefined,
             opts.vehicleId ? eq(vehDeals.vehicleId, opts.vehicleId) : undefined,
+            opts.sellerId === 'none' ? isNull(vehDeals.sellerId) : opts.sellerId ? eq(vehDeals.sellerId, opts.sellerId) : undefined,
           ),
         )
         .orderBy(desc(vehDeals.createdAt))
@@ -149,6 +170,7 @@ export class VehiclesService implements OnModuleInit {
       if (!vehicle) throw new NotFoundException({ code: 'VEHICLE_NOT_FOUND', message: 'Veículo não encontrado' });
       if (vehicle.status !== 'available') throw new ConflictException({ code: 'VEHICLE_UNAVAILABLE', message: 'Veículo reservado, vendido ou fora de venda' });
       checkAmounts(input);
+      if (input.sellerId) await this.checkSeller(tx, tenantId, input.sellerId);
       const [deal] = await tx
         .insert(vehDeals)
         .values({
@@ -161,7 +183,7 @@ export class VehiclesService implements OnModuleInit {
           paymentType: input.paymentType,
           downPayment: centsToDecimal(toCents(input.downPayment)),
           tradeIn: input.tradeIn ?? null,
-          sellerId: userId ?? null,
+          sellerId: input.sellerId ?? userId ?? null,
           notes: input.notes ?? null,
         })
         .returning();
@@ -172,11 +194,13 @@ export class VehiclesService implements OnModuleInit {
     });
   }
 
-  updateDeal(id: string, input: Pick<DealInput, 'price' | 'discount' | 'paymentType' | 'downPayment' | 'tradeIn' | 'notes'>): Promise<Deal> {
+  updateDeal(id: string, input: Pick<DealInput, 'price' | 'discount' | 'paymentType' | 'downPayment' | 'tradeIn' | 'notes' | 'sellerId'>): Promise<Deal> {
+    const { tenantId } = requestContext.requireTenant();
     return this.tdb.run(async (tx) => {
       const deal = await this.dealOrFail(tx, id);
       if (!['negotiating', 'credit_rejected'].includes(deal.status)) throw badRequest('DEAL_LOCKED', 'Com crédito em análise ou aprovado, os valores não mudam; cancele a proposta antes');
       checkAmounts(input);
+      if (input.sellerId && input.sellerId !== deal.sellerId) await this.checkSeller(tx, tenantId, input.sellerId);
       await tx
         .update(vehDeals)
         .set({
@@ -186,10 +210,59 @@ export class VehiclesService implements OnModuleInit {
           downPayment: centsToDecimal(toCents(input.downPayment)),
           tradeIn: input.tradeIn ?? null,
           notes: input.notes ?? null,
+          // Sem vendedor no corpo, mantém o atual.
+          ...(input.sellerId ? { sellerId: input.sellerId } : {}),
           status: 'negotiating',
         })
         .where(eq(vehDeals.id, id));
       return this.dealDetail(tx, id);
+    });
+  }
+
+  /** Troca o vendedor responsável, em qualquer etapa enquanto a negociação está aberta. */
+  assignSeller(id: string, sellerId: string): Promise<Deal> {
+    const { tenantId } = requestContext.requireTenant();
+    return this.tdb.run(async (tx) => {
+      const deal = await this.dealOrFail(tx, id, true);
+      if (deal.status === 'closed' || deal.status === 'lost') throw badRequest('DEAL_CLOSED', 'Negociação já encerrada');
+      await this.checkSeller(tx, tenantId, sellerId);
+      await tx.update(vehDeals).set({ sellerId }).where(eq(vehDeals.id, id));
+      await this.audit.log(tx, { action: 'vehicles.deal.seller_changed', entity: 'veh_deal', entityId: id, data: { from: deal.sellerId, to: sellerId } });
+      return this.dealDetail(tx, id);
+    });
+  }
+
+  /** Por vendedor: em aberto agora, vendidas e perdidas no período; e as perdas por motivo. */
+  summary(opts: { from?: string; to?: string }): Promise<DealsSummary> {
+    const { from, to } = periodOf(opts.from, opts.to);
+    const inPeriod = (col: typeof vehDeals.closedAt | SQL) => sql`${col} >= ${dayStart(from)} and ${col} < ${dayEnd(to)}`;
+    const won = sql`${vehDeals.status} = 'closed' and ${inPeriod(vehDeals.closedAt)}`;
+    // Perdidas antes de existir lost_at contam pela abertura.
+    const lost = sql`${vehDeals.status} = 'lost' and ${inPeriod(sql`coalesce(${vehDeals.lostAt}, ${vehDeals.createdAt})`)}`;
+    return this.tdb.run(async (tx) => {
+      const [sellers, reasons] = await Promise.all([
+        tx
+          .select({
+            sellerId: vehDeals.sellerId,
+            sellerName: coreSchema.users.name,
+            open: sql<number>`count(*) filter (where ${OPEN})`.mapWith(Number),
+            won: sql<number>`count(*) filter (where ${won})`.mapWith(Number),
+            wonValue: sql<number>`coalesce(sum(${vehDeals.price} - ${vehDeals.discount}) filter (where ${won}), 0)`.mapWith(Number),
+            lost: sql<number>`count(*) filter (where ${lost})`.mapWith(Number),
+          })
+          .from(vehDeals)
+          .leftJoin(coreSchema.users, eq(coreSchema.users.id, vehDeals.sellerId))
+          .where(sql`(${OPEN}) or (${won}) or (${lost})`)
+          .groupBy(vehDeals.sellerId, coreSchema.users.name),
+        tx
+          .select({ reasonKey: vehDeals.lostReasonKey, count: sql<number>`count(*)`.mapWith(Number) })
+          .from(vehDeals)
+          .where(lost)
+          .groupBy(vehDeals.lostReasonKey)
+          .orderBy(desc(sql`count(*)`)),
+      ]);
+      sellers.sort((a, b) => b.wonValue - a.wonValue || b.open - a.open || (a.sellerName ?? '').localeCompare(b.sellerName ?? ''));
+      return { from, to, sellers, lostByReason: reasons.map((r) => ({ reasonKey: r.reasonKey as LostReasonKey | null, count: r.count })) };
     });
   }
 
@@ -269,15 +342,16 @@ export class VehiclesService implements OnModuleInit {
     });
   }
 
-  loseDeal(id: string, reason: string): Promise<Deal> {
+  loseDeal(id: string, input: LoseInput): Promise<Deal> {
+    const reason = input.reason || null;
     return this.tdb.run(async (tx) => {
       const deal = await this.dealOrFail(tx, id, true);
       if (deal.status === 'closed' || deal.status === 'lost') throw badRequest('DEAL_CLOSED', 'Negociação já encerrada');
       const pending = (await this.banking.proposalsForInTx(tx, SOURCE, id)).some((p) => ['submitted', 'under_review', 'approved'].includes(p.status));
       if (pending) throw badRequest('PROPOSAL_OPEN', 'Cancele a proposta de financiamento em andamento antes');
-      await tx.update(vehDeals).set({ status: 'lost', lostReason: reason }).where(eq(vehDeals.id, id));
+      await tx.update(vehDeals).set({ status: 'lost', lostReasonKey: input.reasonKey, lostReason: reason, lostAt: new Date() }).where(eq(vehDeals.id, id));
       await tx.update(vehVehicles).set({ status: 'available' }).where(and(eq(vehVehicles.id, deal.vehicleId), eq(vehVehicles.status, 'reserved')));
-      await this.audit.log(tx, { action: 'vehicles.deal.lost', entity: 'veh_deal', entityId: id, data: { reason } });
+      await this.audit.log(tx, { action: 'vehicles.deal.lost', entity: 'veh_deal', entityId: id, data: { reasonKey: input.reasonKey, reason } });
       return this.dealDetail(tx, id);
     });
   }
@@ -372,6 +446,15 @@ export class VehiclesService implements OnModuleInit {
     return row;
   }
 
+  /** O vendedor tem de estar ativo na equipe desta empresa. */
+  private async checkSeller(tx: Tx, tenantId: string, userId: string) {
+    const [m] = await tx
+      .select({ id: coreSchema.memberships.id })
+      .from(coreSchema.memberships)
+      .where(and(eq(coreSchema.memberships.tenantId, tenantId), eq(coreSchema.memberships.userId, userId), eq(coreSchema.memberships.status, 'active')));
+    if (!m) throw badRequest('SELLER_NOT_MEMBER', 'Vendedor não faz parte da equipe ativa');
+  }
+
   private async vehicleOrFail(tx: Tx, id: string) {
     const [row] = await tx.select().from(vehVehicles).where(eq(vehVehicles.id, id));
     if (!row) throw new NotFoundException({ code: 'VEHICLE_NOT_FOUND', message: 'Veículo não encontrado' });
@@ -410,7 +493,10 @@ function toDeal(row: { d: DealRow; customer: Deal['customer']; vehicle: VehicleR
     paymentType: d.paymentType,
     financedAmount: dealTotals(d).financed / 100,
     status: d.status,
+    lostReasonKey: d.lostReasonKey as LostReasonKey | null,
     lostReason: d.lostReason,
+    lostAt: d.lostAt?.toISOString() ?? null,
+    sellerId: d.sellerId,
     sellerName: row.sellerName,
     notes: d.notes,
     closedAt: d.closedAt?.toISOString() ?? null,

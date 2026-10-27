@@ -1,5 +1,5 @@
-import { api, ApiError, formatDate, useCan, useSession } from '@all/module-sdk/web';
-import { Alert, Badge, Button, Card, EmptyState, PageHeader, Select, Spinner } from '@all/ui';
+import { api, ApiError, formatDate, today, useCan, useSession } from '@all/module-sdk/web';
+import { Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link } from 'react-router';
@@ -51,8 +51,9 @@ export function DeadlinesPage() {
 export function DeadlineList({ deadlines, showCase = true }: { deadlines: Deadline[]; showCase?: boolean }) {
   const queryClient = useQueryClient();
   const canWrite = useCan('legal.cases.write');
+  const [completing, setCompleting] = useState<Deadline | null>(null);
   const toggle = useMutation({
-    mutationFn: (d: Deadline) => api(`/legal/deadlines/${d.id}/${d.status === 'open' ? 'done' : 'reopen'}`, { method: 'POST' }),
+    mutationFn: (d: Deadline) => api(`/legal/deadlines/${d.id}/reopen`, { method: 'POST' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: legalKey }),
   });
   if (deadlines.length === 0) {
@@ -77,7 +78,10 @@ export function DeadlineList({ deadlines, showCase = true }: { deadlines: Deadli
                   {d.status === 'open' ? (
                     <div className={urgent ? 'text-xs font-medium text-danger-600' : 'text-xs text-fg-muted'}>{dueText(d.dueOn)}</div>
                   ) : (
-                    <Badge tone="success">Cumprido</Badge>
+                    <>
+                      <Badge tone="success">Cumprido</Badge>
+                      {d.doneAt && <div className="text-xs text-fg-muted tabular-nums">em {formatDate(d.doneAt)}</div>}
+                    </>
                   )}
                 </div>
                 <div className="min-w-0 flex-1">
@@ -94,7 +98,7 @@ export function DeadlineList({ deadlines, showCase = true }: { deadlines: Deadli
                   {d.notes && <div className="mt-1 text-xs text-fg-muted">{d.notes}</div>}
                 </div>
                 {canWrite && (
-                  <Button size="sm" variant={d.status === 'open' ? 'secondary' : 'ghost'} loading={toggle.isPending && toggle.variables?.id === d.id} onClick={() => toggle.mutate(d)}>
+                  <Button size="sm" variant={d.status === 'open' ? 'secondary' : 'ghost'} loading={toggle.isPending && toggle.variables?.id === d.id} onClick={() => (d.status === 'open' ? setCompleting(d) : toggle.mutate(d))}>
                     {d.status === 'open' ? 'Marcar cumprido' : 'Reabrir'}
                   </Button>
                 )}
@@ -103,6 +107,49 @@ export function DeadlineList({ deadlines, showCase = true }: { deadlines: Deadli
           );
         })}
       </ul>
+      {completing && <CompleteModal deadline={completing} onClose={() => setCompleting(null)} />}
     </>
+  );
+}
+
+/** Confirma o cumprimento com a data real (padrão hoje); o andamento "Prazo cumprido" sai com ela. */
+function CompleteModal({ deadline, onClose }: { deadline: Deadline; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [doneOn, setDoneOn] = useState(today());
+  const done = useMutation({
+    mutationFn: () => api(`/legal/deadlines/${deadline.id}/done`, { method: 'POST', body: { doneOn } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: legalKey });
+      onClose();
+    },
+  });
+  return (
+    <Modal
+      open
+      title={`Prazo cumprido: ${deadline.title}`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Voltar
+          </Button>
+          <Button type="submit" form="legal-deadline-done" loading={done.isPending} disabled={!doneOn}>
+            Marcar cumprido
+          </Button>
+        </>
+      }
+    >
+      <form
+        id="legal-deadline-done"
+        className="space-y-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          done.mutate();
+        }}
+      >
+        {done.error && <Alert>{done.error instanceof ApiError ? done.error.message : 'Erro ao atualizar'}</Alert>}
+        <Field label="Cumprido em">{(id) => <Input id={id} type="date" required max={today()} value={doneOn} onChange={(e) => setDoneOn(e.target.value)} />}</Field>
+      </form>
+    </Modal>
   );
 }

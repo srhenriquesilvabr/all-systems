@@ -1,4 +1,4 @@
-import { api, formatDateTime, formatMoney } from '@all/module-sdk/web';
+import { api, formatDate, formatDateTime, formatMoney } from '@all/module-sdk/web';
 import { Badge } from '@all/ui';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
@@ -35,6 +35,7 @@ export function OrderRows({ orders, workflows, showCustomer = true }: { orders: 
               nº {o.number}
             </Link>
           </td>
+          <td className="border-b border-line px-4 py-3 tabular-nums text-fg-muted">{formatDate(o.receivedAt)}</td>
           {showCustomer && <td className="border-b border-line px-4 py-3">{o.customer.name}</td>}
           <td className="border-b border-line px-4 py-3">
             <StatusBadge workflows={workflows} workflow={o.workflow} status={o.status} />

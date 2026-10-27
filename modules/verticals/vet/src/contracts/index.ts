@@ -2,6 +2,8 @@ import { z } from 'zod';
 import type { MedicalForm } from '@all/medical-records';
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data inválida');
+/** Hoje no fuso do negócio (YYYY-MM-DD). */
+const businessToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 
 export const vaccinationInput = z
   .object({
@@ -10,7 +12,8 @@ export const vaccinationInput = z
     dose: z.string().trim().max(40).nullish(),
     batch: z.string().trim().max(40).nullish(),
     manufacturer: z.string().trim().max(60).nullish(),
-    appliedOn: isoDate,
+    /** Pode ser passada (carteira trazida de outra clínica), nunca futura. */
+    appliedOn: isoDate.refine((d) => d <= businessToday(), 'A data da aplicação não pode ser no futuro'),
     /** Próxima dose ou reforço: o tutor é lembrado antes. */
     nextDueOn: isoDate.nullish().or(z.literal('')).transform((v) => v || null),
     notes: z.string().trim().max(500).nullish(),

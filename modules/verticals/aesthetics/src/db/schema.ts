@@ -19,10 +19,13 @@ export const aesPackages = pgTable(
       .references(() => schServices.id),
     totalSessions: integer('total_sessions').notNull(),
     price: numeric('price', { precision: 12, scale: 2 }).notNull(),
+    /** Dia da venda (pode ser anterior ao cadastro, ao registrar histórico). */
+    soldOn: date('sold_on', { mode: 'string' }).notNull().defaultNow(),
     expiresOn: date('expires_on', { mode: 'string' }),
     status: text('status', { enum: ['active', 'finished', 'cancelled'] }).notNull().default('active'),
     notes: text('notes'),
     cancelReason: text('cancel_reason'),
+    cancelledOn: date('cancelled_on', { mode: 'string' }),
     createdAt: ts('created_at').notNull().defaultNow(),
   },
   (t) => [index('aes_packages_customer_idx').on(t.customerId, t.status), tenantIsolation()],

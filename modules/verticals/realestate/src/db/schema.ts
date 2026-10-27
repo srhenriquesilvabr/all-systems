@@ -65,11 +65,22 @@ export const reDeals = pgTable(
     fgtsAmount: money('fgts_amount').notNull().default('0'),
     commissionPercent: numeric('commission_percent', { precision: 5, scale: 2 }).notNull(),
     status: text('status', { enum: ['negotiating', 'credit_analysis', 'credit_approved', 'credit_rejected', 'closed', 'lost'] }).notNull().default('negotiating'),
+    /** Detalhe do motivo (antes era o único campo, texto livre). */
     lostReason: text('lost_reason'),
-    brokerId: uuid('broker_id').references(() => users.id),
+    /** Motivo padronizado (lostReasonKeys dos contratos); nulo nas perdidas antigas. */
+    lostReasonKey: text('lost_reason_key'),
+    lostAt: ts('lost_at'),
+    /** Corretor responsável (o "vendedor" da imobiliária). */
+    brokerId: uuid('broker_id').references(() => users.id, { onDelete: 'set null' }),
     notes: text('notes'),
     closedAt: ts('closed_at'),
     createdAt: ts('created_at').notNull().defaultNow(),
   },
-  (t) => [uniqueIndex('re_deals_number_key').on(t.tenantId, t.number), index('re_deals_property_idx').on(t.propertyId), index('re_deals_customer_idx').on(t.customerId), tenantIsolation()],
+  (t) => [
+    uniqueIndex('re_deals_number_key').on(t.tenantId, t.number),
+    index('re_deals_property_idx').on(t.propertyId),
+    index('re_deals_customer_idx').on(t.customerId),
+    index('re_deals_broker_idx').on(t.tenantId, t.brokerId),
+    tenantIsolation(),
+  ],
 );

@@ -1,4 +1,4 @@
-import { api, apiBlob, ApiError, apiUpload, formatDateTime, useCan } from '@all/module-sdk/web';
+import { api, apiBlob, ApiError, apiUpload, formatDate, formatDateTime, today, useCan } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, Select, Spinner, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState, type FormEvent } from 'react';
@@ -90,7 +90,8 @@ function EntryCard({ entry: e, form, canWrite, onAmend }: { entry: MedicalEntry;
             {superseded && <Badge>Retificado</Badge>}
           </div>
           <span className="text-xs text-fg-muted">
-            {formatDateTime(e.createdAt)} · {e.author.name}
+            <span className="font-medium text-fg">{formatDate(e.occurredOn)}</span> · {e.author.name}
+            <span title="Quando foi registrado no sistema"> · registrado em {formatDateTime(e.createdAt)}</span>
           </span>
         </div>
         {e.amendReason && <p className="mt-1 text-xs text-fg-muted">Motivo da retificação: {e.amendReason}</p>}
@@ -167,11 +168,12 @@ function EntryModal({ subjectType, subjectId, form, amends, onClose }: { subject
   const [data, setData] = useState<Record<string, unknown>>(amends?.data ?? {});
   const [notes, setNotes] = useState(amends?.notes ?? '');
   const [reason, setReason] = useState('');
+  const [occurredOn, setOccurredOn] = useState(amends?.occurredOn ?? today());
   const save = useMutation({
     mutationFn: () =>
       amends
-        ? api(`/medical-records/${amends.id}/amend`, { method: 'POST', body: { data, notes: notes || null, reason } })
-        : api('/medical-records', { method: 'POST', body: { subjectType, subjectId, formKey: form.key, data, notes: notes || null } }),
+        ? api(`/medical-records/${amends.id}/amend`, { method: 'POST', body: { data, notes: notes || null, reason, occurredOn } })
+        : api('/medical-records', { method: 'POST', body: { subjectType, subjectId, formKey: form.key, data, notes: notes || null, occurredOn } }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: medicalRecordsKey });
       onClose();
@@ -202,6 +204,9 @@ function EntryModal({ subjectType, subjectId, form, amends, onClose }: { subject
       <form id="mr-entry-form" onSubmit={submit} className="space-y-4">
         {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao salvar'}</Alert>}
         {!amends && <p className="text-xs text-fg-muted">Depois de incluído, o registro não pode ser apagado nem editado — só retificado.</p>}
+        <Field label="Data do atendimento" hint="Para lançar um atendimento antigo, informe a data em que ele aconteceu.">
+          {(id) => <Input id={id} type="date" required max={today()} className="sm:w-48" value={occurredOn} onChange={(e) => setOccurredOn(e.target.value)} />}
+        </Field>
         <div className="grid gap-4 sm:grid-cols-2">
           {form.fields.map((f) => (
             <div key={f.key} className={f.type === 'textarea' ? 'sm:col-span-2' : undefined}>

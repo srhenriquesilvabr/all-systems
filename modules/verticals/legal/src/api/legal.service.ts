@@ -209,15 +209,19 @@ export class LegalService implements OnModuleInit {
     });
   }
 
-  completeDeadline(id: string, done: boolean) {
+  /** `doneOn`: dia em que foi cumprido (padrão hoje); o andamento "Prazo cumprido" sai com essa data. */
+  completeDeadline(id: string, done: boolean, doneOn = localToday()) {
+    if (done && doneOn > localToday()) throw badRequest('INVALID_DATE', 'A data de cumprimento não pode ser no futuro');
+    // Dia passado vira meio-dia no fuso do escritório (o horário real não é conhecido).
+    const doneAt = doneOn === localToday() ? new Date() : new Date(`${doneOn}T12:00:00-03:00`);
     return this.tdb.run(async (tx) => {
       const [row] = await tx
         .update(legalDeadlines)
-        .set(done ? { status: 'done', doneAt: new Date() } : { status: 'open', doneAt: null })
+        .set(done ? { status: 'done', doneAt } : { status: 'open', doneAt: null })
         .where(eq(legalDeadlines.id, id))
         .returning();
       if (!row) throw new NotFoundException({ code: 'DEADLINE_NOT_FOUND', message: 'Prazo não encontrado' });
-      if (done) await this.addUpdateRow(tx, row.caseId, localToday(), `Prazo cumprido: ${row.title}`);
+      if (done) await this.addUpdateRow(tx, row.caseId, doneOn, `Prazo cumprido: ${row.title}`);
       await this.audit.log(tx, { action: done ? 'legal.deadline.done' : 'legal.deadline.reopened', entity: 'legal_deadline', entityId: id });
     });
   }
