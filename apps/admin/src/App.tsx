@@ -1,5 +1,6 @@
 import { SessionContext, useSession } from '@all/module-sdk/web';
 import { PublicBookingPage } from '@all/scheduling/web';
+import { PublicJobsPage } from '@all/recruiting/web';
 import { Spinner } from '@all/ui';
 import { useContext, type ComponentType } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router';
@@ -35,6 +36,16 @@ export function App() {
     return (
       <Routes>
         <Route path="/agendar/:slug" element={<PublicBookingPage />} />
+      </Routes>
+    );
+  }
+
+  // Vagas e candidatura (Head hunter): página pública, não depende de sessão.
+  if (location.pathname.startsWith('/vagas/')) {
+    return (
+      <Routes>
+        <Route path="/vagas/:slug" element={<PublicJobsPage />} />
+        <Route path="/vagas/:slug/:jobId" element={<PublicJobsPage />} />
       </Routes>
     );
   }

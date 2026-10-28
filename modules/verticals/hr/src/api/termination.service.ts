@@ -6,6 +6,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { computeTermination, round2, terminationTypeLabel, type Payslip, type TaxTables, type TerminationDetail, type TerminationInput, type TerminationStatement } from '../contracts';
 import { hrEmployees, hrLeaves, hrPayrollItems, hrPayrolls, hrTerminations, hrVacations } from '../db/schema';
 import type { HrSettings } from '../manifest';
+import { HrEmployersRegistry } from './employers';
 import { addCompetence, badRequest, closedItem, employeeOrFail, fgtsEstimate, findPayroll, MODULE, nextMonth, pgCode, TERMINATION_SOURCE, variableAverage, type EmployeeRow } from './shared';
 
 /**
@@ -13,6 +14,9 @@ import { addCompetence, badRequest, closedItem, employeeOrFail, fgtsEstimate, fi
  * rescisões da competência da saída, o colaborador fica desligado e o financeiro recebe:
  * líquido ao colaborador e guia do FGTS rescisório + multa (até 10 dias da saída, art. 477 §6º)
  * e INSS + IRRF retidos (dia 20 do mês seguinte). Tudo com baixa no financeiro.
+ * Colaborador de empresa-cliente (consultoria de RH): o termo entra na folha de rescisões daquela
+ * empresa, nada vai para o financeiro (quem paga é a empresa-cliente) e o ramo é avisado (honorário
+ * por rescisão, se houver). A pessoa da equipe não ganha data de encerramento.
  */
 @Injectable()
 export class TerminationService {
@@ -22,6 +26,7 @@ export class TerminationService {
     private readonly finance: FinanceService,
     private readonly audit: AuditService,
     private readonly team: TeamService,
+    private readonly employers: HrEmployersRegistry,
   ) {}
 
   preview(employeeId: string, input: TerminationInput): Promise<TerminationDetail> {
@@ -39,7 +44,7 @@ export class TerminationService {
   }
 
   confirm(employeeId: string, input: TerminationInput): Promise<TerminationDetail> {
-    const { tenantId, userId } = requestContext.requireTenant();
+    const { tenantId, userId, modules } = requestContext.requireTenant();
     return this.tdb.run(async (tx) => {
       const { emp, detail, tables } = await this.build(tx, employeeId, input);
       const s = detail;
@@ -47,8 +52,12 @@ export class TerminationService {
 
       // Folha de rescisões da competência: criada já "fechada" (cada termo é lançado ao confirmar).
       // (sem erro se outra rescisão do mês criar a folha ao mesmo tempo: ON CONFLICT DO NOTHING).
-      await tx.insert(hrPayrolls).values({ tenantId, competence, type: 'termination', status: 'closed', closedAt: new Date(), closedById: userId ?? null, tables }).onConflictDoNothing();
-      const payroll = await findPayroll(tx, competence, 'termination');
+      const employerId = emp.employerCustomerId;
+      await tx
+        .insert(hrPayrolls)
+        .values({ tenantId, competence, type: 'termination', employerCustomerId: employerId, status: 'closed', closedAt: new Date(), closedById: userId ?? null, tables })
+        .onConflictDoNothing();
+      const payroll = await findPayroll(tx, competence, 'termination', employerId);
 
       let terminationId: string;
       try {
@@ -129,11 +138,24 @@ export class TerminationService {
         );
 
       await tx.update(hrEmployees).set({ status: 'terminated', terminationDate: input.terminationDate }).where(eq(hrEmployees.id, employeeId));
+      const name = emp.name;
+      const audit = {
+        action: 'hr.employee.terminated',
+        entity: 'hr_employee',
+        entityId: employeeId,
+        data: { terminationId, type: input.type, terminationDate: input.terminationDate, net: s.net, fgts: s.fgts.total, employerCustomerId: employerId },
+      };
+      if (employerId) {
+        await this.audit.log(tx, audit);
+        for (const ext of this.employers.active(modules)) {
+          await ext.onTerminationConfirmed?.(tx, { terminationId, employerCustomerId: employerId, employerName: emp.employerName ?? '', employeeName: name, terminationDate: input.terminationDate });
+        }
+        return { ...detail, id: terminationId, notes: input.notes ?? null, createdAt: new Date().toISOString() };
+      }
       // A pessoa da equipe ganha a data de encerramento; passada a data, o core avisa a agenda
       // (core.team.member_ended) e o profissional dela fica inativo.
       await this.team.saveInTx(tx, emp.teamMemberId, { endedOn: input.terminationDate });
 
-      const name = emp.name;
       const entries = [
         { description: `Rescisão de ${name} — líquido do termo`, amount: s.net, dueDate: s.payBy, categoryKey: 'payroll' },
         {
@@ -153,12 +175,7 @@ export class TerminationService {
         if (e.amount <= 0) continue;
         await this.finance.recordInTx(tx, { kind: 'expense', status: 'pending', ...e, sourceType: TERMINATION_SOURCE, sourceId: terminationId, settleInFinance: true });
       }
-      await this.audit.log(tx, {
-        action: 'hr.employee.terminated',
-        entity: 'hr_employee',
-        entityId: employeeId,
-        data: { terminationId, type: input.type, terminationDate: input.terminationDate, net: s.net, fgts: s.fgts.total },
-      });
+      await this.audit.log(tx, audit);
       return { ...detail, id: terminationId, notes: input.notes ?? null, createdAt: new Date().toISOString() };
     });
   }
@@ -224,7 +241,15 @@ export class TerminationService {
   }
 }
 
-const employeeInfo = (e: EmployeeRow): TerminationDetail['employee'] => ({ id: e.id, name: e.name, cpf: e.cpf ?? '', position: e.position, category: e.category, pixKey: e.pixKey });
+const employeeInfo = (e: EmployeeRow): TerminationDetail['employee'] => ({
+  id: e.id,
+  name: e.name,
+  cpf: e.cpf ?? '',
+  position: e.position,
+  category: e.category,
+  pixKey: e.pixKey,
+  employer: e.employerCustomerId ? { id: e.employerCustomerId, name: e.employerName ?? '', document: e.employerDocument } : null,
+});
 
 function stripDetail(d: TerminationDetail): TerminationStatement {
   const { id: _id, employee: _e, cancelledVacations: _c, notes: _n, createdAt: _at, ...statement } = d;

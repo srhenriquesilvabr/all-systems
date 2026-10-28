@@ -84,3 +84,5 @@ export const aestheticsForms: MedicalForm[] = [
     ],
   },
 ];
+
+export * from './specialties';

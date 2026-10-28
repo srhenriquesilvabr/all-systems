@@ -33,6 +33,7 @@
     "@all/pets": "workspace:*",
     "@all/petshop": "workspace:*",
     "@all/realestate": "workspace:*",
+    "@all/recruiting": "workspace:*",
     "@all/sales": "workspace:*",
     "@all/scheduling": "workspace:*",
     "@all/service-orders": "workspace:*",

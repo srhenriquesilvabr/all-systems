@@ -42,7 +42,10 @@ export function MedicalRecordTimeline({ subjectType, subjectId }: { subjectType:
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         {canWrite &&
-          forms.data.map((f) => (
+          // Formulários geridos por um módulo (ex.: aplicação com lote) entram pela tela dele.
+          forms.data
+            .filter((f) => !f.managed)
+            .map((f) => (
             <Button key={f.key} size="sm" variant={f.key === 'note' ? 'secondary' : 'primary'} onClick={() => setWriting({ form: f })}>
               {f.key === 'note' ? '+ Anotação' : `+ ${f.label}`}
             </Button>
@@ -77,7 +80,7 @@ function EntryCard({ entry: e, form, canWrite, onAmend }: { entry: MedicalEntry;
     mutationFn: (file: File) => apiUpload(`/medical-records/${e.id}/attachments`, 'file', file),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: medicalRecordsKey }),
   });
-  const filled = form.fields.filter((f) => fieldText(f, e.data[f.key]));
+  const filled = form.fields.filter((f) => !f.hidden && fieldText(f, e.data[f.key]));
   const superseded = !!e.amendedById;
 
   return (
@@ -98,9 +101,9 @@ function EntryCard({ entry: e, form, canWrite, onAmend }: { entry: MedicalEntry;
         {filled.length > 0 && (
           <dl className="mt-3 grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
             {filled.map((f) => (
-              <div key={f.key} className={f.type === 'textarea' ? 'sm:col-span-2' : undefined}>
+              <div key={f.key} className={f.type === 'textarea' || f.type === 'list' ? 'sm:col-span-2' : undefined}>
                 <dt className="text-xs text-fg-muted">{f.label}</dt>
-                <dd className="whitespace-pre-line">{fieldText(f, e.data[f.key])}</dd>
+                <dd className="whitespace-pre-line">{f.type === 'list' ? <ListValue field={f} value={e.data[f.key]} /> : fieldText(f, e.data[f.key])}</dd>
               </div>
             ))}
           </dl>
@@ -149,7 +152,7 @@ function EntryCard({ entry: e, form, canWrite, onAmend }: { entry: MedicalEntry;
 }
 
 /** Abre o anexo numa aba nova (o download passa pela API, que registra o acesso). */
-async function openAttachment(fileId: string) {
+export async function openAttachment(fileId: string) {
   const tab = window.open('', '_blank');
   const blob = await apiBlob(`/medical-records/attachments/${fileId}`).catch((err: unknown) => {
     tab?.close();
@@ -208,11 +211,13 @@ function EntryModal({ subjectType, subjectId, form, amends, onClose }: { subject
           {(id) => <Input id={id} type="date" required max={today()} className="sm:w-48" value={occurredOn} onChange={(e) => setOccurredOn(e.target.value)} />}
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">
-          {form.fields.map((f) => (
-            <div key={f.key} className={f.type === 'textarea' ? 'sm:col-span-2' : undefined}>
-              <FieldInput field={f} value={data[f.key]} onChange={(v) => setData({ ...data, [f.key]: v })} />
-            </div>
-          ))}
+          {form.fields
+            .filter((f) => !f.hidden)
+            .map((f) => (
+              <div key={f.key} className={f.type === 'textarea' || f.type === 'list' ? 'sm:col-span-2' : undefined}>
+                <RecordFieldInput field={f} value={data[f.key]} onChange={(v) => setData({ ...data, [f.key]: v })} />
+              </div>
+            ))}
         </div>
         <Field label={form.fields.length ? 'Observações' : 'Anotação'}>
           {(id) => <Textarea id={id} rows={form.fields.length ? 3 : 6} value={notes} onChange={(e) => setNotes(e.target.value)} autoFocus={!form.fields.length} />}
@@ -225,7 +230,72 @@ function EntryModal({ subjectType, subjectId, form, amends, onClose }: { subject
   );
 }
 
-function FieldInput({ field: f, value, onChange }: { field: FormField; value: unknown; onChange: (v: unknown) => void }) {
+/** Linhas de um campo `list`, em tabela (sem os subcampos ocultos). */
+export function ListValue({ field, value }: { field: FormField; value: unknown }) {
+  const rows = Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
+  const cols = (field.itemFields ?? []).filter((c) => !c.hidden && rows.some((r) => fieldText(c, r[c.key])));
+  if (!rows.length) return null;
+  return (
+    <div className="mt-1 overflow-x-auto">
+      <table className="w-full text-left text-xs">
+        <thead>
+          <tr className="text-fg-muted">
+            {cols.map((c) => (
+              <th key={c.key} className="py-1 pr-3 font-normal">
+                {c.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i} className="border-t border-line">
+              {cols.map((c) => (
+                <td key={c.key} className="py-1 pr-3 align-top">
+                  {fieldText(c, r[c.key])}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Editor de um campo `list`: uma linha por item, com os subcampos visíveis. */
+function ListInput({ field: f, value, onChange }: { field: FormField; value: unknown; onChange: (v: unknown) => void }) {
+  const rows = Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
+  const cols = (f.itemFields ?? []).filter((c) => !c.hidden && c.type !== 'list');
+  const set = (i: number, patch: Record<string, unknown>) => onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  return (
+    <fieldset className="space-y-2">
+      <legend className="mb-1 text-sm font-medium">{f.label}</legend>
+      {f.hint && <p className="text-xs text-fg-muted">{f.hint}</p>}
+      {rows.map((r, i) => (
+        <div key={i} className="grid items-end gap-2 rounded-xl border border-line p-3 sm:grid-cols-3">
+          {cols.map((c) => (
+            <div key={c.key} className={c.type === 'textarea' ? 'sm:col-span-3' : undefined}>
+              <RecordFieldInput field={c} value={r[c.key]} onChange={(v) => set(i, { [c.key]: v })} />
+            </div>
+          ))}
+          <div className="sm:col-span-3">
+            <Button size="sm" variant="ghost" onClick={() => onChange(rows.filter((_, j) => j !== i))}>
+              Remover linha
+            </Button>
+          </div>
+        </div>
+      ))}
+      <Button size="sm" variant="secondary" onClick={() => onChange([...rows, {}])}>
+        + Linha
+      </Button>
+    </fieldset>
+  );
+}
+
+/** Campo de formulário de prontuário (usado também pelas telas dos módulos com fichas próprias). */
+export function RecordFieldInput({ field: f, value, onChange }: { field: FormField; value: unknown; onChange: (v: unknown) => void }) {
+  if (f.type === 'list') return <ListInput field={f} value={value} onChange={onChange} />;
   if (f.type === 'boolean') return <Checkbox label={f.label} checked={value === true} onChange={(e) => onChange(e.target.checked)} />;
   const label = f.unit ? `${f.label} (${f.unit})` : f.label;
   return (

@@ -16,7 +16,16 @@
   ],
   "references": [
     {
+      "path": "../../../packages/db"
+    },
+    {
       "path": "../../../packages/module-sdk"
+    },
+    {
+      "path": "../../core"
+    },
+    {
+      "path": "../hr"
     }
   ]
 }

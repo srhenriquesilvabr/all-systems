@@ -88,6 +88,9 @@
     },
     {
       "path": "../../modules/verticals/hr-consulting"
+    },
+    {
+      "path": "../../modules/shared/recruiting"
     }
   ]
 }

@@ -5,7 +5,7 @@ import { RealEstateModule, realEstateManifest } from '@all/realestate';
 import { ConsortiumModule, consortiumManifest } from '@all/consortium';
 import { AccountingModule, accountingManifest } from '@all/accounting';
 import { HrModule, hrManifest } from '@all/hr';
-import { hrConsultingManifest } from '@all/hr-consulting';
+import { HrConsultingModule, hrConsultingManifest } from '@all/hr-consulting';
 import { BakeryModule, bakeryManifest } from '@all/bakery';
 import { BeautyModule, beautyManifest } from '@all/beauty';
 import { AestheticsModule, aestheticsManifest } from '@all/aesthetics';
@@ -22,6 +22,7 @@ import { SchedulingModule, schedulingManifest } from '@all/scheduling';
 import { ServiceOrdersModule, serviceOrdersManifest } from '@all/service-orders';
 import { VetModule, vetManifest } from '@all/vet';
 import { WhatsAppModule, whatsappManifest } from '@all/whatsapp';
+import { RecruitingModule, recruitingManifest } from '@all/recruiting';
 
 /**
  * Módulos instalados nesta build. Para adicionar uma vertical: criar o pacote em
@@ -52,8 +53,10 @@ export const manifests = [
   consortiumManifest,
   accountingManifest,
   hrManifest,
-  // Consultoria de RH: só o ramo por enquanto (sem telas próprias nem Nest module).
+  // Consultoria de RH: empresas atendidas e honorários (estende o RH pelo HrEmployersRegistry).
   hrConsultingManifest,
+  // Head hunter: vagas, candidaturas e funil com nota de aderência (contratável por qualquer ramo).
+  recruitingManifest,
 ];
 
-export const featureModules = [NotificationsModule, ServiceOrdersModule, SchedulingModule, PetsModule, MedicalRecordsModule, SalesModule, PaymentsModule, WhatsAppModule, BankingModule, LaundryModule, BeautyModule, PetshopModule, VetModule, AestheticsModule, OrthodonticsModule, BakeryModule, LegalModule, VehiclesModule, RealEstateModule, ConsortiumModule, AccountingModule, HrModule];
+export const featureModules = [NotificationsModule, ServiceOrdersModule, SchedulingModule, PetsModule, MedicalRecordsModule, SalesModule, PaymentsModule, WhatsAppModule, BankingModule, LaundryModule, BeautyModule, PetshopModule, VetModule, AestheticsModule, OrthodonticsModule, BakeryModule, LegalModule, VehiclesModule, RealEstateModule, ConsortiumModule, AccountingModule, HrModule, HrConsultingModule, RecruitingModule];

@@ -20,6 +20,7 @@
     "deploy:cloudflare": "node scripts/deploy-cloudflare.mjs"
   },
   "devDependencies": {
+    "@opentelemetry/api": "1.10.0",
     "turbo": "^2.5.4",
     "typescript": "^5.8.3",
     "wrangler": "^4.153.0"

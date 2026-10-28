@@ -3,6 +3,7 @@ import { customers } from '@all/core/schema';
 import type { Tx } from '@all/db';
 import { MedicalRecordsModule, MedicalRecordsService } from '@all/medical-records';
 import { ModuleRoute, RequirePermission, requestContext } from '@all/module-sdk';
+import { SalesModule } from '@all/sales';
 import { SchedulingModule, SchedulingService, STATUS_CHANGED, type AppointmentStatusChanged } from '@all/scheduling';
 import { schServices } from '@all/scheduling/schema';
 import { BadRequestException, Body, Controller, Get, Injectable, Module, NotFoundException, OnModuleInit, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
@@ -11,6 +12,9 @@ import { z } from 'zod';
 import { aestheticsForms, cancelPackageInput, localToday, packageInput, type PackageInput, type SessionPackage } from '../contracts';
 import { aesPackages, aesPackageSessions } from '../db/schema';
 import type { AestheticsSettings } from '../manifest';
+import { SpecialtyClinicalService } from './clinical.service';
+import { SpecialtySetupService } from './setup.service';
+import { SpecialtiesController } from './specialties.controller';
 
 const MODULE = 'aesthetics';
 const SOURCE = 'aes_package';
@@ -39,10 +43,17 @@ export class AestheticsService implements OnModuleInit {
     private readonly audit: AuditService,
     private readonly records: MedicalRecordsService,
     private readonly scheduling: SchedulingService,
+    private readonly specialties: SpecialtySetupService,
   ) {}
 
   onModuleInit() {
-    this.hooks.register(MODULE, { onEnable: (tx, tenantId) => this.seed(tx, tenantId) });
+    this.hooks.register(MODULE, {
+      onEnable: async (tx, tenantId) => {
+        await this.seed(tx, tenantId);
+        // Especialidades já ligadas (ex.: na atualização de versão): o que faltar delas.
+        await this.specialties.seedEnabledInTx(tx, tenantId);
+      },
+    });
     for (const form of aestheticsForms) this.records.registerForm(form);
     // Sessão coberta por pacote: R$ 0 na agenda e a sessão fica reservada para o horário.
     this.scheduling.registerPricer({ moduleKey: MODULE, price: (tx, ctx) => this.reserveSession(tx, ctx) });
@@ -271,5 +282,9 @@ export class AestheticsController {
   }
 }
 
-@Module({ imports: [MedicalRecordsModule, SchedulingModule], controllers: [AestheticsController], providers: [AestheticsService] })
+@Module({
+  imports: [MedicalRecordsModule, SchedulingModule, SalesModule],
+  controllers: [AestheticsController, SpecialtiesController],
+  providers: [AestheticsService, SpecialtySetupService, SpecialtyClinicalService],
+})
 export class AestheticsModule {}

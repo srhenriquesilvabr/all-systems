@@ -6,12 +6,20 @@ import { z } from 'zod';
 export interface FormField {
   key: string;
   label: string;
-  type: 'text' | 'textarea' | 'number' | 'boolean' | 'select' | 'date';
+  /** `list`: linhas repetidas com os campos de `itemFields` (ex.: pontos de aplicação, exames). */
+  type: 'text' | 'textarea' | 'number' | 'boolean' | 'select' | 'date' | 'list';
   options?: string[];
   required?: boolean;
   /** Ex.: "kg", "°C", "bpm". */
   unit?: string;
   hint?: string;
+  /** Campos de cada linha de um `list` (só tipos simples, sem lista dentro de lista). */
+  itemFields?: FormField[];
+  /**
+   * Guardado no registro, mas fora da tela genérica (ex.: id do lote, coordenada no mapa facial).
+   * A retificação pelo prontuário mantém o valor.
+   */
+  hidden?: boolean;
 }
 
 export interface MedicalForm {
@@ -22,6 +30,12 @@ export interface MedicalForm {
   /** De quem é o registro: o próprio cliente (paciente) ou um pet. */
   subjectTypes: string[];
   fields: FormField[];
+  /**
+   * Incluído só pela tela do módulo dono, que confere regras próprias (lote, registro do
+   * profissional, termo). Não aparece no "+" do prontuário e a rota genérica recusa incluir;
+   * retificar continua pelo prontuário.
+   */
+  managed?: boolean;
 }
 
 /** Hoje no fuso do negócio (YYYY-MM-DD). */
@@ -94,6 +108,7 @@ export interface AccessLogEntry {
 /** Valor exibível de um campo (sim/não, número com unidade, data). */
 export function fieldText(field: FormField, value: unknown): string {
   if (value === undefined || value === null || value === '') return '';
+  if (field.type === 'list') return Array.isArray(value) && value.length ? `${value.length} ${value.length === 1 ? 'item' : 'itens'}` : '';
   if (field.type === 'boolean') return value ? 'Sim' : 'Não';
   if (field.type === 'date' && typeof value === 'string') {
     const [y, m, d] = value.split('-');

@@ -370,7 +370,7 @@ async function ensureClosedPayrolls({ api, log }) {
   const month = day(0).slice(0, 7);
   const out = [];
   for (const competence of [shiftMonth(month, -2), shiftMonth(month, -1)]) {
-    const found = (await api.get('/hr/payrolls')).find((p) => p.competence === competence && p.type === 'monthly');
+    const found = (await api.get('/hr/payrolls', { employer: 'own' })).find((p) => p.competence === competence && p.type === 'monthly' && !p.employer);
     let payroll = found ?? (await api.post('/hr/payrolls', { competence }));
     if (payroll.status !== 'closed') payroll = await api.post(`/hr/payrolls/${payroll.id}/close`);
     out.push(`${competence} ${found?.status === 'closed' ? 'já fechada' : 'fechada agora'} (${payroll.totals.employees} colaboradores)`);
@@ -380,7 +380,9 @@ async function ensureClosedPayrolls({ api, log }) {
 
 /** Dispensa sem justa causa com aviso indenizado, há ~12 dias (o prazo de pagamento do termo já passou). */
 async function seedTermination({ api, rng, log }) {
-  let employees = await api.get('/hr/employees');
+  // Só os da própria empresa (na consultoria de RH a lista traz também os das empresas atendidas).
+  const ownEmployees = async () => (await api.get('/hr/employees', { employer: 'own' })).filter((e) => !e.employer);
+  let employees = await ownEmployees();
   for (const name of [TERMINATE, FALLBACK.name]) {
     const e = employees.find((x) => x.name === name);
     if (e?.status !== 'terminated') continue;
@@ -411,7 +413,7 @@ async function seedTermination({ api, rng, log }) {
         pixKey: cpf,
         notes: null,
       });
-      employees = await api.get('/hr/employees');
+      employees = await ownEmployees();
       emp = employees.find((e) => e.name === FALLBACK.name);
     }
   }
@@ -440,7 +442,7 @@ async function seedThirteenth({ api, log }) {
   const today = day(0);
   if (today.slice(5, 7) < '10') return log('    fora da época (a 1ª parcela é calculada a partir de outubro)');
   const year = Number(today.slice(0, 4));
-  const found = (await api.get('/hr/payrolls')).find((p) => p.type === 'thirteenth_1' && p.competence === `${year}-11`);
+  const found = (await api.get('/hr/payrolls', { employer: 'own' })).find((p) => p.type === 'thirteenth_1' && p.competence === `${year}-11` && !p.employer);
   const p = found ?? (await api.post('/hr/payrolls/thirteenth', { year, installment: 1 }));
   const t = p.totals;
   log(`    ${found ? 'já existe' : 'calculada'} (${p.status === 'closed' ? 'fechada' : 'aberta'}): ${t.employees} colaboradores, bruto ${brl(t.gross)}, líquido ${brl(t.net)}, FGTS ${brl(t.fgts)}`);

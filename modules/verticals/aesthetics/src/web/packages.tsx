@@ -1,5 +1,4 @@
 import { api, ApiError, CustomerSearch, formatDate, formatMoney, parseMoney, today, useCan, type CustomerOption } from '@all/module-sdk/web';
-import { MedicalRecordTimeline } from '@all/medical-records/web';
 import { useServices } from '@all/scheduling/web';
 import { Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -132,18 +131,20 @@ function SessionMeter({ pkg }: { pkg: SessionPackage }) {
   );
 }
 
-function SellModal({ customer: fixed, onClose }: { customer?: { id: string }; onClose: () => void }) {
+/** Venda de pacote. `serviceName` já deixa o procedimento escolhido (ex.: drenagem no pós-operatório). */
+export function SellModal({ customer: fixed, serviceName, onClose }: { customer?: { id: string }; serviceName?: string; onClose: () => void }) {
   const queryClient = useQueryClient();
   const services = useServices();
   const [customer, setCustomer] = useState<CustomerOption | { id: string; name?: string } | null>(fixed ?? null);
   const [form, setForm] = useState({ serviceId: '', totalSessions: '10', price: '', installments: '1', soldOn: today(), firstDueOn: today(), expiresOn: '', notes: '' });
   const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
-  const service = services.data?.find((s) => s.id === form.serviceId);
+  const serviceId = form.serviceId || (serviceName ? (services.data?.find((s) => s.active && s.name === serviceName)?.id ?? '') : '');
+  const service = services.data?.find((s) => s.id === serviceId);
   const save = useMutation({
     mutationFn: () =>
       api('/aesthetics/packages', {
         method: 'POST',
-        body: { ...form, customerId: customer?.id, price: parseMoney(form.price), notes: form.notes || null },
+        body: { ...form, serviceId, customerId: customer?.id, price: parseMoney(form.price), notes: form.notes || null },
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: key });
@@ -184,7 +185,7 @@ function SellModal({ customer: fixed, onClose }: { customer?: { id: string }; on
           )}
           <Field label="Procedimento">
             {(id) => (
-              <Select id={id} required value={form.serviceId} onChange={(e) => set({ serviceId: e.target.value })}>
+              <Select id={id} required value={serviceId} onChange={(e) => set({ serviceId: e.target.value })}>
                 <option value="">Escolha</option>
                 {services.data
                   ?.filter((s) => s.active)
@@ -297,7 +298,3 @@ export function CustomerPackagesTab({ customerId }: { customerId: string }) {
   );
 }
 
-/** Aba "Prontuário" na ficha do cliente (anamnese e evolução). */
-export function CustomerRecordsTab({ customerId }: { customerId: string }) {
-  return <MedicalRecordTimeline subjectType="customer" subjectId={customerId} />;
-}

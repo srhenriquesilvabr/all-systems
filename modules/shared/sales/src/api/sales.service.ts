@@ -127,6 +127,19 @@ export class SalesService {
     });
   }
 
+  /**
+   * Baixa de insumo usado num atendimento de outro módulo (ex.: 0,3 frasco de toxina), na
+   * transação dele. Aceita fração mesmo em produto vendido por unidade (frasco aberto) e não
+   * bloqueia saldo negativo (o procedimento já aconteceu). Produto que não controla estoque é ignorado.
+   */
+  async consumeInTx(tx: Tx, productId: string, quantity: number, opts: { reason: string; occurredAt?: Date }): Promise<boolean> {
+    if (!(quantity > 0)) return false;
+    const product = await this.productOrFail(tx, productId, true);
+    if (!product.trackStock) return false;
+    await this.move(tx, product, 'consumption', -Math.round(quantity * 1000) / 1000, { reason: opts.reason.slice(0, 200), occurredAt: opts.occurredAt });
+    return true;
+  }
+
   // ---- Vendas ---------------------------------------------------------------------------------
 
   sell(input: SaleInput): Promise<Sale> {

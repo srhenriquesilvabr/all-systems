@@ -1,8 +1,8 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import type { Tx } from '@all/db';
-import { teamMemberName, teamMembers } from '@all/core/schema';
-import { and, between, eq, getTableColumns } from 'drizzle-orm';
-import { isoAddDays, isoMonthEnd, round2, taxTables, type Payslip, type TaxTables } from '../contracts';
+import { customers, teamMemberName, teamMembers } from '@all/core/schema';
+import { and, between, eq, getTableColumns, isNull, type AnyColumn, type SQL } from 'drizzle-orm';
+import { isoAddDays, isoMonthEnd, round2, taxTables, type EmployerFilter, type EmployerRef, type Payslip, type TaxTables } from '../contracts';
 import { hrEmployees, hrPayrollItems, hrPayrolls } from '../db/schema';
 
 export const MODULE = 'hr';
@@ -54,12 +54,13 @@ export const personColumns = {
   phone: teamMembers.phone,
 };
 
-/** Colaborador = contrato (hr_employees) + dados pessoais (team_members). */
+/** Colaborador = contrato (hr_employees) + dados pessoais (team_members) + nome do empregador, se for empresa-cliente. */
 export const employeesQuery = (tx: Tx) =>
   tx
-    .select({ ...getTableColumns(hrEmployees), ...personColumns })
+    .select({ ...getTableColumns(hrEmployees), ...personColumns, employerName: customers.name, employerDocument: customers.document })
     .from(hrEmployees)
-    .innerJoin(teamMembers, eq(teamMembers.id, hrEmployees.teamMemberId));
+    .innerJoin(teamMembers, eq(teamMembers.id, hrEmployees.teamMemberId))
+    .leftJoin(customers, eq(customers.id, hrEmployees.employerCustomerId));
 export type EmployeeRow = Awaited<ReturnType<typeof employeesQuery>>[number];
 
 export async function employeeOrFail(tx: Tx, id: string): Promise<EmployeeRow> {
@@ -74,12 +75,37 @@ export async function payrollOrFail(tx: Tx, id: string) {
   return p;
 }
 
-export async function findPayroll(tx: Tx, competence: string, type: PayrollRow['type']) {
+/** Folha da competência e tipo do empregador (null = a própria empresa). */
+export async function findPayroll(tx: Tx, competence: string, type: PayrollRow['type'], employerCustomerId: string | null) {
   const [p] = await tx
     .select()
     .from(hrPayrolls)
-    .where(and(eq(hrPayrolls.competence, competence), eq(hrPayrolls.type, type)));
+    .where(and(eq(hrPayrolls.competence, competence), eq(hrPayrolls.type, type), sameEmployer(hrPayrolls.employerCustomerId, employerCustomerId)));
   return p ?? null;
+}
+
+/** Mesmo empregador (null = a própria empresa, que no banco é a coluna vazia). */
+export const sameEmployer = (column: AnyColumn, employerCustomerId: string | null): SQL => (employerCustomerId ? eq(column, employerCustomerId) : isNull(column));
+
+/** Filtro das listas: sem filtro, todos; "own", a própria empresa; um id, a empresa-cliente. */
+export const employerWhere = (column: AnyColumn, filter: EmployerFilter): SQL | undefined => (filter === undefined ? undefined : sameEmployer(column, filter === 'own' ? null : filter));
+
+/**
+ * Empresa-cliente que pode ser empregadora: cliente do tipo empresa, não anonimizado.
+ * (A permissão para ter empregadores é conferida antes, pelo HrEmployersRegistry.)
+ */
+export async function employerOrFail(tx: Tx, customerId: string): Promise<EmployerRef> {
+  const [c] = await tx.select({ id: customers.id, name: customers.name, document: customers.document, type: customers.type, anonymizedAt: customers.anonymizedAt }).from(customers).where(eq(customers.id, customerId));
+  if (!c || c.anonymizedAt) throw badRequest('EMPLOYER_NOT_FOUND', 'Empresa empregadora não encontrada no cadastro de clientes');
+  if (c.type !== 'company') throw badRequest('EMPLOYER_NOT_COMPANY', 'O empregador precisa ser um cliente do tipo empresa');
+  return { id: c.id, name: c.name, document: c.document };
+}
+
+/** Nome e CNPJ do empregador (para as telas); null = a própria empresa. */
+export async function employerRef(tx: Tx, customerId: string | null): Promise<EmployerRef | null> {
+  if (!customerId) return null;
+  const [c] = await tx.select({ id: customers.id, name: customers.name, document: customers.document }).from(customers).where(eq(customers.id, customerId));
+  return c ?? { id: customerId, name: '', document: null };
 }
 
 /** Competência "AAAA-MM" somada de n meses. */

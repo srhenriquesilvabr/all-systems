@@ -155,6 +155,13 @@
       "when": 1793196037722,
       "tag": "0021_rh_dados_pessoais_na_pessoa",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1793201704155,
+      "tag": "0022_estetica_consultoria_headhunter",
+      "breakpoints": true
     }
   ]
 }

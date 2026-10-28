@@ -60,7 +60,7 @@ export default async function seed(ctx) {
   };
 
   await step(log, 'rh: colaboradores', async () => {
-    const existing = new Set((await api.get('/hr/employees')).map((e) => e.name));
+    const existing = new Set((await ownEmployees(api)).map((e) => e.name));
     let created = 0;
     for (const e of EMPLOYEES) {
       if (existing.has(e.name)) continue;
@@ -88,7 +88,7 @@ export default async function seed(ctx) {
   });
 
   await step(log, 'rh: férias', async () => {
-    const employees = await api.get('/hr/employees');
+    const employees = await ownEmployees(api);
     let taken = 0;
     let planned = 0;
     for (const emp of employees) {
@@ -162,7 +162,7 @@ export default async function seed(ctx) {
   for (const competence of [prev2, prev, month]) {
     const closing = competence !== month;
     await step(log, `rh: folha ${competence}${closing ? ' (fechada)' : ' (aberta)'}`, async () => {
-      const found = (await api.get('/hr/payrolls')).find((p) => p.competence === competence && p.type === 'monthly');
+      const found = (await api.get('/hr/payrolls', { employer: 'own' })).find((p) => p.competence === competence && p.type === 'monthly' && !p.employer);
       let payroll = found ? await api.get(`/hr/payrolls/${found.id}`) : await api.post('/hr/payrolls', { competence });
       if (payroll.status === 'closed') {
         log(`    já fechada (${payroll.totals.employees} colaboradores)`);
@@ -183,6 +183,9 @@ export default async function seed(ctx) {
     });
   }
 }
+
+/** Colaboradores da própria empresa (na consultoria de RH há também os das empresas atendidas). */
+const ownEmployees = async (api) => (await api.get('/hr/employees', { employer: 'own' })).filter((e) => !e.employer);
 
 /** Mesmo dia, ou a próxima segunda se cair no fim de semana. */
 function nextWorkday(iso) {

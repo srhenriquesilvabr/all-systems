@@ -1,4 +1,4 @@
-import { api, ApiError, formatDate, formatDocument, formatMoney, parseMoney, today, useSession } from '@all/module-sdk/web';
+import { api, ApiError, formatDate, formatDocument, formatMoney, parseMoney, today } from '@all/module-sdk/web';
 import { Alert, Button, Field, Input, Modal, Select, Spinner, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent, type ReactNode } from 'react';
@@ -14,6 +14,7 @@ import {
   type TerminationType,
 } from '../contracts';
 import { hrKey } from './hrKey';
+import { EmployerHeading } from './employers';
 
 const optionalMoney = (v: string) => (v.trim() === '' ? undefined : parseMoney(v));
 
@@ -261,12 +262,11 @@ export function TerminationModal({ employeeId, onClose }: { employeeId: string; 
 
 /** Versão para impressão (termo de rescisão resumido, no espírito do TRCT). */
 export function TerminationPrint({ detail: d }: { detail: TerminationDetail }) {
-  const { tenant } = useSession();
   const earnings = d.lines.filter((l) => l.kind === 'earning');
   const deductions = d.lines.filter((l) => l.kind === 'deduction');
   return (
     <div className="hidden text-black print:block">
-      <h1 className="text-lg font-bold">{tenant.name}</h1>
+      <EmployerHeading employer={d.employee.employer ?? null} />
       <p className="mb-3 text-sm font-medium">Termo de rescisão do contrato de trabalho (resumo)</p>
       <table className="mb-3 w-full text-xs">
         <tbody>

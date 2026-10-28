@@ -198,7 +198,8 @@ export const salesStockMoves = pgTable(
     productId: uuid('product_id')
       .notNull()
       .references(() => salesProducts.id),
-    kind: text('kind', { enum: ['purchase', 'production', 'loss', 'count', 'sale', 'return'] }).notNull(),
+    /** `consumption`: insumo usado num atendimento (ex.: frasco de toxina numa aplicação da estética). */
+    kind: text('kind', { enum: ['purchase', 'production', 'loss', 'count', 'sale', 'return', 'consumption'] }).notNull(),
     /** Variação do saldo (negativa nas saídas). */
     quantity: quantity('quantity').notNull(),
     /** Saldo depois do movimento. */

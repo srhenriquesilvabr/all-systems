@@ -1,5 +1,6 @@
-import { teamMembers, users } from '@all/core/schema';
+import { customers, teamMembers, users } from '@all/core/schema';
 import { id, tenantId, tenantIsolation } from '@all/db';
+import { sql } from 'drizzle-orm';
 import { date, index, integer, jsonb, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 const ts = (name: string) => timestamp(name, { withTimezone: true });
@@ -8,6 +9,8 @@ const money = (name: string) => numeric(name, { precision: 12, scale: 2 });
 /**
  * Colaborador: contrato de trabalho (cargo, salário…; acesso só com permissão de RH). Nome, CPF,
  * nascimento, e-mail e telefone ficam na pessoa da equipe (core), a mesma do profissional da agenda.
+ * Empregador: a própria empresa (vazio) ou, na consultoria de RH, uma empresa-cliente (cliente do
+ * tipo empresa). A mesma pessoa pode ter um contrato por empregador.
  */
 export const hrEmployees = pgTable(
   'hr_employees',
@@ -17,6 +20,8 @@ export const hrEmployees = pgTable(
     teamMemberId: uuid('team_member_id')
       .notNull()
       .references(() => teamMembers.id),
+    /** Empresa-cliente empregadora (consultoria de RH). Vazio = a própria empresa. */
+    employerCustomerId: uuid('employer_customer_id').references(() => customers.id),
     position: text('position').notNull(),
     department: text('department'),
     admissionDate: date('admission_date', { mode: 'string' }).notNull(),
@@ -33,10 +38,18 @@ export const hrEmployees = pgTable(
     notes: text('notes'),
     createdAt: ts('created_at').notNull().defaultNow(),
   },
-  (t) => [uniqueIndex('hr_employees_team_member_key').on(t.tenantId, t.teamMemberId), tenantIsolation()],
+  (t) => [
+    // Um contrato por pessoa e empregador (o vazio, a própria empresa, é tratado como um empregador).
+    uniqueIndex('hr_employees_own_member_key').on(t.tenantId, t.teamMemberId).where(sql`employer_customer_id is null`),
+    uniqueIndex('hr_employees_employer_member_key').on(t.tenantId, t.employerCustomerId, t.teamMemberId).where(sql`employer_customer_id is not null`),
+    tenantIsolation(),
+  ],
 );
 
-/** Uma folha por competência e tipo: mensal, 13º (1ª e 2ª parcelas) e rescisões do mês. */
+/**
+ * Uma folha por competência, tipo e empregador: mensal, 13º (1ª e 2ª parcelas) e rescisões do mês.
+ * Na consultoria de RH, cada empresa-cliente tem as suas; a da própria empresa tem o empregador vazio.
+ */
 export const hrPayrolls = pgTable(
   'hr_payrolls',
   {
@@ -45,6 +58,8 @@ export const hrPayrolls = pgTable(
     /** "2026-10" (13º: 1ª parcela em novembro, 2ª em dezembro). */
     competence: text('competence').notNull(),
     type: text('type', { enum: ['monthly', 'thirteenth_1', 'thirteenth_2', 'termination'] }).notNull().default('monthly'),
+    /** Empresa-cliente da folha (consultoria de RH). Vazio = a própria empresa. */
+    employerCustomerId: uuid('employer_customer_id').references(() => customers.id),
     status: text('status', { enum: ['draft', 'closed'] }).notNull().default('draft'),
     /** Feriados em dias úteis no mês (DSR). */
     holidays: integer('holidays').notNull().default(0),
@@ -54,7 +69,11 @@ export const hrPayrolls = pgTable(
     closedById: uuid('closed_by_id').references(() => users.id),
     createdAt: ts('created_at').notNull().defaultNow(),
   },
-  (t) => [uniqueIndex('hr_payrolls_competence_type_key').on(t.tenantId, t.competence, t.type), tenantIsolation()],
+  (t) => [
+    uniqueIndex('hr_payrolls_own_competence_type_key').on(t.tenantId, t.competence, t.type).where(sql`employer_customer_id is null`),
+    uniqueIndex('hr_payrolls_employer_competence_type_key').on(t.tenantId, t.employerCustomerId, t.competence, t.type).where(sql`employer_customer_id is not null`),
+    tenantIsolation(),
+  ],
 );
 
 export const hrPayrollItems = pgTable(

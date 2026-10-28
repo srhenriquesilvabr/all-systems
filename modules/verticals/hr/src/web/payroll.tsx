@@ -1,9 +1,10 @@
-import { api, ApiError, formatDate, formatDateTime, formatMoney, parseMoney, useCan, useSession } from '@all/module-sdk/web';
+import { api, ApiError, formatDate, formatDateTime, formatDocument, formatMoney, parseMoney, useCan } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { payrollTypeLabel, type Payroll, type PayrollItem } from '../contracts';
+import { EmployerHeading, EmployerSelect, employerIdOf, employerLabel, useEmployerParam, useEmployers } from './employers';
 import { hrKey } from './hrKey';
 
 const competenceLabel = (c: string) => new Date(`${c}-15T12:00:00Z`).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
@@ -12,18 +13,24 @@ const titleOf = (p: Pick<Payroll, 'type' | 'competence'>) =>
 const num = (v: string) => Number(v.replace(',', '.')) || 0;
 const money = (v: string) => parseMoney(v) || 0;
 
-type PayrollSummary = Pick<Payroll, 'id' | 'competence' | 'type' | 'status' | 'closedAt' | 'totals'>;
+type PayrollSummary = Pick<Payroll, 'id' | 'competence' | 'type' | 'employer' | 'status' | 'closedAt' | 'totals'>;
 
 export function PayrollsPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const canRun = useCan('hr.payroll');
-  const list = useQuery({ queryKey: [...hrKey, 'payrolls'], queryFn: () => api<PayrollSummary[]>('/hr/payrolls') });
+  // Consultoria de RH: uma folha por empresa. O filtro também escolhe para qual empresa abrir a folha.
+  const multi = !!useEmployers().data?.enabled;
+  const [employer, setEmployer] = useEmployerParam();
+  const filter = multi ? employer || undefined : undefined;
+  const list = useQuery({ queryKey: [...hrKey, 'payrolls', filter ?? ''], queryFn: () => api<PayrollSummary[]>('/hr/payrolls', { query: { employer: filter } }) });
   const [competence, setCompetence] = useState(new Date().toISOString().slice(0, 7));
   const [holidays, setHolidays] = useState('0');
   const [thirteenth, setThirteenth] = useState(false);
+  const mustPick = multi && !employer;
+  const employerBody = multi ? { employerCustomerId: employerIdOf(employer) } : {};
   const create = useMutation({
-    mutationFn: () => api<Payroll>('/hr/payrolls', { method: 'POST', body: { competence, holidays: Number(holidays) || 0 } }),
+    mutationFn: () => api<Payroll>('/hr/payrolls', { method: 'POST', body: { competence, holidays: Number(holidays) || 0, ...employerBody } }),
     onSuccess: (p) => {
       queryClient.invalidateQueries({ queryKey: hrKey });
       navigate(`/rh/folha/${p.id}`);
@@ -33,16 +40,20 @@ export function PayrollsPage() {
     <>
       <PageHeader
         title="Folha de pagamento"
-        description="Folha mensal, 13º salário e rescisões. INSS, IRRF e FGTS pelas tabelas configuradas; ao fechar, os valores vão para o financeiro."
+        description={
+          multi
+            ? 'Uma folha por empresa: a da própria empresa vai para o financeiro ao fechar; a das empresas atendidas gera holerites e o resumo para a empresa pagar (e os honorários, se configurados).'
+            : 'Folha mensal, 13º salário e rescisões. INSS, IRRF e FGTS pelas tabelas configuradas; ao fechar, os valores vão para o financeiro.'
+        }
         actions={
           canRun && (
             <div className="flex flex-wrap gap-2">
               <Input type="month" aria-label="Competência" value={competence} onChange={(e) => setCompetence(e.target.value)} />
               <Input type="number" min={0} max={10} className="w-24" aria-label="Feriados em dias úteis" title="Feriados em dias úteis no mês (DSR)" value={holidays} onChange={(e) => setHolidays(e.target.value)} />
-              <Button loading={create.isPending} onClick={() => create.mutate()}>
+              <Button loading={create.isPending} disabled={mustPick} title={mustPick ? 'Escolha a empresa no filtro abaixo' : undefined} onClick={() => create.mutate()}>
                 Abrir folha
               </Button>
-              <Button variant="secondary" onClick={() => setThirteenth(true)}>
+              <Button variant="secondary" disabled={mustPick} title={mustPick ? 'Escolha a empresa no filtro abaixo' : undefined} onClick={() => setThirteenth(true)}>
                 Calcular 13º
               </Button>
             </div>
@@ -50,6 +61,12 @@ export function PayrollsPage() {
         }
       />
       {canRun && <p className="-mt-2 mb-4 text-xs text-fg-muted">O número ao lado da competência são os feriados em dias úteis do mês, usados no DSR sobre horas extras e comissões.</p>}
+      {multi && (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <EmployerSelect allowAll aria-label="Empresa" className="max-w-80" value={employer} onChange={setEmployer} />
+          {mustPick && canRun && <span className="text-xs text-fg-muted">Escolha a empresa para abrir a folha ou calcular o 13º.</span>}
+        </div>
+      )}
       {create.error && <Alert>{create.error instanceof ApiError ? create.error.message : 'Erro'}</Alert>}
       <Card>
         {list.isPending ? (
@@ -65,6 +82,7 @@ export function PayrollsPage() {
             <thead>
               <tr>
                 <Th>Folha</Th>
+                {multi && <Th>Empresa</Th>}
                 <Th>Tipo</Th>
                 <Th className="text-right">Bruto</Th>
                 <Th className="text-right">Líquido</Th>
@@ -76,6 +94,7 @@ export function PayrollsPage() {
               {list.data.map((p) => (
                 <tr key={p.id} className="cursor-pointer hover:bg-muted/50" onClick={() => navigate(`/rh/folha/${p.id}`)}>
                   <Td className="font-medium capitalize">{titleOf(p)}</Td>
+                  {multi && <Td className={p.employer ? undefined : 'text-fg-muted'}>{employerLabel(p.employer)}</Td>}
                   <Td>{payrollTypeLabel[p.type]}</Td>
                   <Td className="text-right tabular-nums">{formatMoney(p.totals.gross)}</Td>
                   <Td className="text-right tabular-nums">{formatMoney(p.totals.net)}</Td>
@@ -95,18 +114,18 @@ export function PayrollsPage() {
           </Table>
         )}
       </Card>
-      {thirteenth && <ThirteenthModal onClose={() => setThirteenth(false)} />}
+      {thirteenth && <ThirteenthModal employerBody={employerBody} onClose={() => setThirteenth(false)} />}
     </>
   );
 }
 
-function ThirteenthModal({ onClose }: { onClose: () => void }) {
+function ThirteenthModal({ employerBody, onClose }: { employerBody: { employerCustomerId?: string | null }; onClose: () => void }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const now = new Date();
   const [form, setForm] = useState({ year: String(now.getFullYear()), installment: now.getMonth() === 11 ? '2' : '1' });
   const create = useMutation({
-    mutationFn: () => api<Payroll>('/hr/payrolls/thirteenth', { method: 'POST', body: { year: Number(form.year), installment: Number(form.installment) } }),
+    mutationFn: () => api<Payroll>('/hr/payrolls/thirteenth', { method: 'POST', body: { year: Number(form.year), installment: Number(form.installment), ...employerBody } }),
     onSuccess: (p) => {
       queryClient.invalidateQueries({ queryKey: hrKey });
       navigate(`/rh/folha/${p.id}`);
@@ -166,6 +185,7 @@ export function PayrollPage() {
   const [editing, setEditing] = useState<PayrollItem | null>(null);
   const [slip, setSlip] = useState<PayrollItem | null>(null);
   const [holidays, setHolidays] = useState<string | null>(null);
+  const [report, setReport] = useState(false);
   const invalidate = () => queryClient.invalidateQueries({ queryKey: hrKey });
   const close = useMutation({ mutationFn: () => api(`/hr/payrolls/${id}/close`, { method: 'POST' }), onSuccess: invalidate });
   const recalc = useMutation({
@@ -185,18 +205,31 @@ export function PayrollPage() {
     <>
       <div className="print:hidden">
         <PageHeader
-          title={`${payroll.type === 'monthly' ? 'Folha de ' : ''}${titleOf(payroll)}`}
+          title={`${payroll.type === 'monthly' ? 'Folha de ' : ''}${titleOf(payroll)}${payroll.employer ? ` — ${payroll.employer.name}` : ''}`}
           description={`${payrollTypeLabel[payroll.type]} · ${payroll.totals.employees} colaboradores · tabelas: ${payroll.tablesLabel}${payroll.closedAt && payroll.type !== 'termination' ? ` · fechada em ${formatDateTime(payroll.closedAt)}` : ''}`}
           actions={
-            canRun &&
-            open && (
-              <Button loading={close.isPending} onClick={() => close.mutate()}>
-                Fechar folha
-              </Button>
-            )
+            <div className="flex gap-2">
+              {payroll.employer && payroll.items.length > 0 && (
+                <Button variant="secondary" onClick={() => setReport(true)}>
+                  Resumo para a empresa
+                </Button>
+              )}
+              {canRun && open && (
+                <Button loading={close.isPending} onClick={() => close.mutate()}>
+                  Fechar folha
+                </Button>
+              )}
+            </div>
           }
         />
         {error && <Alert>{error instanceof ApiError ? error.message : 'Erro'}</Alert>}
+        {payroll.employer && payroll.type !== 'termination' && (
+          <Alert tone="info">
+            Folha da empresa atendida {payroll.employer.name}
+            {payroll.employer.document ? ` (CNPJ ${formatDocument(payroll.employer.document)})` : ''}: salários, INSS, IRRF e FGTS são pagos pela empresa e não entram no
+            financeiro. Ao fechar, a folha trava e os honorários configurados para a empresa são lançados como receita.
+          </Alert>
+        )}
         {payroll.type === 'monthly' && (
           <div className="mb-4 flex flex-wrap items-end gap-3 text-sm">
             <span className="text-fg-muted">
@@ -213,7 +246,12 @@ export function PayrollPage() {
             )}
           </div>
         )}
-        {payroll.type === 'termination' && <Alert tone="info">Cada rescisão é lançada no financeiro ao ser confirmada. Abra o colaborador para ver e imprimir o termo.</Alert>}
+        {payroll.type === 'termination' && (
+          <Alert tone="info">
+            {payroll.employer ? `Rescisões de ${payroll.employer.name}: cada termo é registrado ao ser confirmado e pago pela empresa atendida.` : 'Cada rescisão é lançada no financeiro ao ser confirmada.'} Abra o
+            colaborador para ver e imprimir o termo.
+          </Alert>
+        )}
         <div className="mb-4 grid gap-4 sm:grid-cols-5">
           {(
             [
@@ -307,6 +345,8 @@ export function PayrollPage() {
       {editing && (thirteenth ? <ThirteenthItemModal payrollId={payroll.id} item={editing} onClose={() => setEditing(null)} /> : <ItemModal payroll={payroll} item={editing} onClose={() => setEditing(null)} />)}
       {slip && <PayslipModal payroll={payroll} item={slip} onClose={() => setSlip(null)} />}
       {slip && <PayslipPrint payroll={payroll} item={slip} />}
+      {report && !slip && <EmployerReportModal payroll={payroll} onClose={() => setReport(false)} />}
+      {report && !slip && <EmployerReport payroll={payroll} className="hidden text-black print:block" />}
     </>
   );
 }
@@ -541,10 +581,9 @@ function PayslipModal({ payroll, item, onClose }: { payroll: Payroll; item: Payr
 
 /** Versão para impressão (o modal não imprime). */
 function PayslipPrint({ payroll, item }: { payroll: Payroll; item: PayrollItem }) {
-  const { tenant } = useSession();
   return (
     <div className="hidden text-black print:block">
-      <h1 className="text-lg font-bold">{tenant.name}</h1>
+      <EmployerHeading employer={payroll.employer} />
       <p className="mb-4 text-sm">
         {item.installment ? 'Recibo de 13º salário' : 'Recibo de pagamento de salário'} · <span className="capitalize">{titleOf(payroll)}</span>
       </p>
@@ -558,5 +597,120 @@ function PayslipPrint({ payroll, item }: { payroll: Payroll; item: PayrollItem }
       <VacationReceipts item={item} />
       <p className="mt-12 border-t border-black pt-1 text-center text-xs">Assinatura do colaborador</p>
     </div>
+  );
+}
+
+/** Vencimentos que a empresa atendida paga (as mesmas regras que a própria empresa usa no fechamento). */
+function obligationsOf(p: Payroll): { label: string; amount: number; due: string }[] {
+  const [y, m] = p.competence.split('-').map(Number) as [number, number];
+  const nextMonth20 = formatDate(new Date(Date.UTC(y, m, 20)).toISOString().slice(0, 10));
+  const t = p.totals;
+  const round = (n: number) => Math.round(n * 100) / 100;
+  const list =
+    p.type === 'monthly'
+      ? [
+          { label: 'Líquido dos colaboradores (salários)', amount: t.net, due: 'até o 5º dia útil do mês seguinte' },
+          { label: 'INSS e IRRF retidos (DCTFWeb)', amount: round(t.inss + t.irrf), due: nextMonth20 },
+          { label: 'FGTS (FGTS Digital)', amount: t.fgts, due: nextMonth20 },
+        ]
+      : p.type === 'thirteenth_1'
+        ? [
+            { label: '13º salário — 1ª parcela (líquido)', amount: t.net, due: formatDate(`${y}-11-30`) },
+            { label: 'FGTS sobre a 1ª parcela', amount: t.fgts, due: formatDate(`${y}-12-20`) },
+          ]
+        : p.type === 'thirteenth_2'
+          ? [
+              { label: '13º salário — 2ª parcela (líquido)', amount: t.net, due: formatDate(`${y}-12-20`) },
+              { label: 'INSS sobre o 13º (DCTFWeb competência 13)', amount: t.inss, due: formatDate(`${y}-12-20`) },
+              { label: 'IRRF sobre o 13º', amount: t.irrf, due: formatDate(`${y + 1}-01-20`) },
+              { label: 'FGTS sobre a 2ª parcela', amount: t.fgts, due: formatDate(`${y + 1}-01-20`) },
+            ]
+          : [
+              { label: 'Líquido dos termos de rescisão', amount: t.net, due: 'até 10 dias da saída (cada termo)' },
+              { label: 'FGTS rescisório + multa', amount: t.fgts, due: 'até 10 dias da saída (cada termo)' },
+              { label: 'INSS e IRRF das rescisões', amount: round(t.inss + t.irrf), due: nextMonth20 },
+            ];
+  return list.filter((o) => o.amount > 0);
+}
+
+/**
+ * Resumo da folha para a empresa atendida: colaboradores com bruto, descontos e líquido, totais e
+ * as guias a pagar. É o "recibo" do processamento; os valores não passam pelo financeiro da consultoria.
+ */
+function EmployerReport({ payroll, className }: { payroll: Payroll; className?: string }) {
+  return (
+    <div className={className}>
+      <EmployerHeading employer={payroll.employer} />
+      <p className="my-3 text-sm">
+        Resumo da folha · <span className="capitalize">{titleOf(payroll)}</span> · {payroll.totals.employees} colaboradores ·{' '}
+        {payroll.closedAt ? `fechada em ${formatDateTime(payroll.closedAt)}` : 'prévia (folha em aberto)'}
+      </p>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-line text-left text-xs text-fg-muted print:text-black">
+            <th className="py-1 font-normal">Colaborador</th>
+            <th className="py-1 text-right font-normal">Bruto</th>
+            <th className="py-1 text-right font-normal">INSS</th>
+            <th className="py-1 text-right font-normal">IRRF</th>
+            <th className="py-1 text-right font-normal">Líquido</th>
+            <th className="py-1 text-right font-normal">FGTS</th>
+          </tr>
+        </thead>
+        <tbody>
+          {payroll.items.map((i) => (
+            <tr key={i.id}>
+              <td className="py-1">
+                {i.employee.name} <span className="text-xs text-fg-muted print:text-black">· {i.employee.position}</span>
+              </td>
+              <td className="py-1 text-right tabular-nums">{formatMoney(i.gross)}</td>
+              <td className="py-1 text-right tabular-nums">{formatMoney(i.inss)}</td>
+              <td className="py-1 text-right tabular-nums">{formatMoney(i.irrf)}</td>
+              <td className="py-1 text-right tabular-nums">{formatMoney(i.net)}</td>
+              <td className="py-1 text-right tabular-nums">{formatMoney(i.fgts)}</td>
+            </tr>
+          ))}
+          <tr className="border-t border-line font-medium">
+            <td className="py-1">Totais</td>
+            <td className="py-1 text-right tabular-nums">{formatMoney(payroll.totals.gross)}</td>
+            <td className="py-1 text-right tabular-nums">{formatMoney(payroll.totals.inss)}</td>
+            <td className="py-1 text-right tabular-nums">{formatMoney(payroll.totals.irrf)}</td>
+            <td className="py-1 text-right tabular-nums">{formatMoney(payroll.totals.net)}</td>
+            <td className="py-1 text-right tabular-nums">{formatMoney(payroll.totals.fgts)}</td>
+          </tr>
+        </tbody>
+      </table>
+      <h2 className="mb-1 mt-4 text-sm font-medium">A pagar pela empresa</h2>
+      <ul className="space-y-1 text-sm">
+        {obligationsOf(payroll).map((o) => (
+          <li key={o.label} className="flex justify-between gap-4">
+            <span>
+              {o.label} <span className="text-xs text-fg-muted print:text-black">· vencimento {o.due}</span>
+            </span>
+            <span className="tabular-nums">{formatMoney(o.amount)}</span>
+          </li>
+        ))}
+      </ul>
+      {payroll.totals.maternity > 0 && <p className="mt-2 text-xs">Salário-maternidade pago no mês: {formatMoney(payroll.totals.maternity)} (deduzido das contribuições na DCTFWeb).</p>}
+    </div>
+  );
+}
+
+function EmployerReportModal({ payroll, onClose }: { payroll: Payroll; onClose: () => void }) {
+  return (
+    <Modal
+      open
+      title="Resumo para a empresa"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Fechar
+          </Button>
+          <Button onClick={() => window.print()}>Imprimir</Button>
+        </>
+      }
+    >
+      <EmployerReport payroll={payroll} />
+    </Modal>
   );
 }

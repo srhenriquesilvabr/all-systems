@@ -1,10 +1,11 @@
-import { api, ApiError, AuthImage, formatDate, formatMoney, formatPhone, parseMoney, SpreadsheetImport, teamKey, TeamLinks, TeamMemberPicker, useCan, useTeamMember, type TeamMemberDetail } from '@all/module-sdk/web';
+import { api, ApiError, AuthImage, formatDate, formatDocument, formatMoney, formatPhone, parseMoney, SpreadsheetImport, teamKey, TeamLinks, TeamMemberPicker, useCan, useTeamMember, type TeamMemberDetail } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type FormEvent, type ReactNode } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { employeeCategoryLabel, employeeStatusLabel, leaveTypeLabel, leaveTypes, terminationTypeLabel, vacationPay, type Employee, type Leave, type LeaveType, type Vacation } from '../contracts';
 import { employeeImportSpec } from './employeeImport';
+import { EmployerSelect, employerIdOf, employerLabel, useEmployerParam, useEmployers, type EmployerChoice } from './employers';
 import { hrKey } from './hrKey';
 import { TerminationModal, TerminationWizard } from './termination';
 
@@ -16,29 +17,47 @@ export function EmployeesPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [status, setStatus] = useState('active');
-  const [creating, setCreating] = useState(false);
-  const list = useQuery({ queryKey: [...hrKey, 'employees', status], queryFn: () => api<Employee[]>('/hr/employees', { query: { status: status || undefined } }) });
+  // ?admitir=<pessoa da equipe>: vem do head hunter ao contratar um candidato; abre a admissão já com a pessoa.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const admitPersonId = canManage ? searchParams.get('admitir') : null;
+  const [creating, setCreating] = useState(!!admitPersonId);
+  const closeCreating = () => {
+    setCreating(false);
+    if (admitPersonId) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('admitir');
+      setSearchParams(next, { replace: true });
+    }
+  };
+  // Consultoria de RH: filtro por empresa-cliente (e a empresa vira coluna da lista).
+  const employers = useEmployers();
+  const multi = !!employers.data?.enabled;
+  const [employer, setEmployer] = useEmployerParam();
+  const filter = multi ? employer || undefined : undefined;
+  const list = useQuery({ queryKey: [...hrKey, 'employees', status, filter ?? ''], queryFn: () => api<Employee[]>('/hr/employees', { query: { status: status || undefined, employer: filter } }) });
+  const importSpec = useMemo(() => employeeImportSpec(multi ? { list: employers.data?.items ?? [], fallback: employerIdOf(employer) } : null), [multi, employers.data, employer]);
   return (
     <>
       <PageHeader
         title="Colaboradores"
-        description="Dados de admissão, salário e saldo de férias."
+        description={multi ? 'Colaboradores da própria empresa e das empresas atendidas: admissão, salário e saldo de férias.' : 'Dados de admissão, salário e saldo de férias.'}
         actions={
           canManage && (
             <>
-              <SpreadsheetImport spec={employeeImportSpec} onImported={() => queryClient.invalidateQueries({ queryKey: hrKey })} />
+              <SpreadsheetImport spec={importSpec} onImported={() => queryClient.invalidateQueries({ queryKey: hrKey })} />
               <Button onClick={() => setCreating(true)}>Admitir colaborador</Button>
             </>
           )
         }
       />
-      <div className="mb-4">
+      <div className="mb-4 flex flex-wrap gap-2">
         <Select aria-label="Situação" className="max-w-48" value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="active">Ativos</option>
           <option value="on_leave">Afastados</option>
           <option value="terminated">Desligados</option>
           <option value="">Todos</option>
         </Select>
+        {multi && <EmployerSelect allowAll aria-label="Empresa" className="max-w-80" value={employer} onChange={setEmployer} />}
       </div>
       <Card>
         {list.isPending ? (
@@ -54,6 +73,7 @@ export function EmployeesPage() {
             <thead>
               <tr>
                 <Th>Nome</Th>
+                {multi && <Th>Empresa</Th>}
                 <Th>Cargo</Th>
                 <Th>Admissão</Th>
                 <Th className="text-right">Salário</Th>
@@ -64,6 +84,7 @@ export function EmployeesPage() {
               {list.data.map((e) => (
                 <tr key={e.id} className="cursor-pointer hover:bg-muted/50" onClick={() => navigate(`/rh/colaboradores/${e.id}`)}>
                   <Td className="font-medium">{e.name}</Td>
+                  {multi && <Td className={e.employer ? undefined : 'text-fg-muted'}>{employerLabel(e.employer)}</Td>}
                   <Td>
                     {e.position}
                     {e.department && <span className="text-fg-muted"> · {e.department}</span>}
@@ -77,7 +98,9 @@ export function EmployeesPage() {
           </Table>
         )}
       </Card>
-      {creating && <EmployeeModal employee={null} onClose={() => setCreating(false)} onSaved={(id) => navigate(`/rh/colaboradores/${id}`)} />}
+      {creating && (
+        <EmployeeModal employee={null} defaultEmployer={employer} initialPersonId={admitPersonId} onClose={closeCreating} onSaved={(id) => navigate(`/rh/colaboradores/${id}`)} />
+      )}
     </>
   );
 }
@@ -128,7 +151,13 @@ export function EmployeePage() {
       />
       <div className="grid gap-6 lg:grid-cols-[18rem_1fr]">
         <Card className="h-fit space-y-2 p-5 text-sm">
-          <PersonInfo teamMemberId={e.teamMemberId} />
+          <PersonInfo teamMemberId={e.teamMemberId} employeeId={e.id} />
+          {e.employer && (
+            <Info label="Empregador (empresa atendida)">
+              {e.employer.name}
+              {e.employer.document && <span className="text-fg-muted"> · {formatDocument(e.employer.document)}</span>}
+            </Info>
+          )}
           <Info label="CPF">{cpfMask(e.cpf)}</Info>
           <Info label="Admissão">{formatDate(e.admissionDate)}</Info>
           {e.experienceEnd && <Info label="Fim da experiência">{formatDate(e.experienceEnd)}</Info>}
@@ -258,14 +287,14 @@ export function EmployeePage() {
 
 /**
  * A pessoa da equipe por trás do colaborador (com permissão para ver a equipe): foto, link para o
- * cadastro completo e onde mais ela aparece (ex.: profissional da agenda).
+ * cadastro completo e onde mais ela aparece (ex.: profissional da agenda, contrato em outra empresa atendida).
  */
-function PersonInfo({ teamMemberId }: { teamMemberId: string }) {
+function PersonInfo({ teamMemberId, employeeId }: { teamMemberId: string; employeeId: string }) {
   const canReadTeam = useCan('core.team.read');
   const member = useTeamMember(teamMemberId, canReadTeam);
   if (!canReadTeam || !member.data) return null;
   const m = member.data;
-  const others = m.links.filter((l) => l.moduleKey !== 'hr');
+  const others = m.links.filter((l) => l.path !== `/rh/colaboradores/${employeeId}`);
   return (
     <div className="mb-3 flex items-center gap-3 border-b border-line pb-3">
       <div className="size-12 shrink-0 overflow-hidden rounded-full bg-muted">
@@ -296,8 +325,24 @@ function Info({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function EmployeeModal({ employee, onClose, onSaved }: { employee: Employee | null; onClose: () => void; onSaved?: (id: string) => void }) {
+function EmployeeModal({
+  employee,
+  defaultEmployer = '',
+  initialPersonId,
+  onClose,
+  onSaved,
+}: {
+  employee: Employee | null;
+  defaultEmployer?: EmployerChoice;
+  /** Admissão de alguém já cadastrado na equipe (ex.: candidato contratado no head hunter). */
+  initialPersonId?: string | null;
+  onClose: () => void;
+  onSaved?: (id: string) => void;
+}) {
   const queryClient = useQueryClient();
+  // Empregador (consultoria de RH): na admissão, vem a empresa do filtro da lista.
+  const multi = !!useEmployers().data?.enabled;
+  const [employer, setEmployer] = useState<EmployerChoice>(employee ? (employee.employerCustomerId ?? 'own') : defaultEmployer || 'own');
   const [form, setForm] = useState({
     name: employee?.name ?? '',
     cpf: employee?.cpf ?? '',
@@ -338,6 +383,10 @@ function EmployeeModal({ employee, onClose, onSaved }: { employee: Employee | nu
       });
     },
   });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- carrega a pessoa indicada uma vez, ao abrir.
+  useEffect(() => {
+    if (!employee && initialPersonId && canReadTeam) pick.mutate(initialPersonId);
+  }, []);
   const save = useMutation({
     mutationFn: () =>
       api<{ id: string }>(employee ? `/hr/employees/${employee.id}` : '/hr/employees', {
@@ -345,6 +394,7 @@ function EmployeeModal({ employee, onClose, onSaved }: { employee: Employee | nu
         body: {
           ...form,
           ...(person && person.id !== employee?.teamMemberId ? { teamMemberId: person.id } : {}),
+          ...(multi ? { employerCustomerId: employerIdOf(employer) } : {}),
           birthDate: form.birthDate || null,
           email: form.email || null,
           phone: form.phone || null,
@@ -416,6 +466,16 @@ function EmployeeModal({ employee, onClose, onSaved }: { employee: Employee | nu
         {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao salvar'}</Alert>}
         {personPicker}
         <div className="grid gap-4 sm:grid-cols-2">
+          {multi && (
+            <div className="sm:col-span-2">
+              <Field
+                label="Empregador"
+                hint={employee ? 'Só muda enquanto o colaborador não entrou em nenhuma folha.' : 'Empresa atendida que contrata (cliente do tipo empresa) ou a própria empresa.'}
+              >
+                {(id) => <EmployerSelect id={id} value={employer} onChange={setEmployer} />}
+              </Field>
+            </div>
+          )}
           <div className="sm:col-span-2">
             <Field label="Nome completo">{(id) => <Input id={id} required value={form.name} onChange={(e) => set({ name: e.target.value })} autoFocus />}</Field>
           </div>

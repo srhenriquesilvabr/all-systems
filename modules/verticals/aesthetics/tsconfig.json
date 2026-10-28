@@ -13,6 +13,7 @@
     { "path": "../../core" },
     { "path": "../../shared/notifications" },
     { "path": "../../shared/scheduling" },
-    { "path": "../../shared/medical-records" }
+    { "path": "../../shared/medical-records" },
+    { "path": "../../shared/sales" }
   ]
 }

@@ -41,13 +41,50 @@ export const employeeInput = z.object({
    * nascimento, e-mail e telefone acima são gravados nela.
    */
   teamMemberId: z.string().uuid().nullish(),
+  /**
+   * Empregador (consultoria de RH): cliente do tipo empresa. Nulo = a própria empresa; ausente na
+   * edição = mantém o atual. Só pode mudar enquanto o colaborador não está em nenhuma folha.
+   */
+  employerCustomerId: z.string().uuid().nullish(),
 });
 export type EmployeeInput = z.infer<typeof employeeInput>;
 export const employeeStatusLabel = { active: 'Ativo', on_leave: 'Afastado', terminated: 'Desligado' } as const;
 
+/** Empregador do colaborador ou da folha: uma empresa-cliente da consultoria (null = a própria empresa). */
+export interface EmployerRef {
+  id: string;
+  name: string;
+  /** CNPJ (só dígitos). */
+  document: string | null;
+}
+
+/** Empresa que pode empregar colaboradores (clientes do tipo empresa), com o resumo do RH dela. */
+export interface Employer extends EmployerRef {
+  email: string | null;
+  phone: string | null;
+  activeEmployees: number;
+  /** Última folha (mensal, 13º ou rescisões), pela competência. */
+  lastPayroll: { id: string; competence: string; type: PayrollType; status: 'draft' | 'closed' } | null;
+}
+
+/**
+ * GET /hr/employers. `enabled`: o tenant pode ter colaboradores de empresas-clientes (um ramo liga
+ * esse recurso no RH, ex.: Consultoria de RH). Sem ele, a lista vem vazia e as telas ficam como antes.
+ */
+export interface EmployersResponse {
+  enabled: boolean;
+  items: Employer[];
+}
+
+/** Filtro de empregador nas listas: id da empresa-cliente ou "own" (a própria empresa). */
+export const employerFilter = z.union([z.literal('own'), z.string().uuid()]).optional();
+export type EmployerFilter = z.infer<typeof employerFilter>;
+
 export interface Employee extends EmployeeInput {
   id: string;
   teamMemberId: string;
+  employerCustomerId: string | null;
+  employer: EmployerRef | null;
   periods: AcquisitionPeriod[];
   vacationBalance: number;
   overdueVacation: boolean;
@@ -92,12 +129,16 @@ export const payrollCreate = z.object({
   competence: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Competência no formato AAAA-MM'),
   /** Feriados em dias úteis no mês (para o DSR). */
   holidays: z.coerce.number().int().min(0).max(10).default(0),
+  /** Empresa-cliente (consultoria de RH); vazio = a própria empresa. */
+  employerCustomerId: z.string().uuid().nullish(),
 });
 export type PayrollCreate = z.infer<typeof payrollCreate>;
 
 export const thirteenthCreate = z.object({
   year: z.coerce.number().int().min(2000).max(2100),
   installment: z.coerce.number().pipe(z.union([z.literal(1), z.literal(2)])),
+  /** Empresa-cliente (consultoria de RH); vazio = a própria empresa. */
+  employerCustomerId: z.string().uuid().nullish(),
 });
 export type ThirteenthCreate = z.infer<typeof thirteenthCreate>;
 
@@ -116,6 +157,8 @@ export interface Payroll {
   id: string;
   competence: string;
   type: PayrollType;
+  /** Empresa-cliente da folha; null = a própria empresa (só esta lança salários e encargos no financeiro). */
+  employer: EmployerRef | null;
   status: 'draft' | 'closed';
   closedAt: string | null;
   tablesLabel: string;
@@ -197,7 +240,7 @@ export type TerminationInput = z.infer<typeof terminationInput>;
 
 export interface TerminationDetail extends TerminationStatement {
   id: string | null;
-  employee: { id: string; name: string; cpf: string; position: string; category: 'employee' | 'apprentice'; pixKey: string | null };
+  employee: { id: string; name: string; cpf: string; position: string; category: 'employee' | 'apprentice'; pixKey: string | null; employer: EmployerRef | null };
   /** Férias marcadas depois da saída: canceladas ao confirmar (viram férias indenizadas). */
   cancelledVacations: { id: string; startOn: string; days: number }[];
   notes: string | null;

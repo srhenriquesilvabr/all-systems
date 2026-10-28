@@ -4,7 +4,7 @@ import { requestContext } from '@all/module-sdk';
 import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
-import { businessToday, type AccessLogEntry, type AmendInput, type EntryInput, type FormField, type MedicalEntry, type MedicalForm } from '../contracts';
+import { businessToday, type AccessLogEntry, type AmendInput, type EntryAttachment, type EntryInput, type FormField, type MedicalEntry, type MedicalForm } from '../contracts';
 import { mrAccessLog, mrEntries } from '../db/schema';
 
 const MODULE = 'shared.medical-records';
@@ -74,47 +74,66 @@ export class MedicalRecordsService implements OnModuleInit {
   }
 
   list(subjectType: string, subjectId: string): Promise<MedicalEntry[]> {
+    return this.tdb.run((tx) => this.listInTx(tx, subjectType, subjectId));
+  }
+
+  /**
+   * Registros do paciente (todos ou só os de alguns formulários), na transação de quem chama.
+   * Conta como abertura do prontuário no log de acesso.
+   */
+  async listInTx(tx: Tx, subjectType: string, subjectId: string, opts: { formKeys?: string[] } = {}): Promise<MedicalEntry[]> {
+    await this.subjectOrFail(tx, subjectType, subjectId);
+    await this.log(tx, 'view', subjectType, subjectId);
+    if (opts.formKeys && !opts.formKeys.length) return [];
+    const rows = await tx
+      .select()
+      .from(mrEntries)
+      .where(and(eq(mrEntries.subjectType, subjectType), eq(mrEntries.subjectId, subjectId), opts.formKeys ? inArray(mrEntries.formKey, opts.formKeys) : undefined))
+      // Pela data do atendimento; no mesmo dia, o registrado por último primeiro.
+      .orderBy(desc(mrEntries.occurredOn), desc(mrEntries.createdAt), desc(mrEntries.id));
+    return this.toDtos(tx, rows);
+  }
+
+  /** Rota genérica do prontuário: formulário gerido por um módulo só entra pela tela dele. */
+  create(input: EntryInput): Promise<MedicalEntry> {
     return this.tdb.run(async (tx) => {
-      await this.subjectOrFail(tx, subjectType, subjectId);
-      await this.log(tx, 'view', subjectType, subjectId);
-      const rows = await tx
-        .select()
-        .from(mrEntries)
-        .where(and(eq(mrEntries.subjectType, subjectType), eq(mrEntries.subjectId, subjectId)))
-        // Pela data do atendimento; no mesmo dia, o registrado por último primeiro.
-        .orderBy(desc(mrEntries.occurredOn), desc(mrEntries.createdAt), desc(mrEntries.id));
-      return this.toDtos(tx, rows);
+      const form = await this.formOrFail(tx, input.formKey, input.subjectType);
+      if (form.managed) throw badRequest('FORM_MANAGED', `"${form.label}" é registrado pela tela do módulo, não pelo prontuário`);
+      return this.createInTx(tx, input);
     });
   }
 
-  create(input: EntryInput): Promise<MedicalEntry> {
+  /**
+   * Inclui um registro na transação de quem chama (ex.: a estética grava a aplicação junto com o
+   * uso do lote). Mesmas regras e mesmo log de acesso da rota genérica; vale também para os
+   * formulários geridos pelo módulo.
+   */
+  async createInTx(tx: Tx, input: EntryInput): Promise<MedicalEntry> {
     const { tenantId, userId } = requestContext.requireTenant();
-    return this.tdb.run(async (tx) => {
-      const subject = await this.subjectOrFail(tx, input.subjectType, input.subjectId);
-      const form = await this.formOrFail(tx, input.formKey, input.subjectType);
-      const data = validate(form, input.data);
-      if (!Object.keys(data).length && !input.notes) throw badRequest('EMPTY_ENTRY', 'Preencha algum campo ou escreva uma anotação');
-      const [row] = await tx
-        .insert(mrEntries)
-        .values({
-          tenantId,
-          customerId: subject.customerId,
-          subjectType: input.subjectType,
-          subjectId: input.subjectId,
-          formKey: form.key,
-          title: form.label,
-          data,
-          notes: input.notes ?? null,
-          appointmentId: input.appointmentId ?? null,
-          occurredOn: input.occurredOn ?? businessToday(),
-          authorId: userId!,
-          authorName: await authorName(tx, userId!),
-        })
-        .returning();
-      await this.log(tx, 'create', input.subjectType, input.subjectId, row!.id);
-      await this.audit.log(tx, { action: 'medical_record.created', entity: 'mr_entry', entityId: row!.id });
-      return (await this.toDtos(tx, [row!]))[0]!;
-    });
+    const subject = await this.subjectOrFail(tx, input.subjectType, input.subjectId);
+    const form = await this.formOrFail(tx, input.formKey, input.subjectType);
+    const data = validate(form, input.data);
+    if (!Object.keys(data).length && !input.notes) throw badRequest('EMPTY_ENTRY', 'Preencha algum campo ou escreva uma anotação');
+    const [row] = await tx
+      .insert(mrEntries)
+      .values({
+        tenantId,
+        customerId: subject.customerId,
+        subjectType: input.subjectType,
+        subjectId: input.subjectId,
+        formKey: form.key,
+        title: form.label,
+        data,
+        notes: input.notes ?? null,
+        appointmentId: input.appointmentId ?? null,
+        occurredOn: input.occurredOn ?? businessToday(),
+        authorId: userId!,
+        authorName: await authorName(tx, userId!),
+      })
+      .returning();
+    await this.log(tx, 'create', input.subjectType, input.subjectId, row!.id);
+    await this.audit.log(tx, { action: 'medical_record.created', entity: 'mr_entry', entityId: row!.id });
+    return (await this.toDtos(tx, [row!]))[0]!;
   }
 
   /** Retificação: novo registro que aponta para o anterior. O anterior continua lá, intacto. */
@@ -153,12 +172,34 @@ export class MedicalRecordsService implements OnModuleInit {
   }
 
   attach(entryId: string, file: UploadedFile) {
-    return this.tdb.run(async (tx) => {
-      const entry = await this.entryOrFail(tx, entryId);
-      const saved = await this.files.saveDocumentInTx(tx, file, { entity: FILE_OWNER, id: entry.id });
-      await this.log(tx, 'attach', entry.subjectType, entry.subjectId, entry.id);
-      return { id: saved.id, filename: saved.filename, mime: saved.mime, size: saved.size };
-    });
+    return this.tdb.run((tx) => this.attachInTx(tx, entryId, file));
+  }
+
+  /** Anexo na transação de quem chama; com `image`, só JPG, PNG ou WebP (fotos clínicas, assinatura). */
+  async attachInTx(tx: Tx, entryId: string, file: UploadedFile, opts: { image?: boolean } = {}): Promise<EntryAttachment> {
+    const entry = await this.entryOrFail(tx, entryId);
+    const owner = { entity: FILE_OWNER, id: entry.id };
+    const saved = opts.image ? await this.files.saveImageInTx(tx, file, owner) : await this.files.saveDocumentInTx(tx, file, owner);
+    await this.log(tx, 'attach', entry.subjectType, entry.subjectId, entry.id);
+    return { id: saved.id, filename: saved.filename, mime: saved.mime, size: saved.size };
+  }
+
+  /**
+   * Registros de alguns formulários de clientes, para conferências do módulo dono (ex.: há termo
+   * aceito para esta cirurgia?). Não devolve nada para a tela, por isso não entra no log de acesso.
+   */
+  entriesByFormInTx(tx: Tx, customerIds: string[], formKeys: string[]) {
+    if (!formKeys.length || !customerIds.length) return Promise.resolve([] as (typeof mrEntries.$inferSelect)[]);
+    return tx
+      .select()
+      .from(mrEntries)
+      .where(and(inArray(mrEntries.customerId, customerIds), inArray(mrEntries.formKey, formKeys)))
+      .orderBy(asc(mrEntries.createdAt));
+  }
+
+  /** Acesso feito por outra tela (ex.: rastreio de lote de um módulo) entra no mesmo log. */
+  logAccessInTx(tx: Tx, action: AccessAction, subjectType: string, subjectId: string, entryId?: string) {
+    return this.log(tx, action, subjectType, subjectId, entryId);
   }
 
   async download(fileId: string) {
@@ -245,12 +286,30 @@ function validate(form: MedicalForm, data: Record<string, unknown>): Record<stri
   if (!parsed.success) {
     const issue = parsed.error.issues[0]!;
     const field = form.fields.find((f) => f.key === issue.path[0]);
-    throw badRequest('INVALID_ENTRY', field ? `${field.label}: ${issue.message}` : issue.message);
+    const sub = field?.type === 'list' && typeof issue.path[1] === 'number' ? field.itemFields?.find((f) => f.key === issue.path[2]) : undefined;
+    const where = field && sub ? `${field.label}, linha ${(issue.path[1] as number) + 1}, ${sub.label}` : field?.label;
+    throw badRequest('INVALID_ENTRY', where ? `${where}: ${issue.message}` : issue.message);
   }
-  return Object.fromEntries(Object.entries(parsed.data).filter(([, v]) => v !== undefined && v !== null && v !== ''));
+  return compact(parsed.data);
+}
+
+/** Sem os campos vazios (lista vazia também). */
+function compact(values: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(values).filter(([, v]) => v !== undefined && v !== null && v !== '' && !(Array.isArray(v) && !v.length)));
 }
 
 function fieldSchema(f: FormField): z.ZodTypeAny {
+  if (f.type === 'list') {
+    const item: Record<string, z.ZodTypeAny> = {};
+    // Sem lista dentro de lista: um subcampo "list" vira texto.
+    for (const sub of f.itemFields ?? []) item[sub.key] = fieldSchema(sub.type === 'list' ? { ...sub, type: 'text' } : sub);
+    const list = z
+      .array(z.object(item).transform(compact), { required_error: 'obrigatório', invalid_type_error: 'lista inválida' })
+      .max(200, 'no máximo 200 linhas')
+      // Linha toda em branco não conta.
+      .transform((rows) => rows.filter((r) => Object.keys(r).length));
+    return f.required ? list.refine((rows) => rows.length > 0, 'inclua ao menos uma linha') : z.preprocess((v) => (v === null || v === '' ? undefined : v), list.optional());
+  }
   const base = (() => {
     switch (f.type) {
       case 'number':

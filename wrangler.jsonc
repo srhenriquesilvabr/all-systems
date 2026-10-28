@@ -1,5 +1,6 @@
 // Deploy no Cloudflare Workers: admin (assets estáticos) + API Nest (/api/*) + cron (outbox e jobs).
-// Segredos (wrangler secret put / painel): JWT_SECRET, SETTINGS_ENCRYPTION_KEY, RESEND_API_KEY.
+// Segredos (wrangler secret put / painel): JWT_SECRET, SETTINGS_ENCRYPTION_KEY, RESEND_API_KEY e, opcional,
+// ANTHROPIC_API_KEY (nota de aderência por IA do Head hunter).
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "palmer-systems",

@@ -54,13 +54,14 @@ export interface Product extends Omit<ProductInput, 'cost' | 'minStock'> {
 }
 
 export const stockMoveKinds = ['purchase', 'production', 'loss', 'count'] as const;
-export const stockMoveLabel: Record<(typeof stockMoveKinds)[number] | 'sale' | 'return', string> = {
+export const stockMoveLabel: Record<(typeof stockMoveKinds)[number] | 'sale' | 'return' | 'consumption', string> = {
   purchase: 'Entrada (compra)',
   production: 'Produção',
   loss: 'Perda / quebra',
   count: 'Inventário (contagem)',
   sale: 'Venda',
   return: 'Venda cancelada',
+  consumption: 'Uso em atendimento',
 };
 
 export const stockMoveInput = z.object({
