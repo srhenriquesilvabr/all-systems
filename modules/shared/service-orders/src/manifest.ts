@@ -17,6 +17,7 @@ export const serviceOrdersManifest = defineModule({
     { key: 'shared.service-orders.payments', label: 'Registrar pagamentos de ordens' },
   ],
   menu: [{ label: 'Ordens de serviço', path: '/ordens', icon: 'clipboard', permission: 'shared.service-orders.read' }],
+  events: { publishes: ['shared.service-orders.status_changed'] },
   notificationTemplates: [
     {
       key: 'shared.service-orders.received',

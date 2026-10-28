@@ -16,9 +16,9 @@
         document.documentElement.dataset.theme = dark ? 'dark' : 'light';
       } catch (e) {}
       // Cor da última empresa aberta, também antes da primeira pintura. Mesmo CSS de brandCss()
-      // em packages/ui/src/brand.ts. Páginas públicas (/agendar/…) usam a cor da empresa delas.
+      // em packages/ui/src/brand.ts. Páginas públicas (/agendar/, /vagas/, /loja/) usam a cor da empresa delas.
       try {
-        var brand = location.pathname.indexOf('/agendar/') === 0 ? null : JSON.parse(localStorage.getItem('palmer:brand') || 'null');
+        var brand = /^\/(agendar|vagas|loja)\//.test(location.pathname) ? null : JSON.parse(localStorage.getItem('palmer:brand') || 'null');
         if (brand && brand.light && brand.dark) {
           var valid = true;
           var rule = function (selector, scale) {

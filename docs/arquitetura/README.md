@@ -18,6 +18,7 @@ Plataforma SaaS modular e multi-tenant. Um **core** comum a todos os clientes, m
 | 08 | [Roadmap e riscos](08-roadmap-e-riscos.md) | Fases, validações pendentes, riscos |
 | 09 | [Verticais e módulos compartilhados](09-verticais.md) | O que cada vertical faz, pontos de extensão, limites |
 | 10 | [Integração bancária](10-integracao-bancaria.md) | Crédito e consórcio: modos, contrato da API, webhook, LGPD |
+| 11 | [Nota fiscal](11-integracao-fiscal.md) | NFS-e, NFC-e e NF-e por provedor: fluxo, eventos de origem, cadastro fiscal, "a confirmar" |
 | — | [Registro de decisões](decisoes.md) | ADRs tomadas e pendentes |
 
 ## Resumo em um parágrafo

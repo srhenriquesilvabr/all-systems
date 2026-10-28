@@ -1,8 +1,8 @@
-import { api, ApiError, CustomerSearch, formatDate, formatMoney, parseMoney, useCan, useSession, type CustomerOption } from '@all/module-sdk/web';
+import { api, ApiError, formatDate, formatMoney, parseMoney, useCan } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
-import { Link } from 'react-router';
+import { useState } from 'react';
+import { Link, useNavigate } from 'react-router';
 import { assetTypeLabel, assetTypes, quotaStatuses, quotaStatusLabel, type Plan, type Quota, type QuotasSummary } from '../contracts';
 import { key, pct, quotaTone, useTeam } from './common';
 const thisMonth = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date()).slice(0, 7);
@@ -25,7 +25,7 @@ export function SimulatorPage() {
     queryFn: () => api<Plan[]>('/consortium/plans', { query: { assetType: assetType || undefined, minCredit: value ? Math.round(value * 0.8) : undefined, maxCredit: value ? Math.round(value * 1.25) : undefined } }),
   });
   const sync = useMutation({ mutationFn: () => api('/consortium/plans/sync', { method: 'POST' }), onSuccess: () => queryClient.invalidateQueries({ queryKey: key }) });
-  const [selling, setSelling] = useState<Plan | null>(null);
+  const navigate = useNavigate();
 
   return (
     <>
@@ -90,7 +90,7 @@ export function SimulatorPage() {
                   <Td className="text-right tabular-nums">{formatMoney(p.totalCost)}</Td>
                   <Td className="text-right">
                     {canSell && (
-                      <Button size="sm" onClick={() => setSelling(p)}>
+                      <Button size="sm" onClick={() => navigate(`/consorcio/vender?plano=${p.id}`)}>
                         Vender cota
                       </Button>
                     )}
@@ -101,91 +101,7 @@ export function SimulatorPage() {
           </Table>
         )}
       </Card>
-      {selling && <SellModal plan={selling} onClose={() => setSelling(null)} />}
     </>
-  );
-}
-
-function SellModal({ plan, onClose }: { plan: Plan; onClose: () => void }) {
-  const queryClient = useQueryClient();
-  const [customer, setCustomer] = useState<CustomerOption | null>(null);
-  const { user } = useSession();
-  const team = useTeam();
-  const [form, setForm] = useState({ document: '', birthDate: '', monthlyIncome: '', dueDay: '10', sellerId: user.id });
-  const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
-  const sell = useMutation({
-    mutationFn: () =>
-      api<Quota>('/consortium/quotas', {
-        method: 'POST',
-        body: {
-          customerId: customer?.id,
-          planId: plan.id,
-          dueDay: Number(form.dueDay),
-          sellerId: form.sellerId || null,
-          applicant: {
-            name: customer?.name,
-            document: form.document,
-            birthDate: form.birthDate || null,
-            monthlyIncome: form.monthlyIncome ? parseMoney(form.monthlyIncome) : null,
-            email: customer?.email ?? null,
-            phone: customer?.phone ?? null,
-          },
-        },
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: key });
-      onClose();
-    },
-  });
-  function submit(e: FormEvent) {
-    e.preventDefault();
-    sell.mutate();
-  }
-  return (
-    <Modal
-      open
-      title={`Vender cota — ${plan.name}`}
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose}>
-            Cancelar
-          </Button>
-          <Button type="submit" form="cons-sell-form" loading={sell.isPending} disabled={!customer}>
-            Enviar adesão
-          </Button>
-        </>
-      }
-    >
-      {!customer ? (
-        <CustomerSearch onSelect={setCustomer} />
-      ) : (
-        <form id="cons-sell-form" onSubmit={submit} className="space-y-4">
-          {sell.error && <Alert>{sell.error instanceof ApiError ? sell.error.message : 'Erro ao enviar'}</Alert>}
-          <p className="text-sm">
-            {customer.name} · crédito {formatMoney(plan.creditValue)} em {plan.termMonths}x de {formatMoney(plan.installment)} ({plan.institution})
-          </p>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="CPF ou CNPJ">{(id) => <Input id={id} required value={form.document} onChange={(e) => set({ document: e.target.value })} />}</Field>
-            <Field label="Nascimento">{(id) => <Input id={id} type="date" value={form.birthDate} onChange={(e) => set({ birthDate: e.target.value })} />}</Field>
-            <Field label="Renda mensal (R$)">{(id) => <Input id={id} inputMode="decimal" value={form.monthlyIncome} onChange={(e) => set({ monthlyIncome: e.target.value })} />}</Field>
-            <Field label="Dia de vencimento">{(id) => <Input id={id} type="number" min={1} max={28} value={form.dueDay} onChange={(e) => set({ dueDay: e.target.value })} />}</Field>
-            <Field label="Vendedor">
-              {(id) => (
-                <Select id={id} value={form.sellerId} onChange={(e) => set({ sellerId: e.target.value })}>
-                  {team.data?.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.name}
-                    </option>
-                  ))}
-                </Select>
-              )}
-            </Field>
-          </div>
-          <p className="text-xs text-fg-muted">A adesão vai para a administradora; grupo e número da cota chegam quando ela aceitar.</p>
-        </form>
-      )}
-    </Modal>
   );
 }
 

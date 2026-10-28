@@ -159,6 +159,7 @@ export function ProposalList({ proposals, loading }: { proposals?: Proposal[]; l
       action === 'refresh' ? api(`/banking/proposals/${id}/refresh`, { method: 'POST' }) : api(`/banking/proposals/${id}/status`, { method: 'POST', body: { status: action } }),
     onSuccess: () => queryClient.invalidateQueries(),
   });
+  const [answering, setAnswering] = useState<string | null>(null);
   if (loading) return <Spinner />;
   if (!proposals?.length) return null;
   return (
@@ -172,6 +173,7 @@ export function ProposalList({ proposals, loading }: { proposals?: Proposal[]; l
               <div className="flex items-center gap-2">
                 <span className="font-medium">{p.connection.name}</span>
                 <Badge tone={proposalTone[p.status]}>{proposalStatusLabel[p.status]}</Badge>
+                {p.connection.mode === 'manual' && <Badge>Manual</Badge>}
               </div>
               <div className="text-xs text-fg-muted">
                 {formatMoney(p.amount)} em {p.termMonths}x{p.offer && ` · parcela ${formatMoney(p.offer.firstInstallment)}`} · {formatDateTime(p.createdAt)}
@@ -181,7 +183,12 @@ export function ProposalList({ proposals, loading }: { proposals?: Proposal[]; l
             </div>
             {canPropose && (
               <div className="flex gap-1">
-                {(p.status === 'submitted' || p.status === 'under_review') && (
+                {p.connection.mode === 'manual' && ['submitted', 'under_review', 'approved'].includes(p.status) && (
+                  <Button size="sm" variant="secondary" onClick={() => setAnswering(answering === p.id ? null : p.id)}>
+                    Registrar resposta
+                  </Button>
+                )}
+                {p.connection.mode !== 'manual' && (p.status === 'submitted' || p.status === 'under_review') && (
                   <Button size="sm" variant="secondary" loading={act.isPending && act.variables?.id === p.id} onClick={() => act.mutate({ id: p.id, action: 'refresh' })}>
                     Consultar status
                   </Button>
@@ -198,10 +205,90 @@ export function ProposalList({ proposals, loading }: { proposals?: Proposal[]; l
                 )}
               </div>
             )}
+            {answering === p.id && (
+              <div className="w-full">
+                <ManualResponseForm proposal={p} onDone={() => setAnswering(null)} />
+              </div>
+            )}
           </li>
         ))}
       </ul>
     </Card>
+  );
+}
+
+/**
+ * Resposta de uma instituição sem API (modo manual), registrada pela equipe na própria lista:
+ * o que a administradora respondeu no portal, por e-mail ou por arquivo.
+ */
+export function ManualResponseForm({ proposal, onDone }: { proposal: Proposal; onDone: () => void }) {
+  const queryClient = useQueryClient();
+  const options = (proposal.status === 'approved' ? ['contracted', 'cancelled'] : ['under_review', 'approved', 'rejected', 'cancelled']).filter((s) => s !== proposal.status) as ProposalStatus[];
+  const [form, setForm] = useState({ status: options[0]!, message: '', externalId: '', groupCode: '', quotaNumber: '', approvedAmount: '' });
+  const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
+  const consortium = proposal.product === 'consortium';
+  const save = useMutation({
+    mutationFn: () =>
+      api(`/banking/proposals/${proposal.id}/manual`, {
+        method: 'POST',
+        body: {
+          status: form.status,
+          message: form.message || null,
+          externalId: form.externalId || null,
+          groupCode: form.groupCode || null,
+          quotaNumber: form.quotaNumber || null,
+          approvedAmount: form.approvedAmount ? Number(form.approvedAmount.replace(/\./g, '').replace(',', '.')) : null,
+        },
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries();
+      onDone();
+    },
+  });
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    save.mutate();
+  }
+  return (
+    <form onSubmit={submit} className="mt-2 grid gap-3 rounded-xl border border-line bg-muted/30 p-3 sm:grid-cols-2">
+      {save.error && (
+        <div className="sm:col-span-2">
+          <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao registrar'}</Alert>
+        </div>
+      )}
+      <Field label="Resposta da instituição">
+        {(id) => (
+          <Select id={id} value={form.status} onChange={(e) => set({ status: e.target.value as ProposalStatus })}>
+            {options.map((s) => (
+              <option key={s} value={s}>
+                {proposalStatusLabel[s]}
+              </option>
+            ))}
+          </Select>
+        )}
+      </Field>
+      <Field label="Protocolo na instituição">{(id) => <Input id={id} value={form.externalId} onChange={(e) => set({ externalId: e.target.value })} placeholder={proposal.externalId ?? ''} />}</Field>
+      {form.status === 'approved' && consortium && (
+        <>
+          <Field label="Grupo">{(id) => <Input id={id} required value={form.groupCode} onChange={(e) => set({ groupCode: e.target.value })} />}</Field>
+          <Field label="Cota">{(id) => <Input id={id} required value={form.quotaNumber} onChange={(e) => set({ quotaNumber: e.target.value })} />}</Field>
+        </>
+      )}
+      {form.status === 'approved' && !consortium && (
+        <Field label="Valor aprovado (R$)">{(id) => <Input id={id} inputMode="decimal" value={form.approvedAmount} onChange={(e) => set({ approvedAmount: e.target.value })} />}</Field>
+      )}
+      <div className="sm:col-span-2">
+        <Field label="Observação">{(id) => <Input id={id} value={form.message} onChange={(e) => set({ message: e.target.value })} placeholder="Ex.: aprovada no portal em 12/10, documentação conferida" />}</Field>
+      </div>
+      <div className="flex gap-2 sm:col-span-2">
+        <Button type="submit" size="sm" loading={save.isPending}>
+          Registrar
+        </Button>
+        <Button type="button" size="sm" variant="secondary" onClick={onDone}>
+          Cancelar
+        </Button>
+      </div>
+    </form>
   );
 }
 

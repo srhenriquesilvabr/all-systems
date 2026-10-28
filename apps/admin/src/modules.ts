@@ -6,6 +6,7 @@ import { legalWeb } from '@all/legal/web';
 import { medicalRecordsWeb } from '@all/medical-records/web';
 import type { WebModule } from '@all/module-sdk/web';
 import { bankingWeb } from '@all/banking/web';
+import { creditBureauWeb } from '@all/credit-bureau/web';
 import { vehiclesWeb } from '@all/vehicles/web';
 import { realEstateWeb } from '@all/realestate/web';
 import { consortiumWeb } from '@all/consortium/web';
@@ -23,6 +24,8 @@ import { serviceOrdersWeb } from '@all/service-orders/web';
 import { vetWeb } from '@all/vet/web';
 import { whatsappWeb } from '@all/whatsapp/web';
 import { recruitingWeb } from '@all/recruiting/web';
+import { storeWeb } from '@all/store/web';
+import { fiscalWeb } from '@all/fiscal/web';
 
 /** Telas dos módulos instalados. Só as dos módulos ativos no tenant viram rotas. */
-export const webModules: WebModule[] = [notificationsWeb, serviceOrdersWeb, schedulingWeb, petsWeb, medicalRecordsWeb, salesWeb, paymentsWeb, whatsappWeb, bankingWeb, laundryWeb, beautyWeb, petshopWeb, vetWeb, aestheticsWeb, orthodonticsWeb, bakeryWeb, legalWeb, vehiclesWeb, realEstateWeb, consortiumWeb, accountingWeb, hrWeb, hrConsultingWeb, recruitingWeb];
+export const webModules: WebModule[] = [notificationsWeb, serviceOrdersWeb, schedulingWeb, petsWeb, medicalRecordsWeb, salesWeb, paymentsWeb, whatsappWeb, bankingWeb, creditBureauWeb, laundryWeb, beautyWeb, petshopWeb, vetWeb, aestheticsWeb, orthodonticsWeb, bakeryWeb, legalWeb, vehiclesWeb, realEstateWeb, consortiumWeb, accountingWeb, hrWeb, hrConsultingWeb, recruitingWeb, storeWeb, fiscalWeb];

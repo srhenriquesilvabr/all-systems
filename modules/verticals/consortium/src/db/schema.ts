@@ -1,5 +1,6 @@
-import { customers, users } from '@all/core/schema';
+import { customers, tenants, users } from '@all/core/schema';
 import { id, tenantId, tenantIsolation } from '@all/db';
+import { sql } from 'drizzle-orm';
 import { boolean, date, index, integer, jsonb, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 const ts = (name: string) => timestamp(name, { withTimezone: true });
@@ -195,4 +196,189 @@ export const consCredits = pgTable(
     updatedAt: ts('updated_at').notNull().defaultNow(),
   },
   (t) => [uniqueIndex('cons_credits_quota_key').on(t.quotaId), tenantIsolation()],
+);
+
+// ---- Captação de clientes (leads) -----------------------------------------------------------
+
+/**
+ * Quem indica (cliente da carteira ou vendedor) e o código do link de indicação
+ * (/consorcio/<empresa>?ind=<código>). O lead que chega pelo link guarda quem indicou.
+ */
+export const consReferrers = pgTable(
+  'cons_referrers',
+  {
+    id: id(),
+    tenantId: tenantId().references(() => tenants.id, { onDelete: 'cascade' }),
+    code: text('code').notNull(),
+    kind: text('kind', { enum: ['customer', 'seller'] }).notNull(),
+    customerId: uuid('customer_id').references(() => customers.id),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+    /** Nome no momento do cadastro (o link continua valendo se o cadastro mudar). */
+    name: text('name').notNull(),
+    active: boolean('active').notNull().default(true),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('cons_referrers_code_key').on(t.tenantId, t.code),
+    uniqueIndex('cons_referrers_customer_key').on(t.tenantId, t.customerId).where(sql`customer_id is not null`),
+    uniqueIndex('cons_referrers_user_key').on(t.tenantId, t.userId).where(sql`user_id is not null`),
+    tenantIsolation(),
+  ],
+);
+
+/**
+ * Lead de consórcio: simulador público, anúncios (Meta Lead Ads, Google Ads), planilha, cadastro
+ * manual ou indicação. Funil: novo → em contato → simulação enviada → proposta → venda / perdido.
+ */
+export const consLeads = pgTable(
+  'cons_leads',
+  {
+    id: id(),
+    tenantId: tenantId().references(() => tenants.id, { onDelete: 'cascade' }),
+    number: integer('number').notNull(),
+    name: text('name').notNull(),
+    /** E.164 (+5511999998888). */
+    phone: text('phone'),
+    /** Minúsculas. */
+    email: text('email'),
+    city: text('city'),
+    state: text('state'),
+    /** O que a pessoa simulou (ou pediu no anúncio). */
+    assetType: text('asset_type', { enum: ['vehicle', 'real_estate', 'heavy', 'services'] }),
+    creditValue: money('credit_value'),
+    termMonths: integer('term_months'),
+    estimatedInstallment: money('estimated_installment'),
+    source: text('source', { enum: ['simulator', 'meta', 'google', 'import', 'manual', 'referral'] }).notNull(),
+    /** Atribuição: utm_source/medium/campaign/term/content, gclid, fbclid. */
+    utm: jsonb('utm').$type<Record<string, string>>().notNull().default({}),
+    /** Campanha (utm_campaign, ou a campanha/formulário do anúncio), para o relatório por origem. */
+    campaign: text('campaign'),
+    formId: text('form_id'),
+    adId: text('ad_id'),
+    /** Id do lead na plataforma (Meta leadgen_id, Google lead_id): evita duplicar no reenvio. */
+    externalId: text('external_id'),
+    channelId: uuid('channel_id'),
+    referrerId: uuid('referrer_id').references(() => consReferrers.id, { onDelete: 'set null' }),
+    /** Recompensa da indicação: aguardando a venda → a pagar → paga (ou cancelada). */
+    rewardStatus: text('reward_status', { enum: ['none', 'waiting', 'due', 'paid', 'cancelled'] }).notNull().default('none'),
+    rewardAmount: money('reward_amount'),
+    rewardPaidAt: ts('reward_paid_at'),
+    status: text('status', { enum: ['new', 'contacting', 'simulation_sent', 'proposal', 'won', 'lost'] }).notNull().default('new'),
+    lostReason: text('lost_reason'),
+    statusChangedAt: ts('status_changed_at').notNull().defaultNow(),
+    sellerId: uuid('seller_id').references(() => users.id, { onDelete: 'set null' }),
+    assignedAt: ts('assigned_at'),
+    customerId: uuid('customer_id').references(() => customers.id),
+    quotaId: uuid('quota_id').references(() => consQuotas.id, { onDelete: 'set null' }),
+    /**
+     * Base para o contato (LGPD): aceite no formulário (site/anúncio), pedido de contato fora do
+     * sistema (balcão, telefone, evento) ou cliente da carteira.
+     */
+    contactBasis: text('contact_basis', { enum: ['form_consent', 'requested_contact', 'existing_customer'] }).notNull(),
+    /** Prova do aceite no simulador público: texto exato, versão e quando. */
+    consent: jsonb('consent').$type<{ version: string; text: string; acceptedAt: string }>(),
+    ipHash: text('ip_hash'),
+    notes: text('notes'),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    anonymizedAt: ts('anonymized_at'),
+    createdAt: ts('created_at').notNull().defaultNow(),
+    updatedAt: ts('updated_at')
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [
+    uniqueIndex('cons_leads_number_key').on(t.tenantId, t.number),
+    uniqueIndex('cons_leads_external_key').on(t.tenantId, t.source, t.externalId).where(sql`external_id is not null`),
+    index('cons_leads_status_idx').on(t.tenantId, t.status, t.createdAt),
+    index('cons_leads_seller_idx').on(t.tenantId, t.sellerId, t.status),
+    index('cons_leads_phone_idx').on(t.tenantId, t.phone),
+    index('cons_leads_source_idx').on(t.tenantId, t.source, t.createdAt),
+    index('cons_leads_quota_idx').on(t.quotaId),
+    tenantIsolation(),
+  ],
+);
+
+/** Histórico do lead: criação, mudanças no funil, atribuição, anotações, WhatsApp, venda. */
+export const consLeadEvents = pgTable(
+  'cons_lead_events',
+  {
+    id: id(),
+    tenantId: tenantId().references(() => tenants.id, { onDelete: 'cascade' }),
+    leadId: uuid('lead_id')
+      .notNull()
+      .references(() => consLeads.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    text: text('text'),
+    data: jsonb('data'),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [index('cons_lead_events_lead_idx').on(t.leadId, t.createdAt), tenantIsolation()],
+);
+
+/** Tarefa de retorno (ligar de novo, mandar a simulação…) com data e responsável. */
+export const consLeadTasks = pgTable(
+  'cons_lead_tasks',
+  {
+    id: id(),
+    tenantId: tenantId().references(() => tenants.id, { onDelete: 'cascade' }),
+    leadId: uuid('lead_id')
+      .notNull()
+      .references(() => consLeads.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    dueAt: ts('due_at').notNull(),
+    assignedTo: uuid('assigned_to').references(() => users.id, { onDelete: 'set null' }),
+    doneAt: ts('done_at'),
+    doneBy: uuid('done_by').references(() => users.id, { onDelete: 'set null' }),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [index('cons_lead_tasks_open_idx').on(t.tenantId, t.assignedTo, t.dueAt).where(sql`done_at is null`), index('cons_lead_tasks_lead_idx').on(t.leadId), tenantIsolation()],
+);
+
+/**
+ * Entrada de leads de anúncio: Meta Lead Ads (página + formulários + token da página, cifrado) ou
+ * formulário de lead do Google Ads (webhook com chave, cifrada). `simulated` gera leads de teste.
+ */
+export const consLeadChannels = pgTable(
+  'cons_lead_channels',
+  {
+    id: id(),
+    tenantId: tenantId().references(() => tenants.id, { onDelete: 'cascade' }),
+    kind: text('kind', { enum: ['meta', 'google'] }).notNull(),
+    name: text('name').notNull(),
+    mode: text('mode', { enum: ['simulated', 'api'] }).notNull().default('simulated'),
+    /** Meta: id da página do Facebook. */
+    pageId: text('page_id'),
+    /** Meta: formulários aceitos (vazio = todos os da página). */
+    formIds: text('form_ids').array().notNull().default(sql`'{}'::text[]`),
+    /** Meta: token de acesso da página (leitura dos leads pela Graph API). Cifrado. */
+    accessTokenEnc: text('access_token_enc'),
+    /** Google: chave (google_key) configurada no formulário do anúncio. Cifrada. */
+    webhookKeyEnc: text('webhook_key_enc'),
+    /** Tipo de bem padrão dos leads deste canal (o formulário do anúncio costuma ser de um produto só). */
+    assetType: text('asset_type', { enum: ['vehicle', 'real_estate', 'heavy', 'services'] }),
+    active: boolean('active').notNull().default(true),
+    lastLeadAt: ts('last_lead_at'),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [tenantIsolation()],
+);
+
+/**
+ * Sem RLS: os webhooks do Meta e do Google chegam sem tenant; é por aqui que se descobre a empresa
+ * (pelo canal ou pela página do Facebook). Só este módulo lê e grava.
+ */
+export const consLeadRoutes = pgTable(
+  'cons_lead_routes',
+  {
+    channelId: uuid('channel_id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    /** Meta: a mesma página só pode estar ligada a uma empresa. */
+    pageId: text('page_id'),
+  },
+  (t) => [uniqueIndex('cons_lead_routes_page_key').on(t.pageId).where(sql`page_id is not null`)],
 );

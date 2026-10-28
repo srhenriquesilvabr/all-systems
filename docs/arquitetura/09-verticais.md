@@ -12,7 +12,8 @@ Estado em 22/10/2026. Cada vertical é um pacote em `modules/verticals/*` que de
 | `shared.pets` | Pets ligados ao tutor, abas extras na ficha do pet | Pet shop, veterinária |
 | `shared.medical-records` | Prontuário **só de inclusão** (o banco recusa UPDATE/DELETE), retificação, anexos protegidos, log de acesso | Veterinária, estética, ortodontia |
 | `shared.sales` | Produtos, estoque com movimentos, PDV (balança, troco, fiado), cancelamento com estorno, sessão de caixa (abertura, sangria/suprimento, fechamento com quebra/sobra — ADR-024) | Padaria, pet shop |
-| `integration.banking` | Simulação, proposta e acompanhamento em bancos e administradoras ([10](10-integracao-bancaria.md)) | Veículos, imobiliária, consórcio |
+| `integration.banking` | Simulação, proposta e acompanhamento em bancos e administradoras; catálogo de administradoras e modo manual ([10](10-integracao-bancaria.md)) | Veículos, imobiliária, consórcio |
+| `integration.credit_bureau` | Consulta de CPF/CNPJ em birô (score e pendências) com a autorização do cliente registrada, custo, histórico e decisão ([10](10-integracao-bancaria.md)) | Consórcio (lead e venda da cota) |
 
 ## Pontos de extensão (sem import entre verticais)
 
@@ -58,6 +59,14 @@ A corretora vende cotas das administradoras e acompanha a carteira; quem cobra a
 - **Grupos** (`cons_groups`): administradora + código, cadastrados na ativação; participantes e meses restantes informados pela administradora; lance vencedor médio, mínimo e máximo calculados dos resultados lançados.
 - **Comissão:** percentual do plano, senão o da administradora (`cons_administrators`), senão o padrão; gravado na cota na ativação. Lançada como "a receber" (`consortium_quota`, baixa no financeiro). Cota ativa cancelada em até `reversalMonths` meses da ativação (padrão 6; 0 desliga): a comissão pendente é cancelada; a já recebida vira despesa pendente `consortium_commission_reversal` (baixa no financeiro).
 
+## Consórcio: captação de clientes (ADR-032)
+
+- **Origens:** simulador público com a marca da empresa (`/consorcio/<slug>`, parcela estimada pelos planos cadastrados, aceite LGPD versionado), Meta Lead Ads e formulário de lead do Google Ads (canais em "Anúncios", modo simulado para demonstração), planilha, cadastro manual e indicação (link `?ind=<código>` por cliente ou vendedor). UTM, campanha, formulário e anúncio ficam no lead.
+- **Funil** (`cons_leads`): novo → em contato → simulação enviada → proposta → venda / perdido (motivo). Vender a cota a partir do lead põe o lead em "proposta" ligado à cota; a adesão aceita vira "venda" e, se indicado, a recompensa fica "a pagar". Rodízio opcional entre os vendedores escolhidos, retornos (`cons_lead_tasks`), WhatsApp com a mensagem das configurações e relatório de conversão por origem, vendedor e campanha.
+- **Permissões:** `consortium.leads.read` / `.work` (consultor: os próprios e os sem vendedor) / `.manage` (gestão: cadastro, importação, distribuição, indicações, canais e relatório).
+- **LGPD:** base do contato registrada em todo lead; dados de quem não comprou são anonimizados depois de `leadRetentionMonths` (padrão 24) e a pedido do titular.
+- **Consulta de crédito:** com `integration.credit_bureau` contratado, o lead e a venda mostram a consulta (com a autorização do cliente) e a decisão; `requireCreditApproval` exige consulta aprovada para enviar a adesão.
+
 ## RH e DP: folha, 13º e rescisão
 
 Uma folha por competência e tipo (`hr_payrolls.type`): **mensal**, **13º 1ª parcela** (competência 11), **13º 2ª parcela** (competência 12) e **rescisões** (competência da saída). Cada folha guarda a cópia das tabelas; campos novos das tabelas têm valor padrão, então folhas antigas continuam válidas.
@@ -70,7 +79,7 @@ Uma folha por competência e tipo (`hr_payrolls.type`): **mensal**, **13º 1ª p
 
 ## O que não faz (de propósito, por enquanto)
 
-- **Fiscal:** sem NFC-e/NFS-e (ADR-P3, ADR-P6). O cupom do PDV diz "não é documento fiscal".
+- **Fiscal:** NFS-e, NFC-e e NF-e pelo módulo `integration.fiscal` (ADR-033, [11](11-integracao-fiscal.md)); em produção, depende do provedor contratado (ADR-P3, ADR-P6). Sem o módulo, o cupom do PDV diz "não é documento fiscal".
 - **Folha:** calcula e registra; não transmite eSocial, DCTFWeb nem FGTS Digital (ADR-P7). Tabelas de INSS/IRRF são configuráveis e precisam ser conferidas a cada mudança de lei.
 - **Contabilidade:** o calendário é um ponto de partida editável; prazos estaduais e municipais variam.
 - **Crédito real:** depende de contrato com cada instituição (ADR-P8).

@@ -1,6 +1,8 @@
 import { SessionContext, useSession } from '@all/module-sdk/web';
 import { PublicBookingPage } from '@all/scheduling/web';
 import { PublicJobsPage } from '@all/recruiting/web';
+import { PublicSimulatorPage } from '@all/consortium/web';
+import { PublicStorePage } from '@all/store/web';
 import { Spinner } from '@all/ui';
 import { useContext, type ComponentType } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router';
@@ -26,6 +28,17 @@ import { Forbidden, NotFound } from './pages/StatusPages';
 import { UsersPage } from './pages/UsersPage';
 import { TeamPage } from './pages/team/TeamPage';
 
+/**
+ * Primeiro trecho dos caminhos do consórcio no admin (cotas, leads…). Qualquer outro em
+ * /consorcio/<trecho> é o simulador público de uma empresa (o trecho é o slug dela).
+ */
+const consortiumAdminSegments = new Set(
+  webModules
+    .flatMap((m) => m.routes.map((r) => r.path))
+    .filter((p) => p.startsWith('consorcio/'))
+    .map((p) => p.split('/')[1]!),
+);
+
 export function App() {
   const { status } = useAuth();
   const session = useContext(SessionContext);
@@ -40,12 +53,34 @@ export function App() {
     );
   }
 
+  // Simulador de consórcio da empresa: página pública, não depende de sessão.
+  const consortiumSlug = /^\/consorcio\/([^/]+)\/?$/.exec(location.pathname)?.[1];
+  if (consortiumSlug && !consortiumAdminSegments.has(consortiumSlug)) {
+    return (
+      <Routes>
+        <Route path="/consorcio/:slug" element={<PublicSimulatorPage />} />
+      </Routes>
+    );
+  }
+
   // Vagas e candidatura (Head hunter): página pública, não depende de sessão.
   if (location.pathname.startsWith('/vagas/')) {
     return (
       <Routes>
         <Route path="/vagas/:slug" element={<PublicJobsPage />} />
         <Route path="/vagas/:slug/:jobId" element={<PublicJobsPage />} />
+      </Routes>
+    );
+  }
+
+  // Lojinha: vitrine, produto, carrinho e checkout públicos, não dependem de sessão.
+  if (location.pathname.startsWith('/loja/')) {
+    return (
+      <Routes>
+        <Route path="/loja/:slug" element={<PublicStorePage />} />
+        <Route path="/loja/:slug/produto/:productId" element={<PublicStorePage />} />
+        <Route path="/loja/:slug/carrinho" element={<PublicStorePage />} />
+        <Route path="/loja/:slug/finalizar" element={<PublicStorePage />} />
       </Routes>
     );
   }

@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+export * from './leads';
+
 // Mesmo formato do proponente da integração bancária (repetido aqui: os contratos também vão
 // para o navegador, e o pacote raiz de @all/banking traz código do servidor).
 const applicantInput = z.object({
@@ -40,6 +42,8 @@ export const quotaInput = z.object({
   dueDay: z.coerce.number().int().min(1).max(28).default(10),
   /** Vendedor responsável; sem informar, fica quem registrou a venda. */
   sellerId: z.string().uuid().nullish(),
+  /** Lead de onde veio a venda: fica ligado à cota e vira venda quando a adesão é aceita. */
+  leadId: z.string().uuid().nullish(),
 });
 export type QuotaInput = z.infer<typeof quotaInput>;
 

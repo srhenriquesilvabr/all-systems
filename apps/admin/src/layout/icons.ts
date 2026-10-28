@@ -35,10 +35,12 @@ import {
   Scissors,
   Shield,
   Shirt,
+  ShoppingBag,
   ShoppingCart,
   Smile,
   Sparkles,
   Stethoscope,
+  Store,
   Syringe,
   Tag,
   Target,
@@ -99,6 +101,8 @@ const icons: Record<string, LucideIcon> = {
   banknote: Banknote,
   'user-search': UserSearch,
   headhunter: UserRoundSearch,
+  store: Store,
+  'shopping-bag': ShoppingBag,
 };
 
 export const iconFor = (name?: string): LucideIcon => icons[name ?? ''] ?? Circle;

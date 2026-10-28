@@ -4,6 +4,7 @@ import { customers } from '@all/core/schema';
 import type { Tx } from '@all/db';
 import { ModuleRoute, RequirePermission, requestContext } from '@all/module-sdk';
 import { NotificationsModule, NotificationsService } from '@all/notifications';
+import { CREDIT_BUREAU, CreditBureauModule, CreditBureauService } from '@all/credit-bureau';
 import { Body, Controller, Delete, Get, HttpCode, Injectable, Module, NotFoundException, OnModuleInit, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -49,6 +50,11 @@ import {
   type QuotaRow,
 } from './shared';
 import { TrackingController, TrackingService } from './tracking';
+import { MetaGraphHttp, MetaLeadsAdapter } from './leads/ads';
+import { LeadChannelsService } from './leads/channels.service';
+import { LeadsController, LeadWebhooksController, PublicSimulatorController } from './leads/leads.controller';
+import { LeadsService } from './leads/leads.service';
+import { PublicSimulatorService } from './leads/public.service';
 
 const dayStart = (date: string) => sql`(${date}::date)::timestamp at time zone 'America/Sao_Paulo'`;
 const dayEnd = (date: string) => sql`((${date}::date + 1)::timestamp at time zone 'America/Sao_Paulo')`;
@@ -72,6 +78,8 @@ export class ConsortiumService implements OnModuleInit {
     private readonly settings: ModuleSettingsService,
     private readonly handlers: OutboxHandlers,
     private readonly audit: AuditService,
+    private readonly leads: LeadsService,
+    private readonly credit: CreditBureauService,
   ) {}
 
   onModuleInit() {
@@ -142,11 +150,14 @@ export class ConsortiumService implements OnModuleInit {
       const [plan] = await tx.select().from(consPlans).where(and(eq(consPlans.id, input.planId), eq(consPlans.active, true)));
       if (!plan) throw new NotFoundException({ code: 'PLAN_NOT_FOUND', message: 'Plano não encontrado ou fora de oferta' });
       if (input.sellerId) await this.checkSeller(tx, tenantId, input.sellerId);
+      await this.assertCreditCheckInTx(tx, input.applicant.document);
       const [quota] = await tx
         .insert(consQuotas)
         .values({ tenantId, number: await nextSequence(tx, tenantId, 'cons_quota'), customerId: customer.id, planId: plan.id, dueDay: input.dueDay, sellerId: input.sellerId ?? userId ?? null })
         .returning();
       await this.customers.addTimeline(tx, { customerId: customer.id, moduleKey: MODULE, type: 'quota.sold', title: `Consórcio: adesão ao plano ${plan.name} (${plan.institution})`, entity: 'cons_quota', entityId: quota!.id });
+      // Venda a partir de um lead: o lead vai para "proposta" ligado à cota (vira venda quando a adesão for aceita).
+      if (input.leadId) await this.leads.linkQuotaInTx(tx, input.leadId, { id: quota!.id, number: quota!.number, customerId: customer.id });
       return quota!.id;
     });
     const [plan] = await this.tdb.run((tx) => tx.select().from(consPlans).where(eq(consPlans.id, input.planId)));
@@ -281,6 +292,20 @@ export class ConsortiumService implements OnModuleInit {
       sellers.sort((a, b) => b.wonValue - a.wonValue || b.open - a.open || (a.sellerName ?? '').localeCompare(b.sellerName ?? ''));
       return { from, to, sellers };
     });
+  }
+
+  /**
+   * Com a consulta de crédito contratada e a exigência ligada nas configurações: a venda precisa de
+   * uma consulta do CPF/CNPJ do proponente nos últimos 30 dias, com a decisão "seguir".
+   */
+  private async assertCreditCheckInTx(tx: Tx, document: string) {
+    if (!requestContext.get().modules?.has(CREDIT_BUREAU)) return;
+    const { requireCreditApproval } = await this.settings.getInTx<ConsortiumSettings>(tx, MODULE);
+    if (!requireCreditApproval) return;
+    const last = await this.credit.latestForDocumentInTx(tx, document, 30);
+    if (!last) throw badRequest('CREDIT_CHECK_REQUIRED', 'Faça a consulta de crédito do proponente (com a autorização dele) antes de enviar a adesão');
+    if (last.decision === 'rejected') throw badRequest('CREDIT_REJECTED', 'A consulta de crédito deste proponente foi reprovada');
+    if (last.decision !== 'approved') throw badRequest('CREDIT_DECISION_PENDING', 'Registre a decisão da consulta de crédito ("seguir com a venda") antes de enviar a adesão');
   }
 
   /** O vendedor tem de estar ativo na equipe desta empresa. */
@@ -488,6 +513,7 @@ export class ConsortiumService implements OnModuleInit {
       const { q, plan } = row;
       if (e.status === 'rejected' || e.status === 'cancelled') {
         await tx.update(consQuotas).set({ status: 'rejected', statusMessage: 'Adesão não aceita pela administradora' }).where(eq(consQuotas.id, q.id));
+        await this.leads.quotaOutcomeInTx(tx, q.id, 'rejected');
         return;
       }
       if (e.status !== 'approved' && e.status !== 'contracted') return;
@@ -527,6 +553,7 @@ export class ConsortiumService implements OnModuleInit {
       await generateInstallmentsInTx(tx, q.tenantId, active!, plan, { firstDueOn: firstDueAfter(localDate(now), q.dueDay) });
       if (groupCode) await ensureGroupInTx(tx, q.tenantId, plan, groupCode);
       await ensureAdministratorInTx(tx, q.tenantId, plan.connectionId, plan.institution);
+      await this.leads.quotaOutcomeInTx(tx, q.id, 'won');
       await this.notifications.enqueueInTx(tx, {
         templateKey: 'consortium.active',
         customerId: q.customerId,
@@ -710,5 +737,9 @@ export class ConsortiumController {
   }
 }
 
-@Module({ imports: [BankingModule, NotificationsModule], controllers: [ConsortiumController, TrackingController], providers: [ConsortiumService, TrackingService] })
+@Module({
+  imports: [BankingModule, NotificationsModule, CreditBureauModule],
+  controllers: [ConsortiumController, TrackingController, LeadsController, PublicSimulatorController, LeadWebhooksController],
+  providers: [ConsortiumService, TrackingService, LeadsService, LeadChannelsService, PublicSimulatorService, MetaLeadsAdapter, MetaGraphHttp],
+})
 export class ConsortiumModule {}

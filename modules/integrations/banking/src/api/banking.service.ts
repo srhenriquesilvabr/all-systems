@@ -9,6 +9,7 @@ import {
   type BankConnection,
   type ConnectionInput,
   type ConsortiumPlanOffer,
+  type ManualStatusInput,
   type Offer,
   type Proposal,
   type ProposalInput,
@@ -18,7 +19,8 @@ import {
 } from '../contracts';
 import { bankConnections, bankProposalEvents, bankProposals, bankWebhookRoutes } from '../db/schema';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { BankApiError, normalizeStatus, RestProvider, SimulatedProvider, type BankProvider, type ResolvedConnection, type SubmitPayload } from './providers';
+import { VendorAdapters } from './adapters';
+import { BankApiError, ManualProvider, normalizeStatus, RestProvider, SimulatedProvider, type BankProvider, type ResolvedConnection, type SubmitPayload } from './providers';
 
 const MODULE = 'integration.banking';
 type ConnectionRow = typeof bankConnections.$inferSelect;
@@ -47,6 +49,8 @@ export class BankingService implements OnModuleInit {
     private readonly config: CoreConfig,
     private readonly simulated: SimulatedProvider,
     private readonly rest: RestProvider,
+    private readonly manual: ManualProvider,
+    private readonly vendors: VendorAdapters,
   ) {}
 
   onModuleInit() {
@@ -74,7 +78,10 @@ export class BankingService implements OnModuleInit {
     return this.tdb.run(async (tx) => {
       const values = {
         name: input.name,
+        catalogKey: input.catalogKey,
         mode: input.mode,
+        adapter: input.adapter,
+        manualPlans: input.mode === 'manual' ? input.manualPlans : [],
         products: input.products,
         baseUrl: input.baseUrl,
         clientId: input.clientId ?? null,
@@ -94,7 +101,7 @@ export class BankingService implements OnModuleInit {
         [row] = await tx.insert(bankConnections).values({ ...values, tenantId }).returning();
         await tx.insert(bankWebhookRoutes).values({ connectionId: row!.id, tenantId });
       }
-      await this.audit.log(tx, { action: id ? 'banking.connection.updated' : 'banking.connection.created', entity: 'bank_connection', entityId: row!.id, data: { name: input.name, mode: input.mode } });
+      await this.audit.log(tx, { action: id ? 'banking.connection.updated' : 'banking.connection.created', entity: 'bank_connection', entityId: row!.id, data: { name: input.name, mode: input.mode, catalogKey: input.catalogKey, adapter: input.adapter } });
       return this.toConnection(row!);
     });
   }
@@ -117,7 +124,9 @@ export class BankingService implements OnModuleInit {
   consortiumPlans(): Promise<(ConsortiumPlanOffer & { connectionId: string; institution: string })[]> {
     return this.tdb.run(async (tx) => {
       const connections = (await this.activeConnections(tx)).filter((c) => c.products.includes('consortium'));
-      const lists = await Promise.all(connections.map(async (c) => (await this.provider(c).consortiumPlans(c)).map((p) => ({ ...p, connectionId: c.id, institution: c.name }))));
+      // Uma administradora que falha derruba a sincronização inteira (502 com a mensagem dela): pular
+      // calado deixaria os planos dela como "fora de oferta".
+      const lists = await Promise.all(connections.map(async (c) => (await this.guard(() => this.provider(c).consortiumPlans(c))).map((p) => ({ ...p, connectionId: c.id, institution: c.name }))));
       return lists.flat();
     });
   }
@@ -209,6 +218,38 @@ export class BankingService implements OnModuleInit {
     });
   }
 
+  /**
+   * Resposta de uma instituição sem API (modo manual), registrada pela equipe: em análise, aprovada
+   * (consórcio: com grupo e cota), recusada, cancelada ou contratada. Publica o mesmo evento que o
+   * webhook e a consulta, então a vertical acompanha igual.
+   */
+  registerManual(id: string, input: ManualStatusInput): Promise<Proposal> {
+    return this.tdb.run(async (tx) => {
+      const p = await this.proposalOrFail(tx, id);
+      const c = await this.connectionOrFail(tx, p.connectionId, false);
+      if (c.mode !== 'manual') throw new BadRequestException({ code: 'NOT_MANUAL', message: 'Esta instituição responde pela API; use "Consultar status"' });
+      const allowed: Record<ManualStatusInput['status'], ProposalStatus[]> = {
+        under_review: ['submitted'],
+        approved: ['submitted', 'under_review'],
+        rejected: ['submitted', 'under_review'],
+        cancelled: ['submitted', 'under_review', 'approved'],
+        contracted: ['approved'],
+      };
+      if (!allowed[input.status].includes(p.status)) throw new BadRequestException({ code: 'INVALID_STATUS', message: 'Esta proposta não pode mudar para este status' });
+      if (input.status === 'approved' && p.product === 'consortium' && (!input.groupCode || !input.quotaNumber)) {
+        throw new BadRequestException({ code: 'GROUP_REQUIRED', message: 'Informe o grupo e a cota que a administradora atribuiu' });
+      }
+      const result: Record<string, unknown> = {};
+      if (input.groupCode) result.groupCode = input.groupCode;
+      if (input.quotaNumber) result.quotaNumber = input.quotaNumber;
+      if (input.approvedAmount) result.approvedAmount = input.approvedAmount;
+      if (input.externalId && input.externalId !== p.externalId) await tx.update(bankProposals).set({ externalId: input.externalId }).where(eq(bankProposals.id, id));
+      await this.applyStatus(tx, { ...p, externalId: input.externalId || p.externalId }, { status: input.status, message: input.message ?? null, result }, 'manual', { registeredBy: requestContext.get().userId ?? null, ...input });
+      await this.audit.log(tx, { action: 'banking.proposal.manual_status', entity: 'bank_proposal', entityId: id, data: { status: input.status, institution: c.name } });
+      return this.detailInTx(tx, id);
+    });
+  }
+
   /** Webhook da instituição: valida a assinatura com o segredo da conexão e aplica o status. */
   async webhook(connectionId: string, raw: Buffer, signature: string | undefined, body: { proposalId?: string; status?: string; message?: string; result?: Record<string, unknown> }) {
     const [route] = await this.tdb.db.select().from(bankWebhookRoutes).where(eq(bankWebhookRoutes.connectionId, connectionId));
@@ -247,6 +288,8 @@ export class BankingService implements OnModuleInit {
   private async poll(tx: Tx, p: ProposalRow) {
     if (!pendingStatuses.includes(p.status) || !p.externalId) return;
     const c = await this.connectionOrFail(tx, p.connectionId, false);
+    // Sem API não há o que consultar: a resposta chega pelo registro da equipe.
+    if (c.mode === 'manual') return;
     const result = await this.guard(() => this.provider(c).status(c, p.externalId!, this.payload(p)));
     await tx.update(bankProposals).set({ lastCheckedAt: new Date() }).where(eq(bankProposals.id, p.id));
     await this.applyStatus(tx, p, result, 'poll');
@@ -282,7 +325,9 @@ export class BankingService implements OnModuleInit {
   }
 
   private provider(c: ResolvedConnection): BankProvider {
-    return c.mode === 'api' ? this.rest : this.simulated;
+    if (c.mode === 'manual') return this.manual;
+    if (c.mode === 'api') return c.adapter === 'vendor' ? this.vendors.for(c.catalogKey) : this.rest;
+    return this.simulated;
   }
 
   /** Falha da instituição vira 502 com mensagem legível (e não derruba a transação silenciosamente). */
@@ -310,7 +355,10 @@ export class BankingService implements OnModuleInit {
     return {
       id: c.id,
       name: c.name,
+      catalogKey: c.catalogKey,
       mode: c.mode,
+      adapter: c.adapter,
+      manualPlans: c.manualPlans,
       products: c.products as ResolvedConnection['products'],
       baseUrl: c.baseUrl,
       clientId: c.clientId,
@@ -326,7 +374,10 @@ export class BankingService implements OnModuleInit {
     return {
       id: c.id,
       name: c.name,
+      catalogKey: c.catalogKey,
       mode: c.mode,
+      adapter: c.adapter,
+      manualPlans: c.manualPlans,
       products: c.products as BankConnection['products'],
       baseUrl: c.baseUrl,
       clientId: c.clientId,
@@ -348,7 +399,7 @@ export class BankingService implements OnModuleInit {
 
   private async detailInTx(tx: Tx, id: string): Promise<Proposal> {
     const [row] = await tx
-      .select({ p: bankProposals, c: { id: bankConnections.id, name: bankConnections.name } })
+      .select({ p: bankProposals, c: { id: bankConnections.id, name: bankConnections.name, mode: bankConnections.mode } })
       .from(bankProposals)
       .innerJoin(bankConnections, eq(bankConnections.id, bankProposals.connectionId))
       .where(eq(bankProposals.id, id));

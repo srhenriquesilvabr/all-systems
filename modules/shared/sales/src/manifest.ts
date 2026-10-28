@@ -20,6 +20,7 @@ export const salesManifest = defineModule({
     { key: 'shared.sales.stock', label: 'Lançar entradas, perdas e inventário' },
   ],
   settings: salesSettings,
+  events: { publishes: ['shared.sales.sale_completed', 'shared.sales.sale_cancelled'] },
   defaultRoles: [
     { key: 'shared.sales.cashier', label: 'Caixa', permissions: ['shared.sales.sell', 'shared.sales.register', 'core.customers.read'] },
     { key: 'shared.sales.stockist', label: 'Estoquista', permissions: ['shared.sales.products', 'shared.sales.stock', 'shared.sales.read'] },

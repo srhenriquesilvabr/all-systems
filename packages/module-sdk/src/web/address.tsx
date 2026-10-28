@@ -33,8 +33,9 @@ type LookupState = 'idle' | 'loading' | 'not_found' | 'error';
 /**
  * Campos de endereço com busca pelo CEP: ao completar os 8 dígitos, preenche rua, bairro,
  * cidade e UF; o usuário completa número e complemento (o foco vai para o número).
+ * `cepPath` troca a rota da busca (ex.: a da vitrine pública, que não tem login).
  */
-export function AddressFields({ value, onChange }: { value: Address; onChange: (address: Address) => void }) {
+export function AddressFields({ value, onChange, cepPath = (cep) => `/cep/${cep}` }: { value: Address; onChange: (address: Address) => void; cepPath?: (cep: string) => string }) {
   const [state, setState] = useState<LookupState>('idle');
   const latest = useRef(value);
   const lastLookup = useRef(value.zip?.replace(/\D/g, '') ?? '');
@@ -55,7 +56,7 @@ export function AddressFields({ value, onChange }: { value: Address; onChange: (
     lastLookup.current = digits;
     setState('loading');
     try {
-      const found = await api<CepAddress>(`/cep/${digits}`);
+      const found = await api<CepAddress>(cepPath(digits));
       // A resposta pode chegar depois de o usuário mudar o CEP de novo: só vale a do CEP atual.
       if (latest.current.zip?.replace(/\D/g, '') !== digits) return;
       const current = latest.current;

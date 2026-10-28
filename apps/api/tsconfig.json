@@ -91,6 +91,15 @@
     },
     {
       "path": "../../modules/shared/recruiting"
+    },
+    {
+      "path": "../../modules/integrations/credit-bureau"
+    },
+    {
+      "path": "../../modules/shared/store"
+    },
+    {
+      "path": "../../modules/integrations/fiscal"
     }
   ]
 }

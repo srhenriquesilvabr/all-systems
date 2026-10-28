@@ -41,6 +41,12 @@ importers:
       '@all/consortium':
         specifier: workspace:*
         version: link:../../modules/verticals/consortium
+      '@all/credit-bureau':
+        specifier: workspace:*
+        version: link:../../modules/integrations/credit-bureau
+      '@all/fiscal':
+        specifier: workspace:*
+        version: link:../../modules/integrations/fiscal
       '@all/hr':
         specifier: workspace:*
         version: link:../../modules/verticals/hr
@@ -89,6 +95,9 @@ importers:
       '@all/service-orders':
         specifier: workspace:*
         version: link:../../modules/shared/service-orders
+      '@all/store':
+        specifier: workspace:*
+        version: link:../../modules/shared/store
       '@all/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -162,9 +171,15 @@ importers:
       '@all/core':
         specifier: workspace:*
         version: link:../../modules/core
+      '@all/credit-bureau':
+        specifier: workspace:*
+        version: link:../../modules/integrations/credit-bureau
       '@all/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@all/fiscal':
+        specifier: workspace:*
+        version: link:../../modules/integrations/fiscal
       '@all/hr':
         specifier: workspace:*
         version: link:../../modules/verticals/hr
@@ -213,6 +228,9 @@ importers:
       '@all/service-orders':
         specifier: workspace:*
         version: link:../../modules/shared/service-orders
+      '@all/store':
+        specifier: workspace:*
+        version: link:../../modules/shared/store
       '@all/vehicles':
         specifier: workspace:*
         version: link:../../modules/verticals/vehicles
@@ -399,6 +417,122 @@ importers:
       vitest:
         specifier: ^3.2.0
         version: 3.2.7(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.15)
+
+  modules/integrations/credit-bureau:
+    dependencies:
+      '@all/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@all/db':
+        specifier: workspace:*
+        version: link:../../../packages/db
+      '@all/module-sdk':
+        specifier: workspace:*
+        version: link:../../../packages/module-sdk
+      '@nestjs/common':
+        specifier: ^11.1.3
+        version: 11.2.7(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/platform-express':
+        specifier: ^11.1.3
+        version: 11.2.7(@nestjs/common@11.2.7(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.7)
+      drizzle-orm:
+        specifier: ^0.44.2
+        version: 0.44.7(@opentelemetry/api@1.10.0)(@types/pg@8.23.1)(pg@8.23.1)
+      zod:
+        specifier: ^3.25.0
+        version: 3.25.76
+    devDependencies:
+      '@all/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      '@tanstack/react-query':
+        specifier: ^5.80.0
+        version: 5.104.5(@types/react@19.3.0)(react@19.3.1)
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.5
+      '@types/pg':
+        specifier: ^8.15.4
+        version: 8.23.1
+      '@types/react':
+        specifier: ^19.1.6
+        version: 19.3.0
+      pg:
+        specifier: ^8.16.0
+        version: 8.23.1
+      react:
+        specifier: ^19.1.0
+        version: 19.3.1
+      react-router:
+        specifier: ^7.6.1
+        version: 7.18.4(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.15)
+
+  modules/integrations/fiscal:
+    dependencies:
+      '@all/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@all/db':
+        specifier: workspace:*
+        version: link:../../../packages/db
+      '@all/module-sdk':
+        specifier: workspace:*
+        version: link:../../../packages/module-sdk
+      '@nestjs/common':
+        specifier: ^11.1.3
+        version: 11.2.7(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/platform-express':
+        specifier: ^11.1.3
+        version: 11.2.7(@nestjs/common@11.2.7(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.7)
+      '@nestjs/throttler':
+        specifier: ^6.4.0
+        version: 6.7.1(@nestjs/common@11.2.7(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.7)(reflect-metadata@0.2.2)
+      drizzle-orm:
+        specifier: ^0.44.2
+        version: 0.44.7(@opentelemetry/api@1.10.0)(@types/pg@8.23.1)(pg@8.23.1)
+      node-forge:
+        specifier: 1.3.1
+        version: 1.3.1
+      zod:
+        specifier: ^3.25.0
+        version: 3.25.76
+    devDependencies:
+      '@all/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      '@tanstack/react-query':
+        specifier: ^5.80.0
+        version: 5.104.5(@types/react@19.3.0)(react@19.3.1)
+      '@types/express':
+        specifier: ^5.0.2
+        version: 5.0.6
+      '@types/multer':
+        specifier: ^1.4.12
+        version: 1.4.13
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.5
+      '@types/node-forge':
+        specifier: 1.3.11
+        version: 1.3.11
+      '@types/pg':
+        specifier: ^8.15.4
+        version: 8.23.1
+      '@types/react':
+        specifier: ^19.1.6
+        version: 19.3.0
+      pg:
+        specifier: ^8.16.0
+        version: 8.23.1
+      react:
+        specifier: ^19.1.0
+        version: 19.3.1
+      react-router:
+        specifier: ^7.6.1
+        version: 7.18.4(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
 
   modules/integrations/payments:
     dependencies:
@@ -844,6 +978,70 @@ importers:
         specifier: ^7.6.1
         version: 7.18.4(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
 
+  modules/shared/store:
+    dependencies:
+      '@all/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@all/db':
+        specifier: workspace:*
+        version: link:../../../packages/db
+      '@all/module-sdk':
+        specifier: workspace:*
+        version: link:../../../packages/module-sdk
+      '@all/notifications':
+        specifier: workspace:*
+        version: link:../notifications
+      '@all/sales':
+        specifier: workspace:*
+        version: link:../sales
+      '@nestjs/common':
+        specifier: ^11.1.3
+        version: 11.2.7(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/platform-express':
+        specifier: ^11.1.3
+        version: 11.2.7(@nestjs/common@11.2.7(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.7)
+      '@nestjs/throttler':
+        specifier: ^6.4.0
+        version: 6.7.1(@nestjs/common@11.2.7(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.7)(reflect-metadata@0.2.2)
+      drizzle-orm:
+        specifier: ^0.44.2
+        version: 0.44.7(@opentelemetry/api@1.10.0)(@types/pg@8.23.1)(pg@8.23.1)
+      zod:
+        specifier: ^3.25.0
+        version: 3.25.76
+    devDependencies:
+      '@all/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      '@tanstack/react-query':
+        specifier: ^5.80.0
+        version: 5.104.5(@types/react@19.3.0)(react@19.3.1)
+      '@types/express':
+        specifier: ^5.0.2
+        version: 5.0.6
+      '@types/multer':
+        specifier: ^1.4.12
+        version: 1.4.13
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.5
+      '@types/pg':
+        specifier: ^8.15.4
+        version: 8.23.1
+      '@types/react':
+        specifier: ^19.1.6
+        version: 19.3.0
+      pg:
+        specifier: ^8.16.0
+        version: 8.23.1
+      react:
+        specifier: ^19.1.0
+        version: 19.3.1
+      react-router:
+        specifier: ^7.6.1
+        version: 7.18.4(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+
   modules/verticals/accounting:
     dependencies:
       '@all/core':
@@ -1081,6 +1279,9 @@ importers:
       '@all/core':
         specifier: workspace:*
         version: link:../../core
+      '@all/credit-bureau':
+        specifier: workspace:*
+        version: link:../../integrations/credit-bureau
       '@all/db':
         specifier: workspace:*
         version: link:../../../packages/db
@@ -1096,6 +1297,9 @@ importers:
       '@nestjs/platform-express':
         specifier: ^11.1.3
         version: 11.2.7(@nestjs/common@11.2.7(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.7)
+      '@nestjs/throttler':
+        specifier: ^6.4.0
+        version: 6.7.1(@nestjs/common@11.2.7(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.7)(reflect-metadata@0.2.2)
       drizzle-orm:
         specifier: ^0.44.2
         version: 0.44.7(@opentelemetry/api@1.10.0)(@types/pg@8.23.1)(pg@8.23.1)
@@ -1109,6 +1313,9 @@ importers:
       '@tanstack/react-query':
         specifier: ^5.80.0
         version: 5.104.5(@types/react@19.3.0)(react@19.3.1)
+      '@types/express':
+        specifier: ^5.0.2
+        version: 5.0.6
       '@types/multer':
         specifier: ^1.4.12
         version: 1.4.13
@@ -3001,6 +3208,9 @@ packages:
   '@types/multer@1.4.13':
     resolution: {integrity: sha512-bhhdtPw7JqCiEfC9Jimx5LqX9BDIPJEh2q/fQ4bqbBPtyEZYr3cvF22NwG0DmPZNYA0CAf2CnqDB4KIGGpJcaw==}
 
+  '@types/node-forge@1.3.11':
+    resolution: {integrity: sha512-FQx220y22OKNTqaByeBGqHWYz4cl94tpcxeFdvBo3wjG6XPBuZ0BNgNZRV5J5TFmmcsJ4IzsLkmGRiQbnYsBEQ==}
+
   '@types/node@22.20.5':
     resolution: {integrity: sha512-U2+DNr+wSjpsTS/wZGYHq7GcwfuSmKiKvoPvK22zwTlRhU91yOniN4qRR5KhIjvif7ysw/dz/hKmfDH0Ris4aA==}
 
@@ -3789,6 +3999,10 @@ packages:
   negotiator@1.1.0:
     resolution: {integrity: sha512-NMPBRMJgiQHjbd8phG3Vebdx4kZ1H121rbl5IkMqeOsahptB9BKo/d7oJ3zTXqTgagn2bWlNSXkh0QUGM31RYg==}
     engines: {node: '>=18'}
+
+  node-forge@1.3.1:
+    resolution: {integrity: sha512-dPEtOeMvF9VMcYV/1Wb8CPoVAXtp6MKMlcbAt4ddqmGqUJ6fQZFXkNZNkNlfevtNkGtaSoXf/vNNNSvgrdXwtA==}
+    engines: {node: '>= 6.13.0'}
 
   node-releases@2.0.59:
     resolution: {integrity: sha512-5qr2okC4ItAI0hG5SaV0HoYMpnM/Y6+Oqr7AmPYy/2uEoGvS+GbSKLeRxSS1uAdu59yz0ouzcuXievSgg///WA==}
@@ -5360,6 +5574,10 @@ snapshots:
     dependencies:
       '@types/express': 5.0.6
 
+  '@types/node-forge@1.3.11':
+    dependencies:
+      '@types/node': 22.20.5
+
   '@types/node@22.20.5':
     dependencies:
       undici-types: 6.21.0
@@ -6120,6 +6338,8 @@ snapshots:
   negotiator@1.1.0:
     dependencies:
       content-type: 2.1.0
+
+  node-forge@1.3.1: {}
 
   node-releases@2.0.59: {}
 

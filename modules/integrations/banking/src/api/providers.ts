@@ -5,7 +5,10 @@ import {
   monthlyFromYearly,
   quote,
   type Applicant,
+  type ConnectionAdapter,
+  type ConnectionMode,
   type ConsortiumPlanOffer,
+  type ManualPlanInput,
   type CreditProduct,
   type Offer,
   type ProposalStatus,
@@ -16,7 +19,9 @@ import {
 export interface ResolvedConnection {
   id: string;
   name: string;
-  mode: 'simulated' | 'api';
+  catalogKey: string | null;
+  mode: ConnectionMode;
+  adapter: ConnectionAdapter;
   products: CreditProduct[];
   baseUrl: string | null;
   clientId: string | null;
@@ -24,6 +29,7 @@ export interface ResolvedConnection {
   vehicleMonthlyRate: number;
   realEstateYearlyRate: number;
   tacFee: number;
+  manualPlans: ManualPlanInput[];
 }
 
 export interface SubmitPayload {
@@ -127,6 +133,44 @@ export class SimulatedProvider implements BankProvider {
       plan('real_estate', 'Imóvel 500 mil', 500_000, 200, 17),
       plan('services', 'Serviços 20 mil', 20_000, 40, 20),
     ];
+  }
+}
+
+/**
+ * Instituição sem API (modo `manual`): a equipe envia a proposta pelo portal da administradora e
+ * registra aqui a resposta (`BankingService.registerManual`). Simulação de financiamento usa as
+ * taxas de referência da conexão; os planos de consórcio são os cadastrados na conexão.
+ */
+@Injectable()
+export class ManualProvider implements BankProvider {
+  constructor(private readonly simulated: SimulatedProvider) {}
+
+  simulate(c: ResolvedConnection, input: SimulationInput): Promise<Offer> {
+    return this.simulated.simulate(c, input);
+  }
+
+  async submit(c: ResolvedConnection, p: SubmitPayload) {
+    // Protocolo local até a equipe informar o da administradora.
+    const externalId = `MAN-${createHash('sha256').update(`${c.id}:${p.reference}`).digest('hex').slice(0, 10).toUpperCase()}`;
+    return { externalId, status: 'submitted' as const, message: 'Registrada para envio manual: envie pelo portal da instituição e registre a resposta aqui' };
+  }
+
+  /** Não há onde consultar: o status só muda pelo registro da equipe. */
+  async status(): Promise<StatusResult> {
+    throw new Error('Conexão manual não tem consulta de status');
+  }
+
+  async consortiumPlans(c: ResolvedConnection): Promise<ConsortiumPlanOffer[]> {
+    return c.manualPlans.map((p) => ({
+      externalId: p.externalId || `${p.assetType}-${p.creditValue}-${p.termMonths}-${p.name}`.slice(0, 60),
+      name: p.name,
+      assetType: p.assetType,
+      creditValue: p.creditValue,
+      termMonths: p.termMonths,
+      adminFeePercent: p.adminFeePercent,
+      reserveFundPercent: p.reserveFundPercent ?? 0,
+      insurancePercent: p.insurancePercent ?? 0,
+    }));
   }
 }
 

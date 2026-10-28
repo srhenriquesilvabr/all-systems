@@ -1,3 +1,4 @@
+import { ProposalList, useProposals } from '@all/banking/web';
 import { api, formatDate, formatDateTime, formatMoney, parseMoney, today, useCan } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Tabs, Td, Textarea, Th } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -24,6 +25,19 @@ import {
 import { bidTone, creditTone, errorText, installmentTone, key, parsePercent, pct, quotaTone } from './common';
 
 const money = (s: string) => (s.trim() ? parseMoney(s) : null);
+
+/**
+ * Adesão em análise: a proposta na administradora. Nas instituições sem API (modo manual), é aqui
+ * que a equipe registra a resposta (grupo e cota), e a cota ativa como nas demais.
+ */
+function AdhesionProposals({ quotaId }: { quotaId: string }) {
+  const proposals = useProposals('consortium_quota', quotaId);
+  return (
+    <div className="mb-4">
+      <ProposalList proposals={proposals.data} loading={proposals.isPending} />
+    </div>
+  );
+}
 
 /** Ficha da cota: dados, grupo e as abas de parcelas, lances e crédito. */
 export function QuotaPage() {
@@ -78,6 +92,7 @@ export function QuotaPage() {
         </Card>
         <GroupCard quotaId={q.id} hasGroup={!!q.groupCode} />
       </div>
+      {q.status === 'proposal' && <AdhesionProposals quotaId={q.id} />}
       <Tabs
         items={[
           { key: 'installments', label: 'Parcelas' },

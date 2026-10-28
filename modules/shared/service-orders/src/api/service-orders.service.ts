@@ -1,4 +1,4 @@
-import { AuditService, centsToDecimal, centsToNumber, CustomerDataRegistry, CustomersService, FinanceService, nextSequence, TenantDb, toCents } from '@all/core';
+import { AuditService, centsToDecimal, centsToNumber, CustomerDataRegistry, CustomersService, FinanceService, nextSequence, OutboxService, TenantDb, toCents } from '@all/core';
 import { customers, users } from '@all/core/schema';
 import type { Tx } from '@all/db';
 import { requestContext } from '@all/module-sdk';
@@ -11,6 +11,8 @@ import { soItems, soOrders, soPayments, soStatusHistory } from '../db/schema';
 import { ServiceOrderWorkflows } from './workflows';
 
 const SOURCE = 'service_order';
+/** Mudança de status, com itens e valores (a nota de serviço da ordem concluída sai daqui: integration.fiscal). */
+export const ORDER_STATUS_CHANGED = 'shared.service-orders.status_changed';
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const dateTime = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' });
 const dateOnly = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeZone: 'America/Sao_Paulo' });
@@ -29,6 +31,7 @@ export class ServiceOrdersService implements OnModuleInit {
     private readonly notifications: NotificationsService,
     private readonly audit: AuditService,
     private readonly customerData: CustomerDataRegistry,
+    private readonly outbox: OutboxService,
   ) {}
 
   onModuleInit() {
@@ -212,6 +215,21 @@ export class ServiceOrdersService implements OnModuleInit {
     });
     if (opts.notify !== false) await this.notify(tx, updated!, workflow);
     await this.audit.log(tx, { action: 'service_order.status_changed', entity: 'service_order', entityId: id, data: { from: order.status, to, reason } });
+    await this.outbox.publish(tx, ORDER_STATUS_CHANGED, {
+      orderId: id,
+      number: order.number,
+      from: order.status,
+      to,
+      terminal: !!target.terminal,
+      cancelled: !!target.cancelled,
+      customerId: order.customerId,
+      subtotal: Number(updated!.subtotal),
+      discount: Number(updated!.discount),
+      total: Number(updated!.total),
+      paidAmount: Number(updated!.paidAmount),
+      paymentStatus: updated!.paymentStatus,
+      items: (await this.itemsOf(tx, id)).map(({ id: _id, ...i }) => i),
+    });
     return this.detail(tx, id);
   }
 

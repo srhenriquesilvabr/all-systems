@@ -4,9 +4,10 @@ import { Body, Controller, Get, Headers, HttpCode, Module, NotFoundException, Pa
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { z } from 'zod';
-import { connectionInput, proposalInput, simulationInput, type ConnectionInput, type ProposalInput, type SimulationInput } from '../contracts';
+import { administratorCatalog, connectionInput, manualStatusInput, proposalInput, simulationInput, type ConnectionInput, type ManualStatusInput, type ProposalInput, type SimulationInput } from '../contracts';
+import { VENDOR_NOTES, VENDOR_PENDING_ITEMS, VendorAdapters } from './adapters';
 import { BankingService } from './banking.service';
-import { BankHttp, RestProvider, SimulatedProvider } from './providers';
+import { BankHttp, ManualProvider, RestProvider, SimulatedProvider } from './providers';
 
 const listQuery = z.object({ sourceType: z.string().max(50).optional(), sourceId: z.string().uuid().optional(), customerId: z.string().uuid().optional() });
 const statusBody = z.object({ status: z.enum(['contracted', 'cancelled']), message: z.string().trim().max(300).nullish() });
@@ -14,7 +15,20 @@ const statusBody = z.object({ status: z.enum(['contracted', 'cancelled']), messa
 @Controller('banking')
 @ModuleRoute('integration.banking')
 export class BankingController {
-  constructor(private readonly banking: BankingService) {}
+  constructor(
+    private readonly banking: BankingService,
+    private readonly vendors: VendorAdapters,
+  ) {}
+
+  /** Catálogo de administradoras (referência) com a situação do adaptador próprio de cada uma. */
+  @Get('catalog')
+  @RequireAnyPermission('core.access.settings', 'integration.banking.simulate', 'integration.banking.propose')
+  catalog() {
+    return {
+      administrators: administratorCatalog.map((a) => ({ ...a, vendorAdapter: this.vendors.isImplemented(a.key) ? 'implemented' : 'pending', vendorNotes: VENDOR_NOTES[a.key] ?? [] })),
+      vendorPendingItems: VENDOR_PENDING_ITEMS,
+    };
+  }
 
   @Get('connections')
   @RequirePermission('core.access.settings')
@@ -66,6 +80,14 @@ export class BankingController {
     return this.banking.refresh(id);
   }
 
+  /** Resposta de instituição sem API (modo manual), registrada pela equipe. */
+  @Post('proposals/:id/manual')
+  @HttpCode(200)
+  @RequirePermission('integration.banking.propose')
+  registerManual(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(manualStatusInput)) body: ManualStatusInput) {
+    return this.banking.registerManual(id, body);
+  }
+
   @Post('proposals/:id/status')
   @HttpCode(200)
   @RequirePermission('integration.banking.propose')
@@ -93,7 +115,7 @@ export class BankingWebhookController {
 
 @Module({
   controllers: [BankingController, BankingWebhookController],
-  providers: [BankingService, SimulatedProvider, RestProvider, BankHttp],
+  providers: [BankingService, SimulatedProvider, RestProvider, ManualProvider, VendorAdapters, BankHttp],
   exports: [BankingService],
 })
 export class BankingModule {}

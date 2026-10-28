@@ -13,6 +13,23 @@ Nenhum banco, financeira ou administradora brasileira expõe originação de cr�
 
 Quem tiver uma API diferente entra com um **adaptador**: uma classe com a interface `BankProvider` (`simulate`, `submit`, `status`, `consortiumPlans`), registrada ao lado do `RestProvider`. O resto do sistema não muda.
 
+### Catálogo e modo manual (ADR-030)
+
+A conexão escolhe a instituição no catálogo (`contracts/catalog.ts`: bancos, independentes, cooperativas e montadoras, com linhas de consórcio, canal mais comum e o que é preciso para ligar — tudo "a confirmar com a administradora"). Modos:
+
+| Modo | Como funciona |
+|---|---|
+| `simulated` | Como acima (demonstração). |
+| `api` + `generic_rest` | Contrato REST abaixo. |
+| `api` + `vendor` | Adaptador da administradora (`VendorAdapters`). Hoje são esqueletos: respondem 501 "a confirmar com a administradora" até a documentação do contrato chegar (endpoints, autenticação, campos de planos/adesão/retorno). |
+| `manual` | Sem API. Planos cadastrados na conexão; a proposta recebe protocolo local (`MAN-…`), não há consulta de status, e a equipe registra a resposta em `POST /banking/proposals/:id/manual` (`under_review`, `approved` — consórcio exige grupo e cota —, `rejected`, `cancelled`, `contracted`). Publica o mesmo `proposal_updated`. |
+
+### Consulta de crédito (birôs) — `integration.credit_bureau` (ADR-031)
+
+Módulo à parte (contratável). `POST /credit-bureau/queries` exige a autorização do cliente (finalidade, data, forma, prova e a confirmação de quem consulta) e grava o texto exato mostrado. O resultado guardado é só o resumo (score 0–1000, faixa de risco, negativações, protestos, cheques sem fundo); a decisão "seguir"/"reprovar" é de uma pessoa (`POST /credit-bureau/queries/:id/decision`). Custo por consulta (CPF/CNPJ) e teto mensal nas configurações; consultar, abrir e decidir vão para a auditoria.
+
+Provedores: `simulated` (determinístico pelo documento) e esqueletos de Serasa Experian, Boa Vista (Equifax) e Quod. Para cada birô, a confirmar no contrato: produto de consulta (score + pendências PF/PJ), ambiente de homologação, modelo de autenticação, campos de retorno e preço/franquia. O mapeamento fica no adaptador (`api/providers.ts`); nada do formato dos birôs foi presumido.
+
 ## Fluxo
 
 ```mermaid

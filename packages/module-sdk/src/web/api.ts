@@ -89,10 +89,11 @@ export async function apiBlob(path: string): Promise<Blob> {
   return res.blob();
 }
 
-/** Envio de arquivo (multipart). `field` é o nome do campo esperado pela API. */
-export async function apiUpload<T = unknown>(path: string, field: string, file: File): Promise<T> {
+/** Envio de arquivo (multipart). `field` é o nome do campo esperado pela API; `fields` vão junto (ex.: senha do certificado). */
+export async function apiUpload<T = unknown>(path: string, field: string, file: File, fields: Record<string, string> = {}): Promise<T> {
   const form = new FormData();
   form.append(field, file);
+  for (const [k, v] of Object.entries(fields)) form.append(k, v);
   const headers: Record<string, string> = {};
   const token = config.getToken();
   if (token) headers.Authorization = `Bearer ${token}`;

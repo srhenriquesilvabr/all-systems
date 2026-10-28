@@ -1,5 +1,6 @@
 import { customers, tenants } from '@all/core/schema';
 import { id, tenantId, tenantIsolation } from '@all/db';
+import type { ManualPlanInput } from '../contracts';
 import { boolean, index, integer, jsonb, numeric, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 const ts = (name: string) => timestamp(name, { withTimezone: true });
@@ -11,7 +12,11 @@ export const bankConnections = pgTable(
     id: id(),
     tenantId: tenantId(),
     name: text('name').notNull(),
-    mode: text('mode', { enum: ['simulated', 'api'] }).notNull(),
+    /** Administradora/banco do catálogo (contracts/catalog.ts); vazio = instituição fora do catálogo. */
+    catalogKey: text('catalog_key'),
+    /** simulated: demonstração; api: REST genérico ou adaptador da administradora; manual: sem API, a equipe registra. */
+    mode: text('mode', { enum: ['simulated', 'api', 'manual'] }).notNull(),
+    adapter: text('adapter', { enum: ['generic_rest', 'vendor'] }).notNull().default('generic_rest'),
     products: text('products').array().notNull(),
     baseUrl: text('base_url'),
     clientId: text('client_id'),
@@ -21,6 +26,8 @@ export const bankConnections = pgTable(
     vehicleMonthlyRate: numeric('vehicle_monthly_rate', { precision: 6, scale: 4 }).notNull().default('1.99'),
     realEstateYearlyRate: numeric('real_estate_yearly_rate', { precision: 6, scale: 4 }).notNull().default('11.5'),
     tacFee: numeric('tac_fee', { precision: 10, scale: 2 }).notNull().default('0'),
+    /** Modo manual: planos de consórcio informados pela administradora (sem API para listar). */
+    manualPlans: jsonb('manual_plans').$type<ManualPlanInput[]>().notNull().default([]),
     active: boolean('active').notNull().default(true),
     createdAt: ts('created_at').notNull().defaultNow(),
   },

@@ -28,7 +28,9 @@
     "@nestjs/platform-express": "^11.1.3",
     "drizzle-orm": "^0.44.2",
     "zod": "^3.25.0",
-    "@all/banking": "workspace:*"
+    "@all/banking": "workspace:*",
+    "@all/credit-bureau": "workspace:*",
+    "@nestjs/throttler": "^6.4.0"
   },
   "peerDependencies": {
     "@all/ui": "workspace:*",
@@ -45,6 +47,7 @@
     "@types/react": "^19.1.6",
     "pg": "^8.16.0",
     "react": "^19.1.0",
-    "react-router": "^7.6.1"
+    "react-router": "^7.6.1",
+    "@types/express": "^5.0.2"
   }
 }

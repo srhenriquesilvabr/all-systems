@@ -11,7 +11,7 @@ import { createClient, createRng } from './lib.mjs';
 import { seedPropertyPhotos, seedVehiclePhotos } from './photos.mjs';
 
 /** Etapas dos fluxos mais novos; cada arquivo só age nas empresas do seu setor. */
-const EXTRAS = ['register-sellers', 'logistics-leases', 'consortium-hr', 'hr-consulting', 'recruiting', 'agenda', 'aesthetics-specialties'];
+const EXTRAS = ['register-sellers', 'logistics-leases', 'consortium-hr', 'hr-consulting', 'recruiting', 'agenda', 'aesthetics-specialties', 'store', 'consortium-leads', 'fiscal'];
 
 /** Empresa → setor (arquivo em verticals/) e o que ela vende, para o financeiro soar real. */
 const TENANTS = {

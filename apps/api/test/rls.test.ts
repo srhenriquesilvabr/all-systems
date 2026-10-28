@@ -46,7 +46,8 @@ describe('isolamento entre tenants (RLS)', () => {
           'outbox_events',   -- o worker lê eventos de todos os tenants; só o OutboxService grava
           'whatsapp_numbers', -- o webhook da Meta chega sem tenant: número → empresa
           'whatsapp_inbound',  -- idem: deduplicação das mensagens recebidas
-          'bank_webhook_routes' -- o webhook do banco chega sem tenant: conexão → empresa
+          'bank_webhook_routes', -- o webhook do banco chega sem tenant: conexão → empresa
+          'cons_lead_routes' -- os webhooks de leads (Meta/Google) chegam sem tenant: canal/página → empresa
         )
     `);
     expect(rows.length).toBeGreaterThan(5);

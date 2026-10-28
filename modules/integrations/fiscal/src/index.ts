@@ -1,0 +1,13 @@
+export { fiscalManifest } from './manifest';
+export { FiscalModule } from './api/fiscal.module';
+export { FiscalDocumentsService, computeTaxes, cancelDeadline, newReference } from './api/documents.service';
+export { FiscalHttp } from './api/providers/http';
+export { focusStatus } from './api/providers/focus';
+export { SIMULATED_REJECT_MARK } from './api/providers/simulated';
+export type { FiscalProvider, ProviderContext, ProviderDocument, ProviderResult } from './api/providers/types';
+export { parsePfx, createSelfSignedPfx, CertificateError } from './api/certificate';
+export { textPdf, zip, crc32, csv } from './api/files';
+export { spread, scale } from './api/sources.service';
+export { readiness } from './api/config.service';
+export * from './contracts';
+export * as fiscalSchema from './db/schema';

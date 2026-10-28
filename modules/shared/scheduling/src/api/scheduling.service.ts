@@ -62,6 +62,8 @@ import { addMinutes, freeSlots, localToUtc, seriesDates, utcToLocal, weekdayOf, 
 const MODULE = 'shared.scheduling';
 const SOURCE = 'appointment';
 export const STATUS_CHANGED = 'shared.scheduling.status_changed';
+/** Pagamento registrado num atendimento, com os serviços (a nota de serviço sai daqui: integration.fiscal). */
+export const PAYMENT_RECORDED = 'shared.scheduling.payment_recorded';
 /** Nome da constraint EXCLUDE de sala (SQL na migration). */
 const ROOM_CONSTRAINT = 'sch_appointments_room_no_overlap';
 /** Status que liberam o horário (mesma regra das constraints). */
@@ -804,7 +806,22 @@ export class SchedulingService implements OnModuleInit {
         .returning();
       await this.syncReceivable(tx, updated!);
       await this.audit.log(tx, { action: 'appointment.payment', entity: 'appointment', entityId: id, data: input });
-      return this.detailInTx(tx, id);
+      const detail = await this.detailInTx(tx, id);
+      await this.outbox.publish(tx, PAYMENT_RECORDED, {
+        appointmentId: id,
+        customerId: a.customerId,
+        amount: input.amount,
+        method: input.method,
+        paidAt: input.paidAt,
+        status: detail.status,
+        paymentStatus: detail.paymentStatus,
+        total: detail.total,
+        paidAmount: detail.paidAmount,
+        startsAt: detail.startsAt,
+        professional: detail.resourceName,
+        services: detail.services,
+      });
+      return detail;
     });
   }
 

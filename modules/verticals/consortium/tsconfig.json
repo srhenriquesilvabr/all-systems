@@ -28,6 +28,9 @@
     },
     {
       "path": "../../integrations/banking"
+    },
+    {
+      "path": "../../integrations/credit-bureau"
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { AuditService, centsToDecimal, coreSchema, CustomersService, FinanceService, ModuleSettingsService, nextSequence, TenantDb, toCents } from '@all/core';
+import { AuditService, centsToDecimal, coreSchema, CustomersService, FinanceService, ModuleSettingsService, nextSequence, OutboxService, TenantDb, toCents } from '@all/core';
 import { customers } from '@all/core/schema';
 import type { Tx } from '@all/db';
 import { requestContext } from '@all/module-sdk';
@@ -23,6 +23,9 @@ import { RegistersService } from './registers.service';
 
 const MODULE = 'shared.sales';
 const SOURCE = 'sale';
+/** Venda concluída/cancelada, com o que a nota fiscal precisa (integration.fiscal consome; payload em docs/arquitetura/11). */
+export const SALE_COMPLETED = 'shared.sales.sale_completed';
+export const SALE_CANCELLED = 'shared.sales.sale_cancelled';
 
 type ProductRow = typeof salesProducts.$inferSelect;
 type MoveKind = (typeof salesStockMoves.$inferInsert)['kind'];
@@ -38,6 +41,7 @@ export class SalesService {
     private readonly settings: ModuleSettingsService,
     private readonly audit: AuditService,
     private readonly registers: RegistersService,
+    private readonly outbox: OutboxService,
   ) {}
 
   // ---- Produtos -------------------------------------------------------------------------------
@@ -143,8 +147,16 @@ export class SalesService {
   // ---- Vendas ---------------------------------------------------------------------------------
 
   sell(input: SaleInput): Promise<Sale> {
+    return this.tdb.run((tx) => this.sellInTx(tx, input));
+  }
+
+  /**
+   * Venda na transação de quem chama, com as mesmas regras do caixa (ex.: pedido da lojinha
+   * concluído). `unitPrices` troca o preço do cadastro pelo combinado (o do pedido, já promocional).
+   */
+  sellInTx(tx: Tx, input: SaleInput, opts: { unitPrices?: ReadonlyMap<string, number> } = {}): Promise<Sale> {
     const { tenantId, userId } = requestContext.requireTenant();
-    return this.tdb.run(async (tx) => {
+    return (async () => {
       const settings = await this.settings.getInTx<SalesSettings>(tx, MODULE);
       const customer = input.customerId ? await this.customers.findInTx(tx, input.customerId) : undefined;
       if (input.customerId && (!customer || customer.anonymizedAt)) throw badRequest('CUSTOMER_NOT_FOUND', 'Cliente não encontrado');
@@ -165,7 +177,8 @@ export class SalesService {
         const p = products.get(productId);
         if (!p || !p.active) throw badRequest('PRODUCT_NOT_FOUND', 'Produto não encontrado ou inativo');
         checkQuantity(p, quantity);
-        return { product: p, quantity, totalCents: Math.round(quantity * toCents(p.price)) };
+        const unitCents = toCents(opts.unitPrices?.get(productId) ?? p.price);
+        return { product: p, quantity, unitCents, totalCents: Math.round(quantity * unitCents) };
       });
 
       const subtotal = lines.reduce((sum, l) => sum + l.totalCents, 0);
@@ -205,7 +218,7 @@ export class SalesService {
           name: l.product.name,
           unit: l.product.unit,
           quantity: l.quantity.toFixed(3),
-          unitPrice: l.product.price,
+          unitPrice: centsToDecimal(l.unitCents),
           total: centsToDecimal(l.totalCents),
         })),
       );
@@ -229,8 +242,20 @@ export class SalesService {
         });
       }
       await this.audit.log(tx, { action: 'sales.sale.completed', entity: 'sale', entityId: sale!.id });
-      return this.detailInTx(tx, sale!.id);
-    });
+      const detail = await this.detailInTx(tx, sale!.id);
+      await this.outbox.publish(tx, SALE_COMPLETED, {
+        saleId: detail.id,
+        number: detail.number,
+        customerId: detail.customer?.id ?? null,
+        soldAt: detail.soldAt,
+        subtotal: detail.subtotal,
+        discount: detail.discount,
+        total: detail.total,
+        items: detail.items,
+        payments: detail.payments,
+      });
+      return detail;
+    })();
   }
 
   cancel(id: string, reason: string): Promise<Sale> {
@@ -247,6 +272,7 @@ export class SalesService {
       }
       await this.finance.cancelAllBySourceInTx(tx, SOURCE, id);
       await this.audit.log(tx, { action: 'sales.sale.cancelled', entity: 'sale', entityId: id, data: { reason } });
+      await this.outbox.publish(tx, SALE_CANCELLED, { saleId: id, number: sale.number, reason });
       return this.detailInTx(tx, id);
     });
   }

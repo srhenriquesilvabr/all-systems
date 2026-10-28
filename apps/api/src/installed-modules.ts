@@ -1,5 +1,6 @@
 import { coreManifests } from '@all/core';
 import { BankingModule, bankingManifest } from '@all/banking';
+import { CreditBureauModule, creditBureauManifest } from '@all/credit-bureau';
 import { VehiclesModule, vehiclesManifest } from '@all/vehicles';
 import { RealEstateModule, realEstateManifest } from '@all/realestate';
 import { ConsortiumModule, consortiumManifest } from '@all/consortium';
@@ -23,6 +24,8 @@ import { ServiceOrdersModule, serviceOrdersManifest } from '@all/service-orders'
 import { VetModule, vetManifest } from '@all/vet';
 import { WhatsAppModule, whatsappManifest } from '@all/whatsapp';
 import { RecruitingModule, recruitingManifest } from '@all/recruiting';
+import { StoreModule, storeManifest } from '@all/store';
+import { FiscalModule, fiscalManifest } from '@all/fiscal';
 
 /**
  * Módulos instalados nesta build. Para adicionar uma vertical: criar o pacote em
@@ -40,6 +43,8 @@ export const manifests = [
   paymentsManifest,
   whatsappManifest,
   bankingManifest,
+  // Consulta de crédito (birôs) com autorização do cliente; contratável, usada na venda do consórcio.
+  creditBureauManifest,
   laundryManifest,
   beautyManifest,
   petshopManifest,
@@ -57,6 +62,10 @@ export const manifests = [
   hrConsultingManifest,
   // Head hunter: vagas, candidaturas e funil com nota de aderência (contratável por qualquer ramo).
   recruitingManifest,
+  // Lojinha: vitrine online com os produtos do PDV e pedidos (contratável por qualquer ramo).
+  storeManifest,
+  // Nota fiscal (NFS-e, NFC-e, NF-e) por provedor de emissão ou em modo simulado.
+  fiscalManifest,
 ];
 
-export const featureModules = [NotificationsModule, ServiceOrdersModule, SchedulingModule, PetsModule, MedicalRecordsModule, SalesModule, PaymentsModule, WhatsAppModule, BankingModule, LaundryModule, BeautyModule, PetshopModule, VetModule, AestheticsModule, OrthodonticsModule, BakeryModule, LegalModule, VehiclesModule, RealEstateModule, ConsortiumModule, AccountingModule, HrModule, HrConsultingModule, RecruitingModule];
+export const featureModules = [NotificationsModule, ServiceOrdersModule, SchedulingModule, PetsModule, MedicalRecordsModule, SalesModule, PaymentsModule, WhatsAppModule, BankingModule, CreditBureauModule, LaundryModule, BeautyModule, PetshopModule, VetModule, AestheticsModule, OrthodonticsModule, BakeryModule, LegalModule, VehiclesModule, RealEstateModule, ConsortiumModule, AccountingModule, HrModule, HrConsultingModule, RecruitingModule, StoreModule, FiscalModule];

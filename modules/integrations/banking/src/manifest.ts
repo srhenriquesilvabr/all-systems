@@ -10,7 +10,7 @@ export const bankingManifest = defineModule({
   layer: 'integration',
   description: 'Propostas de financiamento e consórcio com bancos parceiros.',
   icon: 'bank',
-  version: '1.0.0',
+  version: '1.1.0',
   dependsOn: ['core.customers'],
   permissions: [
     { key: 'integration.banking.simulate', label: 'Simular financiamento' },

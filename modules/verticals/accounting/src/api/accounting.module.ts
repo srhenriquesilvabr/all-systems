@@ -54,8 +54,8 @@ export class AccountingService implements OnModuleInit {
           c: accClients,
           customer: { id: customers.id, name: customers.name, document: customers.document },
           responsible: { id: coreSchema.users.id, name: coreSchema.users.name },
-          pending: sql<number>`(select count(*)::int from ${accObligations} o where o.client_id = ${accClients.id} and o.status = 'pending')`,
-          overdue: sql<number>`(select count(*)::int from ${accObligations} o where o.client_id = ${accClients.id} and o.status = 'pending' and o.due_on < ${today}::date)`,
+          pending: sql<number>`(select count(*)::int from ${accObligations} o where o.client_id = "acc_clients"."id" and o.status = 'pending')`,
+          overdue: sql<number>`(select count(*)::int from ${accObligations} o where o.client_id = "acc_clients"."id" and o.status = 'pending' and o.due_on < ${today}::date)`,
         })
         .from(accClients)
         .innerJoin(customers, eq(customers.id, accClients.customerId))
