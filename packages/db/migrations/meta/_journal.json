@@ -134,6 +134,13 @@
       "when": 1793138680670,
       "tag": "0018_fluxos_caixa_logistica_locacao_consorcio_rh",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1793188294616,
+      "tag": "0019_app_user_idle_timeout",
+      "breakpoints": true
     }
   ]
 }

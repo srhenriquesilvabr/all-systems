@@ -23,6 +23,10 @@ interface ExecutionContext {
 
 const PORT = 8080;
 const CRON_TICK_MS = 60_000;
+// Prazo para começar lotes do outbox: depois da resposta o runtime dá ~30 s ao waitUntil,
+// e um lote já iniciado precisa caber na sobra.
+const REQUEST_DRAIN_MS = 10_000;
+const CRON_DRAIN_MS = 20_000;
 
 let app: Promise<INestApplication> | undefined;
 
@@ -68,7 +72,7 @@ export default {
       const nest = await boot(env);
       const response = await handleAsNodeRequest(PORT, request);
       // Mudanças publicam eventos no outbox: entrega logo após a resposta, sem esperar o cron.
-      if (request.method !== 'GET') background(() => nest.get(OutboxRelay).drain());
+      if (request.method !== 'GET') background(() => nest.get(OutboxRelay).drainWithin(REQUEST_DRAIN_MS));
       return response;
     });
   },
@@ -76,7 +80,7 @@ export default {
   scheduled(controller: { scheduledTime: number }, env: Env, ctx: ExecutionContext): Promise<void> {
     return withRequestDb(env, ctx, async () => {
       const nest = await boot(env);
-      await nest.get(OutboxRelay).drain();
+      await nest.get(OutboxRelay).drainWithin(CRON_DRAIN_MS);
       await nest.get(ScheduledJobs).runDue(controller.scheduledTime, CRON_TICK_MS);
     });
   },

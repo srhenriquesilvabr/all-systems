@@ -81,17 +81,27 @@ export class OutboxRelay implements OnApplicationShutdown {
 
   /** Processa lotes até não haver eventos prontos. Retorna quantos eventos foram tratados. */
   drain(): Promise<number> {
-    this.running ??= this.drainLoop().finally(() => (this.running = undefined));
+    this.running ??= this.drainLoop(Infinity).finally(() => (this.running = undefined));
     return this.running;
   }
 
-  private async drainLoop() {
+  /**
+   * Para runtimes por requisição (Cloudflare Workers): drena com a conexão desta requisição,
+   * sem compartilhar o laço com outras, e não começa lote novo depois do prazo. O que sobrar
+   * fica para o próximo cron. Sem prazo, o runtime cancela o trabalho no meio da transação e a
+   * conexão fica presa ("idle in transaction"), esgotando o pool do Hyperdrive.
+   */
+  drainWithin(budgetMs: number): Promise<number> {
+    return this.drainLoop(Date.now() + budgetMs);
+  }
+
+  private async drainLoop(deadline: number) {
     let total = 0;
     for (;;) {
       const handled = await this.processBatch();
       total += handled;
       // Até um lote vazio: handlers podem publicar eventos novos (ex.: status → aviso → entrega).
-      if (handled === 0) return total;
+      if (handled === 0 || Date.now() >= deadline) return total;
     }
   }
 
