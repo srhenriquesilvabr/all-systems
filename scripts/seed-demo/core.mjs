@@ -84,11 +84,18 @@ async function seedCustomers({ api, rng, log }) {
 }
 
 const STAFF = 5;
+const toUser = (m) => ({ membershipId: m.membershipId, name: m.user.name, email: m.user.email, roleKeys: m.roles.map((r) => r.key) });
+
+/** Clientes e equipe que já existem, para rodar só as etapas novas (--extras-only). */
+export async function loadCore({ api }) {
+  const customers = (await api.get('/customers', { limit: 100 })).items;
+  const users = (await api.get('/users')).filter((m) => !isOwner(m)).map(toUser);
+  return { customers, users };
+}
 
 async function seedUsers({ api, rng, log, tenant }) {
   const members = await api.get('/users');
   const roles = (await api.get('/access/roles')).filter((r) => r.key !== OWNER_ROLE);
-  const toUser = (m) => ({ membershipId: m.membershipId, name: m.user.name, email: m.user.email, roleKeys: m.roles.map((r) => r.key) });
   if (members.length > STAFF) {
     log(`    já tem ${members.length} pessoas na equipe`);
     return members.filter((m) => !isOwner(m)).map(toUser);

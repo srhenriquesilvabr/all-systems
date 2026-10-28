@@ -162,7 +162,7 @@ export default async function seed(ctx) {
   for (const competence of [prev2, prev, month]) {
     const closing = competence !== month;
     await step(log, `rh: folha ${competence}${closing ? ' (fechada)' : ' (aberta)'}`, async () => {
-      const found = (await api.get('/hr/payrolls')).find((p) => p.competence === competence);
+      const found = (await api.get('/hr/payrolls')).find((p) => p.competence === competence && p.type === 'monthly');
       let payroll = found ? await api.get(`/hr/payrolls/${found.id}`) : await api.post('/hr/payrolls', { competence });
       if (payroll.status === 'closed') {
         log(`    já fechada (${payroll.totals.employees} colaboradores)`);

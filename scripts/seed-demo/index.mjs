@@ -1,13 +1,17 @@
 // Popula as empresas de demonstração (fake-*) pela API, com clientes, equipe, financeiro
 // e os dados de cada setor. Pode rodar de novo: o que já existe é pulado.
 //
-//   node --env-file=.env.production scripts/seed-demo/index.mjs [--base URL] [--only fake-rh,fake-salao] [--core-only]
+//   node --env-file=.env.production scripts/seed-demo/index.mjs [--base URL] [--only fake-rh,fake-salao] [--core-only | --extras-only]
 //
+// --extras-only roda só extras/ (caixas, coletas, locações, salas…) sobre o que já existe.
 // Credenciais do dono das empresas: PALMER_OWNER_EMAIL e PALMER_OWNER_PASSWORD.
 import { parseArgs } from 'node:util';
-import seedCore from './core.mjs';
+import seedCore, { loadCore } from './core.mjs';
 import { createClient, createRng } from './lib.mjs';
 import { seedPropertyPhotos, seedVehiclePhotos } from './photos.mjs';
+
+/** Etapas dos fluxos mais novos; cada arquivo só age nas empresas do seu setor. */
+const EXTRAS = ['register-sellers', 'logistics-leases', 'consortium-hr', 'agenda'];
 
 /** Empresa → setor (arquivo em verticals/) e o que ela vende, para o financeiro soar real. */
 const TENANTS = {
@@ -26,7 +30,7 @@ const TENANTS = {
   'fake-consorcio': { vertical: 'consortium', income: ['Taxa de administração', 'Comissão de venda de cota', 'Fundo de reserva'], ticket: [300, 2800] },
 };
 
-const { values } = parseArgs({ options: { base: { type: 'string', default: 'https://palmer-systems.all-systems.workers.dev' }, only: { type: 'string' }, 'core-only': { type: 'boolean', default: false } } });
+const { values } = parseArgs({ options: { base: { type: 'string', default: 'https://palmer-systems.all-systems.workers.dev' }, only: { type: 'string' }, 'core-only': { type: 'boolean', default: false }, 'extras-only': { type: 'boolean', default: false } } });
 const email = process.env.PALMER_OWNER_EMAIL;
 const password = process.env.PALMER_OWNER_PASSWORD;
 if (!email || !password) {
@@ -50,10 +54,22 @@ for (const [name, profile] of Object.entries(TENANTS)) {
   const rng = createRng(name);
   console.log(`\n${name}`);
 
+  if (values['extras-only']) {
+    await seedExtras({ api, rng, log, tenant, ...(await loadCore({ api })) });
+    continue;
+  }
   const { customers, users } = await seedCore({ api, rng, log, tenant, profile });
   if (values['core-only']) continue;
   const { default: seedVertical } = await import(`./verticals/${profile.vertical}.mjs`);
   await seedVertical({ api, rng, log, tenant, customers, users });
   if (profile.vertical === 'vehicles') await seedVehiclePhotos({ api, log });
   if (profile.vertical === 'realestate') await seedPropertyPhotos({ api, log });
+  await seedExtras({ api, rng, log, tenant, customers, users });
+}
+
+async function seedExtras(ctx) {
+  for (const name of EXTRAS) {
+    const { default: seed } = await import(`./extras/${name}.mjs`);
+    await seed(ctx);
+  }
 }
