@@ -8,14 +8,36 @@
 // Pode rodar de novo: produtos e lotes vão pelo nome, e cada paciente só recebe as fichas se ainda
 // não tiver as daquela especialidade (o prontuário é só inclusão: repetir duplicaria registros).
 import { deflateSync } from 'node:zlib';
-import { day, step, workday } from '../lib.mjs';
+import { createRng, day, DISTRICTS, slugify, step, STREETS, workday } from '../lib.mjs';
 
 const ALL = ['harmonization', 'whitening', 'plastic_surgery', 'micropigmentation', 'laser', 'trichology'];
 
+/** Pacientes das especialidades: os do seed base já têm pacotes, então estes completam a lista. */
+const SPECIALTY_PATIENTS = ['Letícia Moraes Prado', 'Sabrina Teles Duarte', 'Paula Nogueira Brandão', 'Daniela Fontes Rezende', 'Cristina Albuquerque Lins', 'Marcela Viana Torres'];
+const MIN_PEOPLE = 14;
+
 /** @param {{ api, rng, log, tenant: {id,name}, customers: {id,name,type}[], users: object[] }} ctx */
-export default async function seedAestheticsSpecialties({ api, rng, log, tenant, customers }) {
+export default async function seedAestheticsSpecialties({ api, log, tenant, customers }) {
   if (tenant.name !== 'fake-estetica') return;
+  // Sequência própria: a do seed base já gerou os CPFs dos clientes existentes.
+  const rng = createRng(`${tenant.name}:especialidades`);
   const people = customers.filter((c) => c.type === 'person');
+  const pad = (n) => String(n).padStart(2, '0');
+  for (const name of SPECIALTY_PATIENTS) {
+    if (people.length >= MIN_PEOPLE) break;
+    if (customers.some((c) => c.name === name)) continue;
+    const c = await api.post('/customers', {
+      type: 'person',
+      name,
+      document: rng.cpf(),
+      email: `${slugify(name)}@example.com`,
+      phone: rng.phone(),
+      birthDate: `${rng.int(1970, 2000)}-${pad(rng.int(1, 12))}-${pad(rng.int(1, 28))}`,
+      address: { zip: `0${rng.int(1000, 5999)}${rng.int(100, 999)}`, street: rng.pick(STREETS), number: String(rng.int(10, 2500)), district: rng.pick(DISTRICTS), city: 'São Paulo', state: 'SP' },
+      notes: null,
+    });
+    people.push(c);
+  }
   if (people.length < 10) return log('  ✗ especialidades: poucos pacientes cadastrados');
   // Os 7 primeiros já têm pacotes (verticals/aesthetics.mjs): as especialidades usam os seguintes.
   const patient = (i) => people[(8 + i) % people.length];
