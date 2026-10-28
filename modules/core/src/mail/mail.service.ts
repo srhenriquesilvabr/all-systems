@@ -16,11 +16,19 @@ export interface MailMessage {
 export class MailService {
   private readonly logger = new Logger(MailService.name);
   private transport?: Transporter;
+  private warnedDisabled = false;
 
   constructor(private readonly config: CoreConfig) {}
 
   async send(message: MailMessage): Promise<void> {
     if (this.config.resendApiKey) return this.sendViaResend(message);
+    // Produção sem provedor de e-mail: não há SMTP no Workers, então tentar só gera erro e
+    // reenvio em loop no outbox. O e-mail é descartado com um aviso até a chave ser configurada.
+    if (this.config.isProduction) {
+      if (!this.warnedDisabled) this.logger.warn('E-mail desligado: configure RESEND_API_KEY para enviar.');
+      this.warnedDisabled = true;
+      return;
+    }
     this.transport ??= createTransport(this.config.smtpUrl);
     await this.transport.sendMail({ from: this.config.mailFrom, ...message });
   }

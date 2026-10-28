@@ -53,6 +53,9 @@ export class ScheduledJobs implements OnApplicationShutdown {
     const job = this.jobs.find((j) => j.name === name);
     if (!job) throw new Error(`Job desconhecido: ${name}`);
     return this.tdb.db.transaction(async (lockTx) => {
+      // O job roda em outras conexões com esta ociosa segurando o lock: o limite de 20 s do
+      // app_user (0019) a derrubaria no meio de um job longo; aqui o teto sobe só para ela.
+      await lockTx.execute(sql`set local idle_in_transaction_session_timeout = '10min'`);
       const lock = await lockTx.execute<{ ok: boolean }>(sql`select pg_try_advisory_xact_lock(hashtext(${'job:' + name})) as ok`);
       if (!lock.rows[0]?.ok) return false;
       await job.run();

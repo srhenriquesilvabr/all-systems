@@ -67,6 +67,9 @@ export class TenancyService implements OnApplicationBootstrap {
    */
   async reconcileTenants() {
     await this.tdb.db.transaction(async (lockTx) => {
+      // A transação do lock fica ociosa enquanto o trabalho roda em outras conexões: o limite de
+      // 20 s do app_user (0019) a derrubaria; aqui o teto sobe só para ela.
+      await lockTx.execute(sql`set local idle_in_transaction_session_timeout = '10min'`);
       const lock = await lockTx.execute<{ ok: boolean }>(sql`select pg_try_advisory_xact_lock(hashtext('all-systems:reconcile-tenants')) as ok`);
       if (!lock.rows[0]?.ok) return;
 
