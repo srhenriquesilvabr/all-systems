@@ -19,7 +19,9 @@ for (const [dir, layer] of [
 ]) {
   for (const pkgDir of expand(path.join(modulesDir, dir))) {
     const pkg = JSON.parse(readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
-    layerOf.set(pkg.name, { layer, dir: pkgDir });
+    // Módulo que mudou de camada sem mudar de pasta (ex.: o RH, hoje shared, em verticals/hr)
+    // declara a camada no package.json: "allSystems": { "layer": "shared" }.
+    layerOf.set(pkg.name, { layer: pkg.allSystems?.layer ?? layer, dir: pkgDir });
   }
 }
 

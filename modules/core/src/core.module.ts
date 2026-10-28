@@ -15,6 +15,8 @@ import { AuthController } from './auth/auth.controller';
 import { AuthService } from './auth/auth.service';
 import { MeController } from './auth/me.controller';
 import { SessionService } from './auth/session.service';
+import { CompanyController, PublicCompanyController } from './company/company.controller';
+import { CompanyService } from './company/company.service';
 import { CoreConfig, loadConfig } from './config';
 import { CustomerDataRegistry } from './customers/customer-data.registry';
 import { CustomersController, CustomFieldsController } from './customers/customers.controller';
@@ -39,6 +41,10 @@ import { ModuleHooks } from './tenancy/module-hooks';
 import { TenancyService } from './tenancy/tenancy.service';
 import { UsersController } from './users/users.controller';
 import { UsersService } from './users/users.service';
+import { CepController, CepHttp } from './cep/cep.controller';
+import { TeamController } from './team/team.controller';
+import { TeamLinksRegistry } from './team/team-links.registry';
+import { TeamService } from './team/team.service';
 
 export interface CoreModuleOptions {
   /** Manifestos de todos os módulos instalados nesta build (core + shared + verticais). */
@@ -73,6 +79,8 @@ export class CoreModule {
       controllers: [
         AuthController,
         MeController,
+        CompanyController,
+        PublicCompanyController,
         UsersController,
         AccessController,
         AuditController,
@@ -82,6 +90,8 @@ export class CoreModule {
         FilesController,
         ModulesController,
         SegmentationController,
+        TeamController,
+        CepController,
       ],
       providers: [
         { provide: CoreConfig, useValue: config },
@@ -94,6 +104,7 @@ export class CoreModule {
         AuthService,
         UsersService,
         TenancyService,
+        CompanyService,
         ModuleHooks,
         OutboxService,
         OutboxHandlers,
@@ -105,6 +116,9 @@ export class CoreModule {
         FilesService,
         ModuleSettingsService,
         SegmentationService,
+        TeamLinksRegistry,
+        TeamService,
+        CepHttp,
         { provide: FileStorage, useValue: options.storage ?? new LocalDiskStorage(config.storageDir) },
         { provide: SecretBox, useValue: new SecretBox(config.settingsEncryptionKey, config.jwtSecret) },
         MessageChannels,
@@ -131,6 +145,9 @@ export class CoreModule {
         MessageChannels,
         ScheduledJobs,
         SecretBox,
+        TeamLinksRegistry,
+        TeamService,
+        CepHttp,
       ],
     };
   }

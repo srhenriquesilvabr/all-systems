@@ -16,6 +16,7 @@ import {
   resolveWindow,
   type CompleteJobInput,
   type DeliveryInput,
+  type FailJobInput,
   type FeeMethod,
   type JobAddress,
   type JobKind,
@@ -24,6 +25,7 @@ import {
   type LaundrySettings,
   type LogisticsJob,
   type PickupInput,
+  type StartJobInput,
 } from '../contracts';
 import { laundryLogisticsJobs } from '../db/schema';
 import { LAUNDRY_WORKFLOW } from './workflow';
@@ -43,13 +45,32 @@ const notFound = () => new NotFoundException({ code: 'JOB_NOT_FOUND', message: '
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const dayFmt = new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Sao_Paulo' });
 
-/** Hoje (YYYY-MM-DD) no fuso de São Paulo. */
-const spToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+/** Dia (YYYY-MM-DD) de um momento no fuso de São Paulo; sem momento, hoje. */
+const spDay = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(d);
+const spToday = () => spDay(new Date());
 const hhmm = (t: string) => t.slice(0, 5);
+const momentFmt = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' });
+const shortDay = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Sao_Paulo' });
+/** Horário informado (a validação aceita até 5 min à frente, relógio do celular adiantado) ou agora. */
+const upToNow = (d: Date | undefined) => {
+  const now = new Date();
+  return d && d < now ? d : now;
+};
+/**
+ * Evento registrado depois (mais de 30 min atrás): o cliente não é avisado — "estamos a caminho"
+ * ou "entregue" de algo que já passou só confunde.
+ */
+const LATE_MS = 30 * 60_000;
+const isLate = (at: Date) => Date.now() - at.getTime() > LATE_MS;
 
 /**
  * Coletas e entregas da lavanderia. O escritório (laundry.logistics.manage) agenda, atribui e
  * reagenda; o motorista (laundry.logistics.drive) só vê e movimenta as tarefas atribuídas a ele.
+ *
+ * Registro do que já aconteceu: a tarefa pode ser criada num dia que já passou, e sair, concluir e
+ * "não realizada" aceitam o horário em que aconteceram (nunca no futuro, nunca antes do dia da
+ * tarefa, sempre na ordem: tentativa que falhou → saída → conclusão/falha). A taxa recebida na
+ * conclusão entra no financeiro nesse dia; o cliente só é avisado do que é de agora.
  */
 @Injectable()
 export class LaundryLogisticsService {
@@ -144,7 +165,7 @@ export class LaundryLogisticsService {
       if (input.address !== undefined) patch.address = this.assertAddress(input.address);
       if (input.notes !== undefined) patch.notes = input.notes;
       if (input.date !== undefined) {
-        this.assertNotPast(input.date);
+        if (input.date !== job.date) this.assertReschedule(job, input.date);
         patch.date = input.date;
       }
       if (input.period !== undefined || input.windowStart !== undefined || input.windowEnd !== undefined) {
@@ -179,17 +200,20 @@ export class LaundryLogisticsService {
   }
 
   /** Motorista saiu: a entrega leva a ordem para "Saiu para entrega" (e o cliente é avisado). */
-  start(id: string): Promise<LogisticsJob> {
+  start(id: string, input: StartJobInput = {}): Promise<LogisticsJob> {
     const { userId } = requestContext.require();
     return this.tdb.run(async (tx) => {
       const job = await this.findForAction(tx, id, true);
       if (job.status !== 'scheduled') throw badRequest('INVALID_JOB_STATUS', 'Só coletas/entregas agendadas podem sair para a rota');
+      const at = upToNow(input.occurredAt);
+      this.assertMoment(job, at, !!input.occurredAt);
 
       if (job.kind === 'delivery') {
         const order = await this.laundryOrder(tx, job.orderId!, true);
-        if (order.status === 'ready') await this.orders.transitionInTx(tx, order.id, 'out_for_delivery');
+        this.assertAfterOrder(order, at);
+        if (order.status === 'ready') await this.orders.transitionInTx(tx, order.id, 'out_for_delivery', null, { at, notify: !isLate(at) });
         else if (order.status !== 'out_for_delivery') throw badRequest('ORDER_NOT_READY', `A ordem nº ${order.number} ainda não está pronta para entrega`);
-      } else {
+      } else if (!isLate(at)) {
         await this.notifications.enqueueInTx(tx, {
           templateKey: 'laundry.pickup.on_the_way',
           customerId: job.customerId,
@@ -199,10 +223,10 @@ export class LaundryLogisticsService {
       }
       const [updated] = await tx
         .update(laundryLogisticsJobs)
-        .set({ status: 'en_route', startedAt: new Date(), driverUserId: job.driverUserId ?? userId })
+        .set({ status: 'en_route', startedAt: at, driverUserId: job.driverUserId ?? userId })
         .where(eq(laundryLogisticsJobs.id, id))
         .returning();
-      await this.audit.log(tx, { action: 'laundry.logistics.started', entity: 'laundry_logistics_job', entityId: id });
+      await this.audit.log(tx, { action: 'laundry.logistics.started', entity: 'laundry_logistics_job', entityId: id, data: input.occurredAt ? { occurredAt: at.toISOString() } : undefined });
       return this.jobOrFail(tx, updated!.id);
     });
   }
@@ -215,26 +239,30 @@ export class LaundryLogisticsService {
     return this.tdb.run(async (tx) => {
       const job = await this.findForAction(tx, id, true);
       if (job.status !== 'scheduled' && job.status !== 'en_route') throw badRequest('INVALID_JOB_STATUS', 'Esta coleta/entrega não está em aberto');
+      const at = upToNow(input.occurredAt);
+      this.assertMoment(job, at, !!input.occurredAt);
 
       let title: string;
       if (job.kind === 'delivery') {
         if (!input.receiverName) throw badRequest('RECEIVER_REQUIRED', 'Informe o nome de quem recebeu');
         const order = await this.laundryOrder(tx, job.orderId!, true);
-        if (order.status === 'ready' || order.status === 'out_for_delivery') await this.orders.transitionInTx(tx, order.id, 'delivered');
+        this.assertAfterOrder(order, at);
+        if (order.status === 'ready' || order.status === 'out_for_delivery') await this.orders.transitionInTx(tx, order.id, 'delivered', null, { at, notify: !isLate(at) });
         else if (order.status !== 'delivered') throw badRequest('ORDER_NOT_READY', `A ordem nº ${order.number} não está pronta para entrega`);
         title = `Entrega da ordem nº ${order.number} concluída (recebido por ${input.receiverName})`;
       } else {
         if (!input.itemsCount) throw badRequest('ITEMS_REQUIRED', 'Informe quantas peças foram coletadas');
         title = `Coleta concluída: ${input.itemsCount} peça(s)`;
       }
+      if (spDay(at) < spToday()) title += ` em ${shortDay.format(at)}`;
 
       const notes = input.notes ? [job.notes, `Na conclusão: ${input.notes}`].filter(Boolean).join('\n') : job.notes;
       const [updated] = await tx
         .update(laundryLogisticsJobs)
         .set({
           status: 'done',
-          completedAt: new Date(),
-          startedAt: job.startedAt ?? new Date(),
+          completedAt: at,
+          startedAt: job.startedAt ?? at,
           receiverName: job.kind === 'delivery' ? input.receiverName : null,
           itemsCount: job.kind === 'pickup' ? input.itemsCount : null,
           notes,
@@ -242,7 +270,7 @@ export class LaundryLogisticsService {
         })
         .where(eq(laundryLogisticsJobs.id, id))
         .returning();
-      if (input.feeMethod && toCents(job.fee) > 0) await this.settleFee(tx, updated!, input.feeMethod);
+      if (input.feeMethod && toCents(job.fee) > 0) await this.settleFee(tx, updated!, input.feeMethod, at);
 
       await this.customers.addTimeline(tx, {
         customerId: job.customerId,
@@ -258,24 +286,27 @@ export class LaundryLogisticsService {
   }
 
   /** Não deu (cliente ausente, endereço errado…): registra o motivo; a ordem volta para "Pronta". */
-  fail(id: string, reason: string): Promise<LogisticsJob> {
+  fail(id: string, input: FailJobInput): Promise<LogisticsJob> {
+    const { reason } = input;
     return this.tdb.run(async (tx) => {
       const job = await this.findForAction(tx, id, true);
       if (job.status !== 'scheduled' && job.status !== 'en_route') throw badRequest('INVALID_JOB_STATUS', 'Esta coleta/entrega não está em aberto');
-      await this.returnOrderToShop(tx, job, `Entrega não realizada: ${reason}`);
+      const at = upToNow(input.occurredAt);
+      this.assertMoment(job, at, !!input.occurredAt);
+      await this.returnOrderToShop(tx, job, `Entrega não realizada: ${reason}`, at);
       await tx
         .update(laundryLogisticsJobs)
-        .set({ status: 'failed', failReason: reason, attempts: job.attempts + 1 })
+        .set({ status: 'failed', failReason: reason, failedAt: at, attempts: job.attempts + 1 })
         .where(eq(laundryLogisticsJobs.id, id));
       await this.customers.addTimeline(tx, {
         customerId: job.customerId,
         moduleKey: 'laundry',
         type: `laundry.${job.kind}.failed`,
-        title: `${jobKindLabel[job.kind]} não realizada: ${reason}`,
+        title: `${jobKindLabel[job.kind]} não realizada${spDay(at) < spToday() ? ` em ${shortDay.format(at)}` : ''}: ${reason}`,
         entity: 'laundry_logistics_job',
         entityId: id,
       });
-      await this.audit.log(tx, { action: 'laundry.logistics.failed', entity: 'laundry_logistics_job', entityId: id, data: { reason } });
+      await this.audit.log(tx, { action: 'laundry.logistics.failed', entity: 'laundry_logistics_job', entityId: id, data: { reason, ...(input.occurredAt ? { occurredAt: at.toISOString() } : {}) } });
       return this.jobOrFail(tx, id);
     });
   }
@@ -362,7 +393,8 @@ export class LaundryLogisticsService {
     const customer = await this.customers.findInTx(tx, customerId);
     if (!customer) throw badRequest('CUSTOMER_NOT_FOUND', 'Cliente não encontrado');
     if (customer.anonymizedAt) throw badRequest('CUSTOMER_ANONYMIZED', 'Cliente anonimizado não pode ter coletas/entregas');
-    this.assertNotPast(input.date);
+    // Dia que já passou: registro de uma coleta/entrega que já aconteceu (sem aviso ao cliente).
+    const past = input.date < spToday();
     const w = resolveWindow(input);
     if ('error' in w) throw badRequest('INVALID_WINDOW', w.error);
     if (input.driverUserId) await this.assertMember(tx, input.driverUserId);
@@ -393,7 +425,7 @@ export class LaundryLogisticsService {
       customerId,
       moduleKey: 'laundry',
       type: `laundry.${kind}.scheduled`,
-      title: `${jobKindLabel[kind]} agendada para ${dayFmt.format(dayAsDate(input.date))}${order ? ` (ordem nº ${order.number})` : ''}`,
+      title: `${jobKindLabel[kind]} ${past ? 'registrada em' : 'agendada para'} ${dayFmt.format(dayAsDate(input.date))}${order ? ` (ordem nº ${order.number})` : ''}`,
       entity: 'laundry_logistics_job',
       entityId: job!.id,
     });
@@ -402,11 +434,11 @@ export class LaundryLogisticsService {
   }
 
   /** Entrega que não aconteceu/foi cancelada depois de sair: a ordem volta para "Pronta" (na loja). */
-  private async returnOrderToShop(tx: Tx, job: JobRow, reason: string) {
+  private async returnOrderToShop(tx: Tx, job: JobRow, reason: string, at?: Date) {
     if (job.kind !== 'delivery' || !job.orderId) return;
     const [order] = await tx.select({ status: soOrders.status }).from(soOrders).where(eq(soOrders.id, job.orderId));
     // Volta para "Pronta" sem o aviso de "peças prontas para retirada": a entrega só foi remarcada.
-    if (order?.status === 'out_for_delivery') await this.orders.transitionInTx(tx, job.orderId, 'ready', reason, { notify: false });
+    if (order?.status === 'out_for_delivery') await this.orders.transitionInTx(tx, job.orderId, 'ready', reason, { notify: false, at });
   }
 
   /** A taxa vira um "a receber" próprio (um por tarefa), que o financeiro pode baixar. */
@@ -433,21 +465,21 @@ export class LaundryLogisticsService {
     });
   }
 
-  /** O motorista recebeu a taxa na entrega/coleta: o "a receber" vira recebido. */
-  private async settleFee(tx: Tx, job: JobRow, method: FeeMethod) {
+  /** O motorista recebeu a taxa na entrega/coleta: o "a receber" vira recebido, no dia em que aconteceu. */
+  private async settleFee(tx: Tx, job: JobRow, method: FeeMethod, at: Date) {
     const entries = await this.finance.listBySourceInTx(tx, FEE_SOURCE, job.id);
     if (entries.some((e) => e.status === 'paid')) return;
     const accountId = await this.finance.defaultAccountId(tx);
     if (!accountId) throw badRequest('NO_ACCOUNT', 'Cadastre uma conta (caixa) no financeiro para registrar a taxa recebida');
     await this.finance.cancelPendingBySourceInTx(tx, FEE_SOURCE, job.id);
-    const today = spToday();
+    const day = spDay(at);
     await this.finance.recordInTx(tx, {
       kind: 'income',
       status: 'paid',
       amount: centsToNumber(toCents(job.fee)),
       description: `${await this.feeDescription(tx, job)} (${feeMethodLabel[method]})`,
-      dueDate: today,
-      paidAt: today,
+      dueDate: day,
+      paidAt: day,
       accountId,
       customerId: job.customerId,
       paymentMethod: method,
@@ -463,7 +495,9 @@ export class LaundryLogisticsService {
     return `Taxa de entrega — ordem nº ${order?.number ?? ''}`;
   }
 
+  /** Aviso de agendamento; tarefa de um dia que já passou (registro do que aconteceu) não avisa. */
   private async notifyScheduled(tx: Tx, job: JobRow) {
+    if (job.date < spToday()) return;
     await this.notifications.enqueueInTx(tx, {
       templateKey: job.kind === 'pickup' ? 'laundry.pickup.scheduled' : 'laundry.delivery.scheduled',
       customerId: job.customerId,
@@ -518,8 +552,38 @@ export class LaundryLogisticsService {
     return clean;
   }
 
-  private assertNotPast(date: string) {
-    if (date < spToday()) throw badRequest('DATE_IN_PAST', 'A data não pode ser no passado');
+  /**
+   * Remarcar para um dia que já passou só vale para a tentativa que não deu certo: registra a nova
+   * tentativa, que já aconteceu (e não pode ser antes do dia da que falhou). Uma tarefa agendada que
+   * ainda não aconteceu não vai para o passado — ficaria "atrasada" sem nunca ter sido feita; para
+   * registrar uma coleta/entrega antiga, cria-se outra com a data passada.
+   */
+  private assertReschedule(job: JobRow, date: string) {
+    if (date >= spToday()) return;
+    if (job.status !== 'failed') {
+      throw badRequest('DATE_IN_PAST', 'Só uma tentativa que não deu certo pode ser remarcada para um dia que já passou. Para registrar uma coleta/entrega antiga, agende uma nova com a data passada.');
+    }
+    if (job.failedAt && date < spDay(job.failedAt)) {
+      throw badRequest('DATE_BEFORE_FAILURE', `A nova tentativa não pode ser antes da que não deu certo (${shortDay.format(job.failedAt)})`);
+    }
+  }
+
+  /**
+   * Horário de saída, conclusão ou falha: na ordem dos eventos (depois da tentativa que falhou e da
+   * saída para a rota). Informado pela pessoa, também não antes do dia da tarefa; sem horário (agora),
+   * vale como sempre valeu — inclusive concluir antes do dia agendado.
+   */
+  private assertMoment(job: JobRow, at: Date, informed: boolean) {
+    if (informed && spDay(at) < job.date) {
+      throw badRequest('BEFORE_JOB_DATE', `A data não pode ser antes do dia da ${jobKindLabel[job.kind].toLowerCase()} (${shortDay.format(dayAsDate(job.date))})`);
+    }
+    if (job.startedAt && at < job.startedAt) throw badRequest('BEFORE_START', `Não pode ser antes da saída para a rota (${momentFmt.format(job.startedAt)})`);
+    if (job.failedAt && at < job.failedAt) throw badRequest('BEFORE_FAILURE', `Não pode ser antes da tentativa que não deu certo (${momentFmt.format(job.failedAt)})`);
+  }
+
+  /** A entrega (saída e conclusão) não pode ser antes da entrada da ordem na lavanderia. */
+  private assertAfterOrder(order: { number: number; receivedAt: Date }, at: Date) {
+    if (at < order.receivedAt) throw badRequest('BEFORE_ORDER', `A entrega não pode ser antes da entrada da ordem nº ${order.number} (${momentFmt.format(order.receivedAt)})`);
   }
 
   private async jobOrFail(tx: Tx, id: string): Promise<LogisticsJob> {
@@ -580,6 +644,7 @@ export class LaundryLogisticsService {
         receiverName: j.receiverName,
         startedAt: j.startedAt?.toISOString() ?? null,
         completedAt: j.completedAt?.toISOString() ?? null,
+        failedAt: j.failedAt?.toISOString() ?? null,
         failReason: j.failReason,
         attempts: j.attempts,
         cancelReason: j.cancelReason,

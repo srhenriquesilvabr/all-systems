@@ -274,15 +274,15 @@ export class TenancyService implements OnApplicationBootstrap {
     return rows.map((r) => r.key);
   }
 
-  /** Empresa pelo endereço público (agendamento online). */
   /** Empresas não canceladas (plataforma/CLI). */
   listTenants() {
     return this.tdb.db.select({ id: tenants.id, name: tenants.name, status: tenants.status }).from(tenants).where(ne(tenants.status, 'cancelled'));
   }
 
+  /** Empresa pelo endereço público (agendamento online, logo), com o que as páginas públicas mostram da marca. */
   async tenantBySlug(slug: string) {
     const [tenant] = await this.tdb.db
-      .select({ id: tenants.id, name: tenants.name, slug: tenants.slug, status: tenants.status })
+      .select({ id: tenants.id, name: tenants.name, slug: tenants.slug, status: tenants.status, logoFileId: tenants.logoFileId, brandColor: tenants.brandColor })
       .from(tenants)
       .where(eq(tenants.slug, slug.toLowerCase()));
     return tenant && tenant.status !== 'cancelled' ? tenant : undefined;

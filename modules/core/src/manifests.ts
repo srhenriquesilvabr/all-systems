@@ -9,6 +9,19 @@ export const authManifest = defineModule({
   version: '1.0.0',
 });
 
+/**
+ * Cadastro e marca da empresa (logo e cor do painel). Módulo core novo: a reconciliação do boot
+ * (ADR-011) o ativa nas empresas existentes, e o dono já tem a permissão (o dono tem todas).
+ */
+export const companyManifest = defineModule({
+  key: 'core.company',
+  name: 'Dados da empresa',
+  layer: 'core',
+  version: '1.0.0',
+  permissions: [{ key: 'core.company.manage', label: 'Editar dados da empresa, logo e cor do painel' }],
+  menu: [{ label: 'Dados da empresa', path: '/configuracoes/empresa', icon: 'building', permission: 'core.company.manage', group: 'Configurações' }],
+});
+
 export const usersManifest = defineModule({
   key: 'core.users',
   name: 'Usuários',
@@ -94,4 +107,23 @@ export const segmentationManifest = defineModule({
   menu: [{ label: 'Segmentos', path: '/segmentos', icon: 'target', permission: 'core.segmentation.read' }],
 });
 
-export const coreManifests = [authManifest, usersManifest, accessManifest, auditManifest, customersManifest, financeManifest, segmentationManifest];
+/**
+ * Pessoas da equipe: um cadastro só para profissional da agenda, colaborador do RH e usuário do
+ * sistema. Dado pessoal sensível (CPF, endereço, currículo): permissões próprias e auditoria.
+ */
+export const teamManifest = defineModule({
+  key: 'core.team',
+  name: 'Equipe',
+  layer: 'core',
+  version: '1.0.0',
+  dependsOn: ['core.users'],
+  events: { publishes: ['core.team.member_ended'] },
+  permissions: [
+    { key: 'core.team.read', label: 'Ver a equipe e os dados pessoais (CPF, endereço, currículo)' },
+    { key: 'core.team.manage', label: 'Cadastrar e editar pessoas da equipe' },
+  ],
+  menu: [{ label: 'Equipe', path: '/equipe', icon: 'id-card', permission: 'core.team.read' }],
+});
+
+// A ordem define a ordem no menu: "Dados da empresa" abre o grupo Configurações.
+export const coreManifests = [authManifest, companyManifest, usersManifest, accessManifest, auditManifest, customersManifest, financeManifest, segmentationManifest, teamManifest];

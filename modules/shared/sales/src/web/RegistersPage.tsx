@@ -1,17 +1,19 @@
-import { api, ApiError, formatDateTime, today, useCan } from '@all/module-sdk/web';
-import { Alert, Badge, Button, Card, Checkbox, EmptyState, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th } from '@all/ui';
+import { api, ApiError, formatDateTime, parseMoney, today, useCan } from '@all/module-sdk/web';
+import { Alert, Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useState, type FormEvent } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { salePaymentLabel, type CashRegister, type RegisterSessionSummary, type SalesSettings } from '../contracts';
-import { brl, registersKey, useRegisters, useRegisterSession, useSalesSettings } from './hooks';
-import { ClosingReport, DifferenceBadge, SessionDetails } from './registers';
+import { salePaymentLabel, type CashRegister, type RegisterSession, type RegisterSessionSummary, type SalesSettings } from '../contracts';
+import { brl, registersKey, salesKey, useRegisters, useRegisterSession, useSalesSettings } from './hooks';
+import { backdated, ClosingReport, DifferenceBadge, SessionActions, SessionDetails, toLocalInput } from './registers';
 
 const daysAgo = (n: number) => {
   const d = new Date();
   d.setDate(d.getDate() - n);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
+/** Momento de um dia anterior a hoje (neste computador). */
+const beforeToday = (iso: string) => new Date(iso).toDateString() !== new Date().toDateString() && Date.parse(iso) < Date.now();
 
 /** Histórico de sessões de caixa (abertura, fechamento, quebra/sobra), com filtros. */
 export function RegistersPage() {
@@ -23,6 +25,8 @@ export function RegistersPage() {
   const [status, setStatus] = useState<'' | 'open' | 'closed'>('');
   const [withDifference, setWithDifference] = useState(false);
   const [managing, setManaging] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
+  const canOpen = useCan('shared.sales.register');
   const query = { from, to, registerId: registerId || undefined, status: status || undefined, withDifference: withDifference || undefined, limit: 200 };
   const list = useQuery({
     queryKey: [...registersKey, 'sessions', query],
@@ -35,9 +39,16 @@ export function RegistersPage() {
         title="Caixas"
         description="Aberturas e fechamentos do caixa, sangrias, suprimentos e diferenças."
         actions={
-          <Button variant="secondary" onClick={() => setManaging(true)}>
-            Gerenciar caixas
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            {canOpen && (
+              <Button variant="secondary" onClick={() => setBackfilling(true)}>
+                Lançar caixa de outro dia
+              </Button>
+            )}
+            <Button variant="secondary" onClick={() => setManaging(true)}>
+              Gerenciar caixas
+            </Button>
+          </div>
         }
       />
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -88,6 +99,11 @@ export function RegistersPage() {
                   <Td>{s.register.name}</Td>
                   <Td className="whitespace-nowrap">
                     {formatDateTime(s.openedAt)}
+                    {backdated(s.openedAt, s.createdAt) && (
+                      <span className="ml-1.5" title={`Lançado em ${formatDateTime(s.createdAt)}`}>
+                        <Badge tone="warning">lançado depois</Badge>
+                      </span>
+                    )}
                     {s.openedByName && <div className="text-xs text-fg-muted">{s.openedByName}</div>}
                   </Td>
                   <Td className="whitespace-nowrap">
@@ -96,6 +112,8 @@ export function RegistersPage() {
                         {formatDateTime(s.closedAt)}
                         {s.closedByName && <div className="text-xs text-fg-muted">{s.closedByName}</div>}
                       </>
+                    ) : beforeToday(s.openedAt) ? (
+                      <Badge tone="warning">Aberto (dia anterior)</Badge>
                     ) : (
                       <Badge tone="brand">Aberto</Badge>
                     )}
@@ -115,7 +133,85 @@ export function RegistersPage() {
         )}
       </Card>
       {managing && registers.data && <ManageRegistersModal registers={registers.data.registers} onClose={() => setManaging(false)} />}
+      {backfilling && registers.data && (
+        <BackfillModal registers={registers.data.registers} onClose={() => setBackfilling(false)} onOpened={(s) => navigate(`/caixas/${s.id}`)} />
+      )}
     </>
+  );
+}
+
+/**
+ * Caixa de um dia que já passou (o computador estava sem sistema, o caixa foi feito no papel):
+ * abre a sessão no horário em que o caixa abriu; na página dela entram as sangrias, os
+ * suprimentos e o fechamento daquele dia, e as vendas lançadas no PDV com a data daquele dia.
+ */
+function BackfillModal({ registers, onClose, onOpened }: { registers: CashRegister[]; onClose: () => void; onOpened: (s: RegisterSession) => void }) {
+  const queryClient = useQueryClient();
+  const active = registers.filter((r) => r.active);
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  yesterday.setHours(8, 0, 0, 0);
+  const [registerId, setRegisterId] = useState(active[0]?.id ?? '');
+  const [float, setFloat] = useState('');
+  const [openedAt, setOpenedAt] = useState(toLocalInput(yesterday));
+  const floatValue = float.trim() === '' ? 0 : parseMoney(float);
+  const valid = !!registerId && Number.isFinite(floatValue) && floatValue >= 0 && !!openedAt && Date.parse(openedAt) <= Date.now();
+  const open = useMutation({
+    mutationFn: () =>
+      api<RegisterSession>('/sales/registers/sessions', {
+        method: 'POST',
+        body: { registerId, openingFloat: Math.round(floatValue * 100) / 100, openedAt: new Date(openedAt).toISOString() },
+      }),
+    onSuccess: (session) => {
+      queryClient.invalidateQueries({ queryKey: salesKey });
+      onOpened(session);
+    },
+  });
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    if (valid) open.mutate();
+  }
+  return (
+    <Modal
+      open
+      title="Lançar caixa de outro dia"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button type="submit" form="register-backfill-form" loading={open.isPending} disabled={!valid}>
+            Abrir sessão
+          </Button>
+        </>
+      }
+    >
+      <form id="register-backfill-form" onSubmit={submit} className="space-y-4">
+        {open.error && <Alert>{open.error instanceof ApiError ? open.error.message : 'Erro ao abrir a sessão'}</Alert>}
+        <p className="text-sm text-fg-muted">
+          Registra o caixa de um dia que já passou. Depois de abrir, lance as sangrias, os suprimentos e o fechamento com o horário em que aconteceram; as vendas
+          daquele horário feitas no PDV com este caixa entram na sessão. O horário não pode cruzar o de outra sessão do mesmo caixa.
+        </p>
+        <Field label="Caixa">
+          {(id) => (
+            <Select id={id} value={registerId} onChange={(e) => setRegisterId(e.target.value)}>
+              {active.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name}
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
+        <Field label="Data e hora da abertura">
+          {(id) => <Input id={id} type="datetime-local" className="w-auto" max={toLocalInput(new Date())} value={openedAt} onChange={(e) => setOpenedAt(e.target.value)} />}
+        </Field>
+        <Field label="Troco inicial" hint="Dinheiro que estava na gaveta na abertura.">
+          {(id) => <Input id={id} inputMode="decimal" className="w-40 text-right tabular-nums" placeholder="0,00" value={float} onChange={(e) => setFloat(e.target.value)} />}
+        </Field>
+      </form>
+    </Modal>
   );
 }
 
@@ -233,6 +329,8 @@ export function RegisterSessionPage() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
   const session = useRegisterSession(id);
+  const registers = useRegisters();
+  const canManage = useCan('shared.sales.register');
 
   if (session.isPending) return <Spinner />;
   if (session.isError) return <Alert>{session.error.message}</Alert>;
@@ -243,12 +341,19 @@ export function RegisterSessionPage() {
       <div className="print:hidden">
         <PageHeader
           title={`${s.register.name} · sessão #${s.number}`}
-          description={s.status === 'open' ? 'Caixa aberto: os valores mudam a cada venda.' : 'Caixa fechado: os valores não mudam mais.'}
+          description={
+            s.status === 'closed'
+              ? 'Caixa fechado: os valores não mudam mais.'
+              : s.openUntil
+                ? `Caixa de outro dia, ainda aberto: vendas, movimentos e o fechamento vão até ${formatDateTime(s.openUntil)}, quando abriu a sessão seguinte.`
+                : 'Caixa aberto: os valores mudam a cada venda.'
+          }
           actions={
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button variant="ghost" onClick={() => navigate('/caixas')}>
                 Voltar
               </Button>
+              {s.status === 'open' && canManage && registers.data && <SessionActions session={s} overview={registers.data} onClosed={() => undefined} />}
               <Button variant="secondary" onClick={() => window.print()}>
                 {s.status === 'open' ? 'Imprimir parcial' : 'Imprimir fechamento'}
               </Button>

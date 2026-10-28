@@ -1,6 +1,7 @@
-import { customers, users } from '@all/core/schema';
+import { customers, teamMembers, users } from '@all/core/schema';
 import { id, tenantId, tenantIsolation } from '@all/db';
-import { boolean, date, index, integer, numeric, pgTable, primaryKey, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import { boolean, date, index, integer, numeric, pgTable, primaryKey, smallint, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 const ts = (name: string) => timestamp(name, { withTimezone: true });
 const money = (name: string) => numeric(name, { precision: 14, scale: 2 });
@@ -14,11 +15,13 @@ export const schResources = pgTable(
     name: text('name').notNull(),
     kind: text('kind', { enum: ['professional', 'room'] }).notNull().default('professional'),
     userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+    /** Profissional = pessoa da equipe (core). Só para kind professional; uma pessoa, um profissional. */
+    teamMemberId: uuid('team_member_id').references(() => teamMembers.id, { onDelete: 'set null' }),
     color: text('color').notNull().default('#2d4bff'),
     active: boolean('active').notNull().default(true),
     createdAt: ts('created_at').notNull().defaultNow(),
   },
-  (t) => [tenantIsolation()],
+  (t) => [uniqueIndex('sch_resources_team_member_key').on(t.tenantId, t.teamMemberId).where(sql`team_member_id is not null`), tenantIsolation()],
 );
 
 export const schServices = pgTable(

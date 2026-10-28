@@ -141,6 +141,20 @@
       "when": 1793188294616,
       "tag": "0019_app_user_idle_timeout",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1793196029087,
+      "tag": "0020_pessoas_marca_salas_retroativo",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1793196037722,
+      "tag": "0021_rh_dados_pessoais_na_pessoa",
+      "breakpoints": true
     }
   ]
 }

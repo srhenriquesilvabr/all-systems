@@ -1,4 +1,4 @@
-import { AuditService, centsToDecimal, FinanceService, ModuleSettingsService, TenantDb, toCents } from '@all/core';
+import { AuditService, centsToDecimal, FinanceService, ModuleSettingsService, TeamService, TenantDb, toCents } from '@all/core';
 import type { Tx } from '@all/db';
 import { requestContext } from '@all/module-sdk';
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
@@ -21,6 +21,7 @@ export class TerminationService {
     private readonly settings: ModuleSettingsService,
     private readonly finance: FinanceService,
     private readonly audit: AuditService,
+    private readonly team: TeamService,
   ) {}
 
   preview(employeeId: string, input: TerminationInput): Promise<TerminationDetail> {
@@ -128,6 +129,9 @@ export class TerminationService {
         );
 
       await tx.update(hrEmployees).set({ status: 'terminated', terminationDate: input.terminationDate }).where(eq(hrEmployees.id, employeeId));
+      // A pessoa da equipe ganha a data de encerramento; passada a data, o core avisa a agenda
+      // (core.team.member_ended) e o profissional dela fica inativo.
+      await this.team.saveInTx(tx, emp.teamMemberId, { endedOn: input.terminationDate });
 
       const name = emp.name;
       const entries = [
@@ -220,7 +224,7 @@ export class TerminationService {
   }
 }
 
-const employeeInfo = (e: EmployeeRow): TerminationDetail['employee'] => ({ id: e.id, name: e.name, cpf: e.cpf, position: e.position, category: e.category, pixKey: e.pixKey });
+const employeeInfo = (e: EmployeeRow): TerminationDetail['employee'] => ({ id: e.id, name: e.name, cpf: e.cpf ?? '', position: e.position, category: e.category, pixKey: e.pixKey });
 
 function stripDetail(d: TerminationDetail): TerminationStatement {
   const { id: _id, employee: _e, cancelledVacations: _c, notes: _n, createdAt: _at, ...statement } = d;

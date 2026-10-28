@@ -44,6 +44,7 @@ import {
   Target,
   Ticket,
   Users,
+  UserSearch,
   Wallet,
   type LucideIcon,
 } from 'lucide-react';
@@ -95,6 +96,7 @@ const icons: Record<string, LucideIcon> = {
   briefcase: Briefcase,
   'id-card': IdCard,
   banknote: Banknote,
+  'user-search': UserSearch,
 };
 
 export const iconFor = (name?: string): LucideIcon => icons[name ?? ''] ?? Circle;

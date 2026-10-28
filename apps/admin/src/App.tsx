@@ -7,6 +7,7 @@ import { useAuth } from './auth/auth';
 import { AppLayout } from './layout/AppLayout';
 import { webModules } from './modules';
 import { AuditPage } from './pages/AuditPage';
+import { CompanyPage } from './pages/CompanyPage';
 import { EditCustomerPage, NewCustomerPage } from './pages/customers/CustomerFormPage';
 import { CustomerPage } from './pages/customers/CustomerPage';
 import { CustomersPage } from './pages/customers/CustomersPage';
@@ -22,6 +23,7 @@ import { RolesPage } from './pages/RolesPage';
 import { SetPasswordPage } from './pages/SetPasswordPage';
 import { Forbidden, NotFound } from './pages/StatusPages';
 import { UsersPage } from './pages/UsersPage';
+import { TeamPage } from './pages/team/TeamPage';
 
 export function App() {
   const { status } = useAuth();
@@ -68,6 +70,7 @@ export function App() {
         <Route element={<AppLayout />}>
           <Route path="/entrar" element={<Navigate to={location.state?.from ?? '/'} replace />} />
           <Route index element={<HomePage />} />
+          <Route path="configuracoes/empresa" element={<Guarded permission="core.company.manage" Component={CompanyPage} />} />
           <Route path="configuracoes/usuarios" element={<Guarded permission="core.users.read" Component={UsersPage} />} />
           <Route path="configuracoes/papeis" element={<Guarded permission="core.access.read" Component={RolesPage} />} />
           <Route path="configuracoes/auditoria" element={<Guarded permission="core.audit.read" Component={AuditPage} />} />
@@ -80,6 +83,8 @@ export function App() {
           <Route path="financeiro" element={<Guarded permission="core.finance.read" Component={FinanceOverviewPage} />} />
           <Route path="financeiro/lancamentos" element={<Guarded permission="core.finance.read" Component={FinanceEntriesPage} />} />
           <Route path="financeiro/cadastros" element={<Guarded permission="core.finance.manage" Component={FinanceRegistryPage} />} />
+          <Route path="equipe" element={<Guarded permission="core.team.read" Component={TeamPage} />} />
+          <Route path="equipe/:id" element={<Guarded permission="core.team.read" Component={TeamPage} />} />
           {moduleRoutes}
           <Route path="*" element={<NotFound />} />
         </Route>

@@ -1,6 +1,30 @@
+import { applyBrand, brandPalette, isHexColor } from '@all/ui';
 import { useEffect, useState } from 'react';
 
 export type ThemePreference = 'light' | 'dark' | 'system';
+
+const BRAND_KEY = 'palmer:brand';
+
+/**
+ * Cor da empresa no painel: aplica a escala calculada e guarda a última no navegador, para o
+ * index.html aplicá-la antes da primeira pintura (sem piscar o azul Palmer). `null` volta ao padrão.
+ * O formato guardado ({ color, light, dark }) é o que o script do index.html lê.
+ */
+export function syncCompanyBrand(color: string | null) {
+  const palette = color && isHexColor(color) ? brandPalette(color) : null;
+  applyBrand(palette);
+  try {
+    if (palette) localStorage.setItem(BRAND_KEY, JSON.stringify(palette));
+    else localStorage.removeItem(BRAND_KEY);
+  } catch {
+    // segue sem lembrar: no próximo carregamento a cor chega um instante depois
+  }
+}
+
+/** Aplica a cor da empresa da sessão e troca junto quando a empresa muda. */
+export function useCompanyBrand(color: string | null) {
+  useEffect(() => syncCompanyBrand(color), [color]);
+}
 
 const KEY = 'palmer:theme';
 const media = () => window.matchMedia('(prefers-color-scheme: dark)');

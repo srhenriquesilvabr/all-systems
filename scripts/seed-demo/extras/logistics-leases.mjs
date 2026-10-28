@@ -1,11 +1,12 @@
 // Fluxos novos da lavanderia e da imobiliária:
 // - fake-lavanderia: coletas e entregas ("Coletas e entregas" e "Minhas rotas") com um motorista
-//   convidado, a rota de hoje em várias situações e a de amanhã já montada;
+//   convidado: as da semana passada já feitas (registradas com o horário em que aconteceram, uma
+//   entrega que não deu certo), a rota de hoje em várias situações e a de amanhã já montada;
 // - fake-imobiliaria: contratos de locação ativos, com aluguéis recebidos, um inquilino em atraso
 //   e os repasses aos proprietários dos meses recebidos.
 // Pode rodar de novo: cada tarefa/contrato é achado pelo que o identifica e só anda o que falta.
 import { seedPropertyPhotos } from '../photos.mjs';
-import { at, createRng, day, step } from '../lib.mjs';
+import { createRng, day, step } from '../lib.mjs';
 import { pickers } from '../verticals/_banking.mjs';
 
 /** @param {{ api, rng, log, tenant: {id,name}, customers: {id,name,type}[], users: {membershipId,name,email,roleKeys:string[]}[] }} ctx */
@@ -53,6 +54,36 @@ const TODAY_ROUTE = [
   { kind: 'delivery', window: ['16:00', '17:00'], fee: 15, target: 'scheduled', driver: 'me', notes: 'Entregar no apartamento; não deixar com o porteiro.' },
 ];
 
+/**
+ * Semana passada (dias úteis; `weekday` 0 = segunda): coletas e entregas já feitas pelo motorista,
+ * registradas com o horário de saída e de conclusão (o cliente não é avisado de nada que já passou) e
+ * a taxa recebida na data da conclusão. Uma entrega não deu certo e ficou para o escritório reagendar.
+ */
+const LAST_WEEK_ROUTE = [
+  { weekday: 0, kind: 'pickup', window: ['08:00', '09:00'], who: 'p1', fee: 12, target: 'done', feeMethod: 'pix', itemsCount: 9 },
+  { weekday: 0, kind: 'delivery', window: ['14:00', '15:00'], fee: 15, target: 'done', feeMethod: 'cash', receiver: 'Dona Cida (moradora)' },
+  {
+    weekday: 1, kind: 'pickup', window: ['08:30', '09:30'], who: 'c0', fee: 0, target: 'done', itemsCount: 42,
+    notes: 'Coleta semanal do contrato: toalhas e uniformes. Sem taxa.',
+  },
+  { weekday: 1, kind: 'delivery', window: ['10:00', '11:00'], fee: 15, target: 'done', feeMethod: 'pix', collect: 'pix', receiver: 'Sr. Antônio (porteiro)' },
+  { weekday: 2, kind: 'delivery', window: ['09:00', '10:00'], fee: 15, target: 'failed', reason: 'Endereço não encontrado: número não confere com o da rua' },
+  { weekday: 2, kind: 'pickup', window: ['15:00', '16:00'], who: 'p3', fee: 12, target: 'done', feeMethod: 'cash', itemsCount: 4, notes: 'Edredom e duas capas de almofada.' },
+  { weekday: 3, kind: 'pickup', window: ['08:00', '09:00'], who: 'c1', fee: 0, target: 'done', itemsCount: 27, notes: 'Coleta semanal do contrato.' },
+  // Taxa não recebida na entrega: fica "a receber" no financeiro.
+  { weekday: 3, kind: 'delivery', window: ['13:30', '14:30'], fee: 15, target: 'done' },
+  { weekday: 4, kind: 'delivery', window: ['09:30', '10:30'], fee: 15, target: 'done', feeMethod: 'debit_card', receiver: 'Recepção do prédio' },
+  {
+    weekday: 4, kind: 'pickup', window: ['16:00', '17:00'], who: 'p4', fee: 12, target: 'done', feeMethod: 'pix',
+    notes: 'Cliente pediu orçamento de lavagem a seco do terno.',
+    order: [
+      { service: 'Lavagem a seco', garment: 'Terno', quantity: 1, color: 'azul-marinho' },
+      { service: 'Lavar e passar', garment: 'Camisa', quantity: 4, color: 'social, cores variadas' },
+    ],
+  },
+  { weekday: 4, kind: 'delivery', window: ['17:00', '18:00'], fee: 15, target: 'done', feeMethod: 'pix' },
+];
+
 /** Amanhã: parte já com o motorista, parte ainda sem ninguém (aparece em "sem motorista"). */
 const TOMORROW_ROUTE = [
   { kind: 'pickup', period: 'morning', who: 'c1', fee: 0, driver: true, notes: 'Coleta semanal do contrato.' },
@@ -77,6 +108,12 @@ async function seedLaundryLogistics(ctx) {
   if (!lx) return;
   const me = (await api.get('/me').catch(() => null))?.user ?? driver;
   const drivers = { driver, me };
+  await step(log, 'coletas e entregas da semana passada', async () => {
+    const monday = lastWeekMonday();
+    for (const weekday of [0, 1, 2, 3, 4]) {
+      await seedRoute(ctx, lx, day(monday + weekday), LAST_WEEK_ROUTE.filter((p) => p.weekday === weekday), drivers);
+    }
+  });
   await step(log, 'rota de hoje', () => seedRoute(ctx, lx, day(0), TODAY_ROUTE, drivers));
   await step(log, 'rota de amanhã', () => seedRoute(ctx, lx, day(1), TOMORROW_ROUTE, drivers));
 }
@@ -133,7 +170,10 @@ async function laundryContext({ api }) {
   };
 }
 
-/** Cria a tarefa que falta em cada horário do dia e leva cada uma até a situação do plano. */
+/**
+ * Cria a tarefa que falta em cada horário do dia e leva cada uma até a situação do plano. Num dia que
+ * já passou, a tarefa é registrada depois: saída e conclusão com o horário em que aconteceram.
+ */
 async function seedRoute(ctx, lx, date, plan, drivers) {
   const { api, log } = ctx;
   const who = pickers(ctx.customers);
@@ -155,14 +195,14 @@ async function seedRoute(ctx, lx, date, plan, drivers) {
         const customer = who(p.who);
         job = await api.post('/laundry/logistics/pickups', { customerId: customer.id, address: await jobAddress(api, customer), ...base });
       } else {
-        const order = await orderForDelivery(ctx, lx, p.target === undefined ? 'in_process' : 'ready');
+        const order = await orderForDelivery(ctx, lx, p.target === undefined ? 'in_process' : 'ready', date);
         job = await api.post(`/laundry/orders/${order.id}/delivery`, { address: await jobAddress(api, order.customer), ...base });
       }
       counts.created++;
     } else if (driverId && !job.driver && (job.status === 'scheduled' || job.status === 'failed')) {
       job = await api.patch(`/laundry/logistics/jobs/${job.id}`, { driverUserId: driverId });
     }
-    job = await driveJob(ctx, lx, job, p);
+    job = await driveJob(ctx, lx, job, p, date < day(0) ? whenFor(date, p) : null);
     counts[job.status] = (counts[job.status] ?? 0) + 1;
   }
   const { created, ...byStatus } = counts;
@@ -178,14 +218,16 @@ async function jobAddress(api, customer) {
 }
 
 /**
- * Ordem para a entrega: primeiro as que já estão no status pedido e sem entrega agendada; se
- * faltar, abre uma nova (com entrada há dois dias) e leva as peças até lá.
+ * Ordem para a entrega do dia `date`: primeiro as que já estão no status pedido e sem entrega
+ * agendada (num dia que já passou, só as que entraram até dois dias antes: a entrega não pode ser
+ * antes da entrada); se faltar, abre uma nova (com entrada dois dias antes) e leva as peças até lá.
  */
-async function orderForDelivery(ctx, lx, status) {
+async function orderForDelivery(ctx, lx, status, date) {
   const { api } = ctx;
+  const latest = date < day(0) ? new Date(`${addDays(date, -2)}T12:00:00-03:00`).getTime() : Infinity;
   const { items } = await api.get('/service-orders', { workflow: 'laundry', status, limit: 50 });
   for (const o of items) {
-    if (lx.used.has(o.id)) continue;
+    if (lx.used.has(o.id) || Date.parse(o.receivedAt) > latest) continue;
     lx.used.add(o.id);
     const jobs = await api.get('/laundry/logistics/jobs', { orderId: o.id });
     if (!jobs.some((j) => j.kind === 'delivery')) return o;
@@ -196,8 +238,8 @@ async function orderForDelivery(ctx, lx, status) {
   const { order, pieces } = await api.post('/laundry/orders', {
     customerId: customer.id,
     lines: lines.map((l) => ({ serviceId: lx.serviceId(l.service), garmentTypeId: lx.garmentId(l.garment), quantity: l.quantity, color: l.color ?? null })),
-    receivedAt: day(-2),
-    dueAt: status === 'ready' ? at(0, 18) : at(1, 18),
+    receivedAt: addDays(date, -2),
+    dueAt: `${date}T18:00:00-03:00`,
     notesCustomer: 'Cliente pediu entrega no endereço.',
   });
   // Peça a peça pelas etapas, como no quadro de produção: todas prontas deixam a ordem "Pronta".
@@ -208,48 +250,78 @@ async function orderForDelivery(ctx, lx, status) {
   return { ...order, customer: order.customer ?? customer };
 }
 
-/** Leva a tarefa até a situação do plano, pelo mesmo caminho do motorista (sair → concluir/não deu). */
-async function driveJob({ api }, lx, job, p) {
+/**
+ * Horários de uma tarefa de um dia que já passou: o motorista sai uns minutos depois do início da
+ * janela e conclui (ou desiste) meia hora depois.
+ */
+function whenFor(date, p) {
+  const [hh, mm] = p.window.map((w) => w.split(':').map(Number))[0];
+  const iso = (plus) => {
+    const m = hh * 60 + mm + plus;
+    return `${date}T${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}:00-03:00`;
+  };
+  return { start: iso(5), done: iso(p.target === 'failed' ? 25 : 35) };
+}
+
+/**
+ * Leva a tarefa até a situação do plano, pelo mesmo caminho do motorista (sair → concluir/não deu).
+ * `when` (dia que já passou): saída e conclusão registradas com o horário em que aconteceram.
+ */
+async function driveJob({ api }, lx, job, p, when) {
   const target = p.target ?? 'scheduled';
   if (job.status === target || job.status === 'done' || job.status === 'cancelled' || job.status === 'failed') {
-    return finishPickup(api, lx, job, p);
+    return finishPickup(api, lx, job, p, when);
   }
   if (target === 'scheduled') return job;
 
-  if (job.status === 'scheduled') job = await api.post(`/laundry/logistics/jobs/${job.id}/start`);
-  if (target === 'failed') return api.post(`/laundry/logistics/jobs/${job.id}/fail`, { reason: p.reason });
+  const occurredAt = (moment) => (when ? { occurredAt: when[moment] } : {});
+  if (job.status === 'scheduled') job = await api.post(`/laundry/logistics/jobs/${job.id}/start`, occurredAt('start'));
+  if (target === 'failed') return api.post(`/laundry/logistics/jobs/${job.id}/fail`, { reason: p.reason, ...occurredAt('done') });
   if (target !== 'done') return job;
 
   if (job.kind === 'delivery') {
-    // O motorista recebeu o saldo da ordem na entrega.
+    // O motorista recebeu o saldo da ordem na entrega (no dia da entrega).
     const balance = job.order ? Math.round((job.order.total - job.order.paidAmount) * 100) / 100 : 0;
     if (p.collect && balance > 0) {
-      await api.post(`/service-orders/${job.order.id}/payments`, { amount: balance, method: p.collect, accountId: lx.bank.id, paidAt: day(0) });
+      await api.post(`/service-orders/${job.order.id}/payments`, { amount: balance, method: p.collect, accountId: lx.bank.id, paidAt: job.date });
     }
     job = await api.post(`/laundry/logistics/jobs/${job.id}/complete`, {
       receiverName: p.receiver ?? job.customer.name.split(' ')[0],
       feeMethod: p.fee > 0 ? (p.feeMethod ?? null) : null,
+      ...occurredAt('done'),
     });
   } else {
     const itemsCount = p.itemsCount ?? (p.order ?? []).reduce((s, l) => s + l.quantity, 0);
     job = await api.post(`/laundry/logistics/jobs/${job.id}/complete`, {
       itemsCount: Math.max(1, itemsCount),
       feeMethod: p.fee > 0 ? (p.feeMethod ?? null) : null,
+      ...occurredAt('done'),
     });
   }
-  return finishPickup(api, lx, job, p);
+  return finishPickup(api, lx, job, p, when);
 }
 
-/** Coleta concluída com `order`: abre a ordem no balcão ligada à coleta (se ainda não foi aberta). */
-async function finishPickup(api, lx, job, p) {
+/**
+ * Coleta concluída com `order`: abre a ordem no balcão ligada à coleta (se ainda não foi aberta).
+ * Coleta de um dia que já passou: a ordem entra naquele dia, logo depois da coleta.
+ */
+async function finishPickup(api, lx, job, p, when) {
   if (job.kind !== 'pickup' || job.status !== 'done' || !p.order || job.order) return job;
+  const arrived = when ? new Date(Date.parse(job.completedAt ?? when.done) + 30 * 60_000).toISOString() : null;
   await api.post('/laundry/orders', {
     customerId: job.customer.id,
     lines: p.order.map((l) => ({ serviceId: lx.serviceId(l.service), garmentTypeId: lx.garmentId(l.garment), quantity: l.quantity, color: l.color ?? null })),
-    notesInternal: 'Peças trazidas pela coleta da manhã.',
+    notesInternal: 'Peças trazidas pela coleta.',
     pickupJobId: job.id,
+    ...(arrived ? { receivedAt: arrived } : {}),
   });
   return api.get(`/laundry/logistics/jobs/${job.id}`);
+}
+
+/** Deslocamento (em dias a partir de hoje) da segunda-feira da semana passada. */
+function lastWeekMonday() {
+  const weekday = new Date(`${day(0)}T12:00:00-03:00`).getUTCDay();
+  return -(weekday === 0 ? 6 : weekday - 1) - 7;
 }
 
 // ================================================================================================

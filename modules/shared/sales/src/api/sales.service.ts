@@ -138,7 +138,8 @@ export class SalesService {
 
       // Venda anterior (migração, caixa sem sistema): relatórios e financeiro usam a data informada.
       const soldAt = input.soldAt ?? new Date();
-      // Venda no caixa entra na sessão aberta do terminal (a sessão fica travada contra o fechamento até o commit).
+      // Venda no caixa entra na sessão aberta do terminal no horário da venda (inclusive a de um
+      // caixa de outro dia sendo lançado); a sessão fica travada contra o fechamento até o commit.
       const registerSessionId = await this.registers.sessionForSaleInTx(tx, { registerId: input.registerId ?? null, required: settings.requireRegisterSession, soldAt });
 
       // Mesma mercadoria em duas linhas vira uma só.

@@ -28,6 +28,9 @@ export function PosPage() {
   const [discount, setDiscount] = useState('');
   // Venda anterior (migração, caixa sem sistema): vazio = agora.
   const [soldOn, setSoldOn] = useState<string | null>(null);
+  // Hora da venda anterior (opcional): sem hora, vale o meio-dia; com hora, entra na sessão do caixa
+  // daquele horário quando o caixa de outro dia foi lançado (página "Caixas").
+  const [soldTime, setSoldTime] = useState('');
   const [weighing, setWeighing] = useState<Product | null>(null);
   const [paying, setPaying] = useState(false);
   const [done, setDone] = useState<Sale | null>(null);
@@ -78,6 +81,7 @@ export function PosPage() {
     setCustomer(null);
     setDiscount('');
     setSoldOn(null);
+    setSoldTime('');
     setDone(null);
     searchRef.current?.focus();
   }
@@ -289,7 +293,18 @@ export function PosPage() {
                 </label>
                 <div className="flex items-center gap-2">
                   <Input id="pos-sold-on" type="date" className="h-8 w-40" max={today()} value={soldOn} onChange={(e) => setSoldOn(e.target.value)} />
-                  <Button variant="ghost" size="sm" aria-label="Usar a data de hoje" onClick={() => setSoldOn(null)}>
+                  {soldOn !== today() && (
+                    <Input aria-label="Hora da venda" type="time" className="h-8 w-28" value={soldTime} onChange={(e) => setSoldTime(e.target.value)} />
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-label="Usar a data de hoje"
+                    onClick={() => {
+                      setSoldOn(null);
+                      setSoldTime('');
+                    }}
+                  >
                     ✕
                   </Button>
                 </div>
@@ -349,8 +364,9 @@ export function PosPage() {
                 items: cart.map((l) => ({ productId: l.product.id, quantity: l.quantity })),
                 discount: discountCents / 100,
                 payments,
-                soldAt: soldOn || undefined,
-                registerId: session && register ? register.id : null,
+                soldAt: soldOn && soldOn !== today() && soldTime ? new Date(`${soldOn}T${soldTime}`).toISOString() : soldOn || undefined,
+                // Venda de outro dia também vai com o caixa: entra na sessão dele daquele horário, se houver.
+                registerId: register && (session || (soldOn && soldOn !== today())) ? register.id : null,
               },
             }).then(
               (sale) => {

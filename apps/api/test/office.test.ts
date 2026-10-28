@@ -55,7 +55,7 @@ describe('contabilidade e RH', () => {
       const admit = (body: Record<string, unknown>) => s.as('post', '/hr/employees').send({ position: 'Auxiliar', admissionDate: '2024-01-15', ...body }).expect(201);
       await admit({ name: 'Ana Analista', cpf: '111.444.777-35', salary: 6000, dependents: 0 });
       await admit({ name: 'Bruno Auxiliar', cpf: '22233344405', salary: 2200, weeklyHours: 44 });
-      await admit({ name: 'Carla Nova', cpf: '33344455506', salary: 3000, admissionDate: `${competence}-16` });
+      await admit({ name: 'Carla Nova', cpf: '33344455508', salary: 3000, admissionDate: `${competence}-16` });
       await s.as('post', '/hr/employees').send({ name: 'Duplicada', cpf: '11144477735', position: 'Auxiliar', admissionDate: '2024-01-01', salary: 1000 }).expect(409);
 
       const { body: payroll } = await s.as('post', '/hr/payrolls').send({ competence }).expect(201);
@@ -86,7 +86,7 @@ describe('contabilidade e RH', () => {
 
     it('férias: saldo por período aquisitivo, mínimo de 5 dias, abono e pagamento antecipado', async () => {
       const s = await ownerSession(t, ['hr']);
-      const { body: emp } = await s.as('post', '/hr/employees').send({ name: 'Diego Férias', cpf: '44455566607', position: 'Vendedor', admissionDate: '2024-02-01', salary: 3000 }).expect(201);
+      const { body: emp } = await s.as('post', '/hr/employees').send({ name: 'Diego Férias', cpf: '44455566619', position: 'Vendedor', admissionDate: '2024-02-01', salary: 3000 }).expect(201);
       const { body: e } = await s.as('get', `/hr/employees/${emp.id}`).expect(200);
       expect(e.periods[0]).toMatchObject({ start: '2024-02-01', end: '2025-01-31', earned: true, balance: 30 });
       const start = new Date(Date.now() + 40 * 86_400_000).toISOString().slice(0, 10);
@@ -118,9 +118,9 @@ describe('contabilidade e RH', () => {
     it('13º: 1ª e 2ª parcelas, ano inteiro e admitido no meio do ano (avos)', async () => {
       const s = await ownerSession(t, ['hr']);
       const admit = (body: Record<string, unknown>) => s.as('post', '/hr/employees').send({ position: 'Auxiliar', ...body }).expect(201);
-      await admit({ name: 'Eva Integral', cpf: '55566677708', salary: 3000, admissionDate: '2024-01-15' });
+      await admit({ name: 'Eva Integral', cpf: '55566677720', salary: 3000, admissionDate: '2024-01-15' });
       // Admitida em 10/04/2025: abril tem 21 dias trabalhados (≥ 15) e conta; abril a dezembro = 9 avos.
-      await admit({ name: 'Fábio Meio-Ano', cpf: '66677788809', salary: 2400, admissionDate: '2025-04-10' });
+      await admit({ name: 'Fábio Meio-Ano', cpf: '66677788830', salary: 2400, admissionDate: '2025-04-10' });
 
       const { body: first } = await s.as('post', '/hr/payrolls/thirteenth').send({ year: 2025, installment: 1 }).expect(201);
       expect(first).toMatchObject({ type: 'thirteenth_1', competence: '2025-11', status: 'draft' });
@@ -157,7 +157,7 @@ describe('contabilidade e RH', () => {
 
     it('rescisão sem justa causa com aviso indenizado proporcional e pedido de demissão', async () => {
       const s = await ownerSession(t, ['hr']);
-      const { body: gil } = await s.as('post', '/hr/employees').send({ name: 'Gil Rescisão', cpf: '77788899900', position: 'Auxiliar', admissionDate: '2024-03-01', salary: 3000 }).expect(201);
+      const { body: gil } = await s.as('post', '/hr/employees').send({ name: 'Gil Rescisão', cpf: '77788899941', position: 'Auxiliar', admissionDate: '2024-03-01', salary: 3000 }).expect(201);
       const sem = { type: 'without_cause', terminationDate: '2025-06-15', notice: 'indemnified', fgtsBalance: 4000 };
       const { body: preview } = await s.as('post', `/hr/employees/${gil.id}/termination/preview`).send(sem).expect(200);
       // 1 ano completo → aviso de 30 + 3 = 33 dias; projeção: 15/06 + 33 dias = 18/07/2025.
@@ -198,7 +198,7 @@ describe('contabilidade e RH', () => {
       expect(list).toEqual([expect.objectContaining({ type: 'termination', competence: '2025-06', totals: expect.objectContaining({ net: 11969.44, employees: 1 }) })]);
 
       // Pedido de demissão com aviso trabalhado: sem aviso indenizado nem multa do FGTS.
-      const { body: helena } = await s.as('post', '/hr/employees').send({ name: 'Helena Pede', cpf: '88899900011', position: 'Auxiliar', admissionDate: '2024-08-01', salary: 2400 }).expect(201);
+      const { body: helena } = await s.as('post', '/hr/employees').send({ name: 'Helena Pede', cpf: '88899900078', position: 'Auxiliar', admissionDate: '2024-08-01', salary: 2400 }).expect(201);
       const pede = { type: 'resignation', terminationDate: '2025-06-20', notice: 'worked', fgtsBalance: 1000 };
       await s.as('post', `/hr/employees/${helena.id}/termination/preview`).send({ ...pede, notice: 'indemnified' }).expect(400);
       const { body: hp } = await s.as('post', `/hr/employees/${helena.id}/termination/preview`).send(pede).expect(200);
@@ -221,10 +221,10 @@ describe('contabilidade e RH', () => {
     it('folha: DSR sobre horas extras, faltas com perda do DSR, afastamento pelo INSS e FGTS do aprendiz', async () => {
       const s = await ownerSession(t, ['hr']);
       const admit = async (body: Record<string, unknown>) => (await s.as('post', '/hr/employees').send({ position: 'Auxiliar', admissionDate: '2024-01-15', ...body }).expect(201)).body as { id: string };
-      await admit({ name: 'Ivo Extra', cpf: '10120230340', salary: 2200 });
-      await admit({ name: 'Joana Faltas', cpf: '20230340450', salary: 3000 });
-      await admit({ name: 'Kauã Aprendiz', cpf: '30340450560', salary: 1500, category: 'apprentice' });
-      const lia = await admit({ name: 'Lia Licença', cpf: '40450560670', salary: 3000 });
+      await admit({ name: 'Ivo Extra', cpf: '10120230364', salary: 2200 });
+      await admit({ name: 'Joana Faltas', cpf: '20230340431', salary: 3000 });
+      await admit({ name: 'Kauã Aprendiz', cpf: '30340450509', salary: 1500, category: 'apprentice' });
+      const lia = await admit({ name: 'Lia Licença', cpf: '40450560686', salary: 3000 });
       // Doença o mês todo: a empresa paga os 15 primeiros dias; de 16/11 a 30/11 (15 dias) paga o INSS.
       const { body: leave } = await s.as('post', '/hr/leaves').send({ employeeId: lia.id, type: 'sick', startOn: '2025-11-01', endOn: '2025-11-30' }).expect(201);
       expect(leave).toMatchObject({ days: 30, companyDays: 15, inssDays: 15 });

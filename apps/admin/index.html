@@ -15,6 +15,29 @@
         var dark = t === 'dark' || (t !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
         document.documentElement.dataset.theme = dark ? 'dark' : 'light';
       } catch (e) {}
+      // Cor da última empresa aberta, também antes da primeira pintura. Mesmo CSS de brandCss()
+      // em packages/ui/src/brand.ts. Páginas públicas (/agendar/…) usam a cor da empresa delas.
+      try {
+        var brand = location.pathname.indexOf('/agendar/') === 0 ? null : JSON.parse(localStorage.getItem('palmer:brand') || 'null');
+        if (brand && brand.light && brand.dark) {
+          var valid = true;
+          var rule = function (selector, scale) {
+            var vars = '';
+            for (var shade in scale) {
+              if (!/^\d{2,3}$/.test(shade) || !/^#[0-9a-f]{6}$/i.test(scale[shade])) valid = false;
+              vars += '--color-brand-' + shade + ':' + scale[shade] + ';';
+            }
+            return selector + '{' + vars + '}';
+          };
+          var css = rule(':root:root', brand.light) + rule(":root:root[data-theme='dark']", brand.dark);
+          if (valid) {
+            var style = document.createElement('style');
+            style.id = 'brand-palette';
+            style.textContent = css;
+            document.head.appendChild(style);
+          }
+        }
+      } catch (e) {}
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

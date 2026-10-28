@@ -237,6 +237,7 @@ export function resolveWindow(w: WindowFields): { period: JobPeriod | null; wind
 const scheduleFields = {
   /** Sem endereço, usa o do cadastro do cliente. */
   address: jobAddressInput.nullish(),
+  /** Dia da tarefa. Dia que já passou registra uma coleta/entrega que já aconteceu (sem aviso ao cliente). */
   date: isoDay,
   period: z.enum(jobPeriods).nullish(),
   windowStart: hhmm.nullish(),
@@ -262,6 +263,10 @@ export type DeliveryInput = z.infer<typeof deliveryInput>;
 /**
  * Atribuir motorista, reagendar, mudar endereço/taxa. Mudar a janela pede o período ou o horário
  * completo. Uma tarefa "não realizada" volta a "agendada" quando recebe uma nova data.
+ *
+ * Dia que já passou só para a tarefa "não realizada" (registrar a nova tentativa, que já aconteceu,
+ * a partir do dia da que falhou). A tarefa agendada que ainda não aconteceu não volta para o passado:
+ * para registrar uma coleta/entrega antiga, crie outra com a data passada.
  */
 export const jobUpdateInput = z.object({
   address: jobAddressInput.optional(),
@@ -274,6 +279,17 @@ export const jobUpdateInput = z.object({
   notes: z.string().trim().max(1000).nullable().optional(),
 });
 export type JobUpdateInput = z.infer<typeof jobUpdateInput>;
+
+/**
+ * Quando aconteceu (saída, conclusão, não realizada), para registrar depois: 'YYYY-MM-DD' (hoje =
+ * agora; outro dia = meio-dia em SP) ou data e hora. Sem data, é agora; nunca no futuro.
+ */
+const occurredAtInput = z
+  .string()
+  .trim()
+  .transform((v) => (/^\d{4}-\d{2}-\d{2}$/.test(v) ? (v === spToday() ? new Date() : new Date(`${v}T12:00:00-03:00`)) : new Date(v)))
+  .refine((d) => !Number.isNaN(d.getTime()), 'Data inválida')
+  .refine((d) => Number.isNaN(d.getTime()) || d.getTime() <= Date.now() + 5 * 60_000, 'A data não pode ser no futuro');
 
 export const feeMethods = ['cash', 'pix', 'credit_card', 'debit_card', 'other'] as const;
 export type FeeMethod = (typeof feeMethods)[number];
@@ -291,12 +307,23 @@ export const completeJobInput = z.object({
   /** Coleta: quantas peças vieram (a conferência peça a peça é no balcão). */
   itemsCount: z.coerce.number().int().min(1, 'Informe quantas peças foram coletadas').max(999).nullish(),
   notes: z.string().trim().max(1000).nullish(),
-  /** O motorista recebeu a taxa na hora: dá baixa no financeiro com esta forma de pagamento. */
+  /** O motorista recebeu a taxa na hora: dá baixa no financeiro com esta forma de pagamento (na data da conclusão). */
   feeMethod: z.enum(feeMethods).nullish(),
+  /** Quando foi concluída; sem data, é agora. Não antes do dia da tarefa nem da saída. */
+  occurredAt: occurredAtInput.optional(),
 });
 export type CompleteJobInput = z.infer<typeof completeJobInput>;
 
-export const failJobInput = z.object({ reason: z.string().trim().min(3, 'Informe o motivo').max(500) });
+/** Saída para a rota; sem data, é agora. */
+export const startJobInput = z.object({ occurredAt: occurredAtInput.optional() }).default({});
+export type StartJobInput = z.infer<typeof startJobInput>;
+
+export const failJobInput = z.object({
+  reason: z.string().trim().min(3, 'Informe o motivo').max(500),
+  /** Quando a tentativa não deu certo; sem data, é agora. */
+  occurredAt: occurredAtInput.optional(),
+});
+export type FailJobInput = z.infer<typeof failJobInput>;
 export const cancelJobInput = z.object({ reason: z.string().trim().max(500).nullish() });
 export const linkOrderInput = z.object({ orderId: z.string().uuid() });
 
@@ -335,6 +362,8 @@ export interface LogisticsJob {
   receiverName: string | null;
   startedAt: string | null;
   completedAt: string | null;
+  /** Última tentativa que não deu certo (continua preenchida depois de reagendar). */
+  failedAt: string | null;
   failReason: string | null;
   /** Tentativas que não deram certo (a tarefa pode ter sido reagendada depois). */
   attempts: number;

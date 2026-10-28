@@ -1,10 +1,30 @@
-import { api, ApiError, formatDateTime, SpreadsheetImport, useCan } from '@all/module-sdk/web';
+import {
+  api,
+  ApiError,
+  draftFromTeamMember,
+  emptyTeamMemberDraft,
+  formatDate,
+  formatDateTime,
+  saveTeamFiles,
+  SpreadsheetImport,
+  TeamLinks,
+  teamKey,
+  teamMemberBody,
+  TeamMemberFields,
+  TeamMemberPicker,
+  useCan,
+  useTeamMember,
+  type PendingTeamFiles,
+  type TeamMemberDraft,
+} from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th } from '@all/ui';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
+import { Link } from 'react-router';
 import { weekdayLabel, type Resource } from '../contracts';
 import { localToUtc, schedulingKey, shiftDate, todayLocal, useResources, useServices, useTimeOff } from './hooks';
 import { resourceImportSpec } from './resourceImport';
+import { DistributeRoomsButton } from './RoomDistribution';
 
 const COLORS = ['#2d4bff', '#0ea5a4', '#e2557a', '#f59e0b', '#7c3aed', '#16a34a', '#0e1330', '#eb6834'];
 
@@ -24,6 +44,7 @@ export function ResourcesPage() {
         actions={
           <>
             {canManage && <SpreadsheetImport spec={resourceImportSpec()} onImported={() => queryClient.invalidateQueries({ queryKey: schedulingKey })} />}
+            <DistributeRoomsButton />
             <Button onClick={() => setEditing('new')}>Novo profissional</Button>
           </>
         }
@@ -90,22 +111,68 @@ function summarizeHours(hours: Resource['hours']) {
   return days.map((d) => weekdayLabel[d]!.slice(0, 3)).join(', ');
 }
 
+/**
+ * Profissional = pessoa da equipe. Com permissão para ver a equipe, o formulário mostra os dados da
+ * pessoa (foto, documentos, endereço, currículo…) e permite vincular a alguém já cadastrado (ex.: um
+ * colaborador do RH). Sem ela, só os campos da agenda.
+ */
 function ResourceModal({ resource, onClose }: { resource: Resource | null; onClose: () => void }) {
   const queryClient = useQueryClient();
   const services = useServices();
+  const canReadTeam = useCan('core.team.read');
+  const canManageTeam = useCan('core.team.manage');
   const [name, setName] = useState(resource?.name ?? '');
   const [kind, setKind] = useState<Resource['kind']>(resource?.kind ?? 'professional');
   const [color, setColor] = useState(resource?.color ?? COLORS[0]!);
   const [active, setActive] = useState(resource?.active ?? true);
   const [serviceIds, setServiceIds] = useState<string[]>(resource?.serviceIds ?? []);
+  // Pessoa da equipe: a já vinculada, uma escolhida na busca ou (sem nenhuma) uma nova.
+  const [memberId, setMemberId] = useState<string | null>(resource?.teamMemberId ?? null);
+  const member = useTeamMember(memberId, canReadTeam);
+  const [draft, setDraft] = useState<TeamMemberDraft | null>(memberId ? null : emptyTeamMemberDraft());
+  const [files, setFiles] = useState<PendingTeamFiles>({});
+  const [linking, setLinking] = useState(false);
+  // Profissional novo já gravado quando o envio da foto/currículo falha: tentar de novo não duplica.
+  const [createdId, setCreatedId] = useState<string | null>(null);
+  useEffect(() => {
+    if (member.data) setDraft(draftFromTeamMember(member.data));
+  }, [member.data]);
+
+  /** Pessoa nova: nome e sobrenome acompanham o nome na agenda até serem editados. */
+  const changeName = (value: string) => {
+    const before = emptyTeamMemberDraft(name);
+    const after = emptyTeamMemberDraft(value);
+    if (draft && !memberId && draft.firstName === before.firstName && draft.lastName === before.lastName) {
+      setDraft({ ...draft, firstName: after.firstName, lastName: after.lastName });
+    }
+    setName(value);
+  };
+  const isProfessional = kind === 'professional';
+  const showPerson = isProfessional && canReadTeam;
+  const targetId = resource?.id ?? createdId;
   const save = useMutation({
-    mutationFn: () =>
-      api(resource ? `/scheduling/resources/${resource.id}` : '/scheduling/resources', {
-        method: resource ? 'PATCH' : 'POST',
-        body: { name, kind, color, active, serviceIds },
-      }),
+    mutationFn: async () => {
+      // Pessoa sem nome: usa o nome da agenda ("Ana Lima" → Ana / Lima).
+      const fromName = emptyTeamMemberDraft(name);
+      const filled = draft && !draft.firstName.trim() ? { ...draft, firstName: fromName.firstName, lastName: draft.lastName || fromName.lastName } : draft;
+      const person = isProfessional && canManageTeam && filled ? teamMemberBody(filled) : undefined;
+      const saved = await api<{ id: string; teamMemberId: string | null }>(targetId ? `/scheduling/resources/${targetId}` : '/scheduling/resources', {
+        method: targetId ? 'PATCH' : 'POST',
+        body: { name, kind, color, active, serviceIds, ...(isProfessional && canReadTeam ? { teamMemberId: memberId } : {}), ...(person ? { person } : {}) },
+      });
+      if (!targetId) setCreatedId(saved.id);
+      if (saved.teamMemberId) {
+        setMemberId(saved.teamMemberId);
+        if (canManageTeam && (files.photo !== undefined || files.resume !== undefined)) {
+          await saveTeamFiles(saved.teamMemberId, files);
+          setFiles({});
+        }
+      }
+      return saved;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: schedulingKey });
+      queryClient.invalidateQueries({ queryKey: teamKey });
       onClose();
     },
   });
@@ -134,7 +201,7 @@ function ResourceModal({ resource, onClose }: { resource: Resource | null; onClo
       <form id="resource-form" onSubmit={submit} className="space-y-4">
         {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao salvar'}</Alert>}
         <div className="grid gap-4 sm:grid-cols-[1fr_10rem]">
-          <Field label="Nome">{(id) => <Input id={id} required minLength={2} value={name} onChange={(e) => setName(e.target.value)} autoFocus />}</Field>
+          <Field label={showPerson ? 'Nome na agenda' : 'Nome'}>{(id) => <Input id={id} required minLength={2} value={name} onChange={(e) => changeName(e.target.value)} autoFocus />}</Field>
           <Field label="Tipo">
             {(id) => (
               <Select id={id} value={kind} onChange={(e) => setKind(e.target.value as Resource['kind'])}>
@@ -176,6 +243,50 @@ function ResourceModal({ resource, onClose }: { resource: Resource | null; onClo
         </fieldset>
         <Checkbox label="Ativo (aparece na agenda)" checked={active} onChange={(e) => setActive(e.target.checked)} />
         {!resource && <p className="text-xs text-fg-muted">O expediente começa como segunda a sexta 9h–12h e 13h–18h, sábado 9h–13h. Ajuste em “Horários”.</p>}
+
+        {showPerson && (
+          <section className="space-y-4 border-t border-line pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="font-medium">Dados da pessoa</h2>
+                <p className="text-xs text-fg-muted">O mesmo cadastro da equipe: se a empresa usa o RH, é o mesmo colaborador.</p>
+              </div>
+              {canManageTeam && (
+                <Button size="sm" variant="secondary" onClick={() => setLinking(!linking)}>
+                  {linking ? 'Fechar busca' : memberId ? 'Trocar a pessoa' : 'Vincular a uma pessoa já cadastrada'}
+                </Button>
+              )}
+            </div>
+            {linking && (
+              <TeamMemberPicker
+                autoFocus
+                excludeIds={memberId ? [memberId] : []}
+                onSelect={(m) => {
+                  setMemberId(m.id);
+                  setDraft(null);
+                  setFiles({});
+                  setLinking(false);
+                  if (!name.trim()) setName(m.name);
+                }}
+              />
+            )}
+            {member.data && member.data.links.length > 0 && (
+              <p className="flex flex-wrap items-center gap-2 text-sm text-fg-muted">
+                Também em: <TeamLinks links={member.data.links.filter((l) => l.moduleKey !== 'shared.scheduling')} renderLink={(l, badge) => <Link to={l.path!}>{badge}</Link>} />
+              </p>
+            )}
+            {member.data && !member.data.active && member.data.endedOn && (
+              <Alert tone="info">Encerramento em {formatDate(member.data.endedOn)}: o profissional fica inativo na agenda.</Alert>
+            )}
+            {member.isError ? (
+              <Alert>{member.error.message}</Alert>
+            ) : !draft ? (
+              <Spinner />
+            ) : (
+              <TeamMemberFields draft={draft} onChange={setDraft} member={member.data} files={files} onFilesChange={setFiles} readOnly={!canManageTeam} />
+            )}
+          </section>
+        )}
       </form>
     </Modal>
   );

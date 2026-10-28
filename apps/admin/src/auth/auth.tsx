@@ -1,6 +1,7 @@
 import { api, ApiError, configureApi, SessionContext, type SessionInfo } from '@all/module-sdk/web';
 import { useQueryClient } from '@tanstack/react-query';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { syncCompanyBrand } from '../layout/theme';
 
 type Status = 'loading' | 'anonymous' | 'authenticated';
 
@@ -20,6 +21,8 @@ interface AuthApi {
   login(email: string, password: string): Promise<LoginResult>;
   selectTenant(selectionToken: string, tenantId: string): Promise<void>;
   switchTenant(tenantId: string): Promise<void>;
+  /** Busca a sessão de novo (ex.: depois de mudar nome, logo ou cor da empresa). */
+  reloadSession(): Promise<void>;
   logout(): Promise<void>;
 }
 
@@ -64,6 +67,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSession(null);
     setStatus('anonymous');
     queryClient.clear();
+    // Sem sessão, as telas de login voltam a ser Palmer.
+    syncCompanyBrand(null);
   }, [queryClient]);
 
   const refresh = useCallback(async () => {
@@ -103,6 +108,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       async switchTenant(tenantId) {
         const res = await api<{ accessToken: string }>('/auth/switch-tenant', { method: 'POST', body: { tenantId } });
         await start(res.accessToken);
+      },
+      async reloadSession() {
+        setSession(await api<SessionInfo>('/me'));
       },
       async logout() {
         await api('/auth/logout', { method: 'POST' }).catch(() => {});

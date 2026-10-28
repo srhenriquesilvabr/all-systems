@@ -2,6 +2,9 @@
   "name": "@all/hr",
   "version": "0.0.0",
   "private": true,
+  "allSystems": {
+    "layer": "shared"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {

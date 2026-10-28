@@ -35,12 +35,19 @@ export const employeeInput = z.object({
   terminationDate: isoDate.nullish(),
   pixKey: z.string().trim().max(120).nullish(),
   notes: z.string().trim().max(2000).nullish(),
+  /**
+   * Pessoa da equipe já cadastrada (ex.: um profissional da agenda). Ausente: a pessoa ligada ao
+   * colaborador ou, na admissão, a que já tem este CPF; senão, uma pessoa nova. Nome, CPF,
+   * nascimento, e-mail e telefone acima são gravados nela.
+   */
+  teamMemberId: z.string().uuid().nullish(),
 });
 export type EmployeeInput = z.infer<typeof employeeInput>;
 export const employeeStatusLabel = { active: 'Ativo', on_leave: 'Afastado', terminated: 'Desligado' } as const;
 
 export interface Employee extends EmployeeInput {
   id: string;
+  teamMemberId: string;
   periods: AcquisitionPeriod[];
   vacationBalance: number;
   overdueVacation: boolean;

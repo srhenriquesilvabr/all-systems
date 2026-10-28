@@ -24,11 +24,21 @@
   /* Mais escuro que o "meta" do site (#9aa0b4) para manter 4,5:1 em texto. */
   --color-fg-subtle: #6b7186;
 
-  /* Palmer: azul (600) e névoa (50); 700 = azul escurecido para texto sobre névoa (7,5:1). */
+  /*
+   * Palmer: azul (600) e névoa (50); 700 = azul escurecido para texto sobre névoa (7,5:1).
+   * A empresa pode trocar a escala inteira pela cor dela (Dados da empresa): o admin calcula
+   * os tons em OKLCH (packages/ui/src/brand.ts) e sobrepõe estes tokens.
+   */
   --color-brand-50: #eef1ff;
+  --color-brand-100: #dce2ff;
   --color-brand-200: #c7d0ff;
+  --color-brand-300: #9aacff;
+  --color-brand-400: #748eff;
+  --color-brand-500: #4c6cff;
   --color-brand-600: #2d4bff;
   --color-brand-700: #1f35d1;
+  --color-brand-800: #1522ad;
+  --color-brand-900: #0d0e8a;
 
   /* Palmer: tinta (fundos escuros) e ciano (destaque sobre a tinta). */
   --color-ink: #0e1330;
@@ -73,9 +83,15 @@
 
   /* Azul mais claro para manter contraste sobre fundo escuro; 50 vira um azul profundo. */
   --color-brand-50: #1b2766;
+  --color-brand-100: #27368a;
   --color-brand-200: #3a4fc4;
+  --color-brand-300: #4259db;
+  --color-brand-400: #475fea;
+  --color-brand-500: #4c64f6;
   --color-brand-600: #4f68ff;
   --color-brand-700: #a8b5ff;
+  --color-brand-800: #c0cbff;
+  --color-brand-900: #d5dcff;
 
   /* Menu lateral um tom abaixo do fundo, para continuar se destacando. */
   --color-ink: #060918;

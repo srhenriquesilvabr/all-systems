@@ -11,7 +11,15 @@ export interface ModuleSummary {
 
 export interface SessionInfo {
   user: { id: string; name: string; email: string };
-  tenant: { id: string; name: string; slug: string | null };
+  tenant: {
+    id: string;
+    name: string;
+    slug: string | null;
+    /** Logo da empresa (rota pública, com versão no endereço). */
+    logoUrl: string | null;
+    /** Cor principal do painel (#rrggbb). Nulo = padrão Palmer. */
+    brandColor: string | null;
+  };
   tenants: { id: string; name: string }[];
   modules: ModuleSummary[];
   permissions: string[];

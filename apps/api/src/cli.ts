@@ -79,6 +79,7 @@ async function main() {
           ['consorcio', 'Planeje Consórcios', ['consortium', 'integration.whatsapp']],
           ['contabil', 'Contábil Exata', ['accounting']],
           ['rh', 'Indústria Modelo (RH)', ['hr']],
+          ['consultoria-rh', 'Talentos Consultoria de RH', ['hr_consulting']],
         ] as const;
         const existing = new Set((await tenancy.listTenants()).map((t) => t.name));
         for (const [slug, name, modules] of demos) {

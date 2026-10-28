@@ -1,6 +1,7 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import type { Tx } from '@all/db';
-import { and, between, eq } from 'drizzle-orm';
+import { teamMemberName, teamMembers } from '@all/core/schema';
+import { and, between, eq, getTableColumns } from 'drizzle-orm';
 import { isoAddDays, isoMonthEnd, round2, taxTables, type Payslip, type TaxTables } from '../contracts';
 import { hrEmployees, hrPayrollItems, hrPayrolls } from '../db/schema';
 
@@ -40,11 +41,29 @@ export const normalizePayslip = (r: unknown): Payslip => {
   };
 };
 
-export type EmployeeRow = typeof hrEmployees.$inferSelect;
+/** Linha de hr_employees (contrato), sem os dados pessoais. */
+export type ContractRow = typeof hrEmployees.$inferSelect;
 export type PayrollRow = typeof hrPayrolls.$inferSelect;
 
-export async function employeeOrFail(tx: Tx, id: string) {
-  const [e] = await tx.select().from(hrEmployees).where(eq(hrEmployees.id, id));
+/** Dados pessoais do colaborador, que vivem na pessoa da equipe (core). */
+export const personColumns = {
+  name: teamMemberName,
+  cpf: teamMembers.cpf,
+  birthDate: teamMembers.birthDate,
+  email: teamMembers.email,
+  phone: teamMembers.phone,
+};
+
+/** Colaborador = contrato (hr_employees) + dados pessoais (team_members). */
+export const employeesQuery = (tx: Tx) =>
+  tx
+    .select({ ...getTableColumns(hrEmployees), ...personColumns })
+    .from(hrEmployees)
+    .innerJoin(teamMembers, eq(teamMembers.id, hrEmployees.teamMemberId));
+export type EmployeeRow = Awaited<ReturnType<typeof employeesQuery>>[number];
+
+export async function employeeOrFail(tx: Tx, id: string): Promise<EmployeeRow> {
+  const [e] = await employeesQuery(tx).where(eq(hrEmployees.id, id));
   if (!e) throw new NotFoundException({ code: 'EMPLOYEE_NOT_FOUND', message: 'Colaborador não encontrado' });
   return e;
 }

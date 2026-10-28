@@ -4,7 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { appointmentStatusLabel, paymentMethods, type Appointment, type AppointmentStatus } from '../contracts';
-import { localDate, localTime, localToUtc, schedulingKey, useAvailability } from './hooks';
+import { RescheduleRoomSelect, rescheduleRoomBody, RoomForm } from './AppointmentRoom';
+import { localDate, localTime, localToUtc, schedulingKey, useAvailability, useResources } from './hooks';
 
 const methodLabel: Record<(typeof paymentMethods)[number], string> = {
   cash: 'Dinheiro',
@@ -64,7 +65,8 @@ export function AppointmentDetails({ id, onClose }: { id: string; onClose: () =>
     queryFn: () => api<Message[]>('/notifications', { query: { relatedEntity: 'appointment', relatedId: id, limit: 20 } }),
     retry: false,
   });
-  const [mode, setMode] = useState<'view' | 'cancel' | 'cancel-series' | 'reschedule' | 'pay'>('view');
+  const [mode, setMode] = useState<'view' | 'cancel' | 'cancel-series' | 'reschedule' | 'pay' | 'room'>('view');
+  const hasRooms = useResources().data?.some((r) => r.kind === 'room' && r.active) ?? false;
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: schedulingKey });
@@ -180,6 +182,11 @@ export function AppointmentDetails({ id, onClose }: { id: string; onClose: () =>
                   Remarcar
                 </Button>
               )}
+              {canWrite && open && (hasRooms || a.roomId) && (
+                <Button size="sm" variant="ghost" onClick={() => setMode('room')}>
+                  {a.roomId ? 'Trocar sala' : 'Definir sala'}
+                </Button>
+              )}
               {canWrite && open && (
                 <Button size="sm" variant="ghost" onClick={() => setMode('cancel')}>
                   Cancelar horário
@@ -204,6 +211,7 @@ export function AppointmentDetails({ id, onClose }: { id: string; onClose: () =>
             />
           )}
           {mode === 'reschedule' && <RescheduleForm appointment={a} onDone={() => { setMode('view'); refresh(); }} onBack={() => setMode('view')} />}
+          {mode === 'room' && <RoomForm appointment={a} onDone={() => { setMode('view'); refresh(); }} onBack={() => setMode('view')} />}
           {mode === 'pay' && <PaymentForm appointment={a} balance={balance} onDone={() => { setMode('view'); refresh(); }} onBack={() => setMode('view')} />}
 
           {messages.data && messages.data.length > 0 && (
@@ -276,8 +284,12 @@ function RescheduleForm({ appointment, onDone, onBack }: { appointment: Appointm
   const serviceIds = appointment.services.map((s) => s.serviceId).filter((s): s is string => !!s);
   const availability = useAvailability(date, serviceIds, appointment.resourceId);
   const slots = availability.data?.[0]?.slots ?? [];
+  // Sala no novo horário: '' = automática (mantém a atual se livre), 'none' = sem sala, ou o id.
+  const [room, setRoom] = useState('');
+  const startsAt = time ? localToUtc(date, time) : null;
   const save = useMutation({
-    mutationFn: () => api(`/scheduling/appointments/${appointment.id}/reschedule`, { method: 'POST', body: { startsAt: localToUtc(date, time).toISOString() } }),
+    mutationFn: () =>
+      api(`/scheduling/appointments/${appointment.id}/reschedule`, { method: 'POST', body: { startsAt: localToUtc(date, time).toISOString(), ...rescheduleRoomBody(room) } }),
     onSuccess: onDone,
   });
   return (
@@ -296,6 +308,7 @@ function RescheduleForm({ appointment, onDone, onBack }: { appointment: Appointm
           {!slots.length && <p className="text-fg-muted">Sem horário livre neste dia.</p>}
         </div>
       )}
+      <RescheduleRoomSelect appointment={appointment} startsAt={startsAt} value={room} onChange={setRoom} />
       <div className="flex gap-2">
         <Button size="sm" loading={save.isPending} disabled={!time} onClick={() => save.mutate()}>
           Remarcar para {time || '…'}

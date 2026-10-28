@@ -1,0 +1,22 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "src"
+  ],
+  "exclude": [
+    "src/web",
+    "src/**/*.test.ts"
+  ],
+  "references": [
+    {
+      "path": "../../../packages/module-sdk"
+    }
+  ]
+}

@@ -6,6 +6,8 @@ import { z } from 'zod';
 import {
   appointmentInput,
   appointmentPaymentInput,
+  appointmentRoomInput,
+  appointmentRoomsQuery,
   appointmentSeriesInput,
   availabilityQuery,
   cancelSeriesInput,
@@ -146,6 +148,28 @@ export class SchedulingController {
   @RequirePermission('shared.scheduling.write')
   reschedule(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(rescheduleInput)) body: z.infer<typeof rescheduleInput>) {
     return this.scheduling.reschedule(id, body);
+  }
+
+  /** Salas que servem para o atendimento e se estão livres (no horário dele ou em `startsAt`). */
+  @Get('appointments/:id/rooms')
+  @RequirePermission('shared.scheduling.read')
+  rooms(@Param('id', ParseUUIDPipe) id: string, @Query(new ZodPipe(appointmentRoomsQuery)) q: z.infer<typeof appointmentRoomsQuery>) {
+    return this.scheduling.roomOptions(id, q.startsAt);
+  }
+
+  /** Define, troca ou remove (roomId null) a sala de um atendimento já marcado. */
+  @Put('appointments/:id/room')
+  @RequirePermission('shared.scheduling.write')
+  setRoom(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(appointmentRoomInput)) body: z.infer<typeof appointmentRoomInput>) {
+    return this.scheduling.setRoom(id, body.roomId);
+  }
+
+  /** Atendimentos futuros que exigem sala e estão sem: recebem a primeira sala livre que serve. */
+  @Post('rooms/distribute')
+  @HttpCode(200)
+  @RequirePermission('shared.scheduling.write')
+  distributeRooms() {
+    return this.scheduling.distributeRooms();
   }
 
   @Post('appointments/:id/status')

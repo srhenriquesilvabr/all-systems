@@ -205,6 +205,16 @@ stateDiagram-v2
 
 Reagendar notifica de novo (`*.scheduled`). Uma entrega em aberto por ordem (índice único parcial).
 
+**Registrar depois o que já aconteceu:** a tarefa pode ser criada num dia que já passou, e sair, concluir e
+"não realizada" aceitam `occurredAt` (nunca no futuro; informado, nunca antes do dia da tarefa; sempre
+depois da saída e da última tentativa que falhou, guardada em `failed_at`; a entrega, nunca antes da
+entrada da ordem). A ordem muda de status com esse horário (histórico e `closed_at`), a taxa recebida na
+conclusão entra no financeiro naquele dia, e o cliente não é avisado de evento com mais de 30 minutos nem
+de tarefa criada/remarcada para um dia que já passou. Remarcar para um dia que já passou só vale para a
+tarefa "não realizada" (a nova tentativa, a partir do dia da que falhou); a agendada que ainda não
+aconteceu não volta para o passado — para registrar uma coleta/entrega antiga, cria-se outra com a data
+passada.
+
 **Taxa:** vira um "a receber" próprio no financeiro (`source_type = laundry_logistics`, um por tarefa,
 `settle_in_finance`), não um item da ordem. Motivos: `ServiceOrdersService.update` troca todos os
 `so_items` (e o `laundry_item_details` de cada peça cai em cascata); o serviço não tem como só acrescentar

@@ -58,6 +58,11 @@ export interface RegisterClosingJson {
 /**
  * Sessão de caixa: abertura (troco inicial) → vendas, sangrias e suprimentos → fechamento
  * conferido. Fechada, não muda mais (o serviço recusa; ver também o gatilho em docs).
+ *
+ * Abertura e fechamento podem ser de um horário passado (caixa registrado depois), mas as sessões
+ * de um mesmo caixa nunca se cruzam no tempo: a sessão em vigor num momento é a última aberta até
+ * ele, e vale até fechar ou até a abertura da seguinte. Por isso o mesmo caixa pode ter mais de uma
+ * sessão aberta (a de um dia que já passou, sendo lançada, e a de agora).
  */
 export const salesRegisterSessions = pgTable(
   'sales_register_sessions',
@@ -80,13 +85,17 @@ export const salesRegisterSessions = pgTable(
     cashDifference: money('cash_difference'),
     closing: jsonb('closing').$type<RegisterClosingJson>(),
     notes: text('notes'),
+    /** Registro no sistema (auditoria); opened_at é quando o caixa abriu de fato. */
+    createdAt: ts('created_at').notNull().defaultNow(),
   },
   (t) => [
     uniqueIndex('sales_register_sessions_number_key').on(t.tenantId, t.number),
-    // Uma sessão aberta por caixa.
-    uniqueIndex('sales_register_sessions_open_key').on(t.tenantId, t.registerId).where(sql`status = 'open'`),
     index('sales_register_sessions_opened_idx').on(t.tenantId, t.openedAt),
+    // Sessão do caixa em vigor num momento (a última aberta até ele). A não sobreposição das
+    // sessões fechadas é uma restrição de exclusão (btree_gist) no SQL manual da migração.
+    index('sales_register_sessions_register_idx').on(t.registerId, t.openedAt),
     check('sales_register_sessions_closed_chk', sql`status = 'open' or (closed_at is not null and counted_cash is not null and closing is not null)`),
+    check('sales_register_sessions_period_chk', sql`closed_at is null or closed_at >= opened_at`),
     tenantIsolation(),
   ],
 );
@@ -106,6 +115,8 @@ export const salesRegisterMoves = pgTable(
     /** Conta do outro lado (banco, cofre); sem conta, saiu/entrou como despesa/receita. */
     accountId: uuid('account_id').references(() => finAccounts.id),
     userId: uuid('user_id').references(() => users.id),
+    /** Quando o dinheiro saiu/entrou (dentro do horário da sessão); created_at é o registro. */
+    occurredAt: ts('occurred_at').notNull().defaultNow(),
     createdAt: ts('created_at').notNull().defaultNow(),
   },
   (t) => [index('sales_register_moves_session_idx').on(t.sessionId), check('sales_register_moves_amount_chk', sql`amount > 0`), tenantIsolation()],

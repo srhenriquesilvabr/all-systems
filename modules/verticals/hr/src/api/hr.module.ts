@@ -1,8 +1,9 @@
-import { AuditService, centsToDecimal, FinanceService, ModuleSettingsService, TenantDb, toCents, ZodPipe } from '@all/core';
+import { AuditService, centsToDecimal, FinanceService, ModuleSettingsService, splitName, TeamLinksRegistry, TeamService, TenantDb, toCents, ZodPipe, type TeamMemberPatch } from '@all/core';
+import { teamMemberName, teamMembers } from '@all/core/schema';
 import type { Tx } from '@all/db';
 import { ModuleRoute, RequirePermission, requestContext } from '@all/module-sdk';
-import { Body, ConflictException, Controller, Delete, Get, HttpCode, Injectable, Module, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
-import { and, asc, desc, eq, gte, inArray, lte } from 'drizzle-orm';
+import { Body, ConflictException, Controller, Delete, Get, HttpCode, Injectable, Module, NotFoundException, OnModuleInit, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
+import { and, asc, desc, eq, gte, inArray, lte, ne } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   acquisitionPeriods,
@@ -56,6 +57,8 @@ import {
   pgCode,
   tablesOf,
   variableAverage,
+  employeesQuery,
+  type ContractRow,
   type EmployeeRow,
   type PayrollRow,
 } from './shared';
@@ -65,7 +68,7 @@ type ManualInputs = Pick<PayrollItemUpdate, 'overtime50Hours' | 'overtime100Hour
 const noManual: ManualInputs = { overtime50Hours: 0, overtime100Hours: 0, commissions: 0, otherEarnings: 0, otherDeductions: 0, absences: 0, dsrLostDays: 0 };
 
 /** Dias de contrato no mês (mês cheio = 30) e o intervalo de datas correspondente. */
-function contractInMonth(e: Pick<EmployeeRow, 'admissionDate' | 'terminationDate'>, competence: string) {
+function contractInMonth(e: Pick<ContractRow, 'admissionDate' | 'terminationDate'>, competence: string) {
   const start = `${competence}-01`;
   const end = lastDayOf(competence);
   const fromDate = e.admissionDate > start ? e.admissionDate : start;
@@ -77,23 +80,37 @@ function contractInMonth(e: Pick<EmployeeRow, 'admissionDate' | 'terminationDate
 }
 
 @Injectable()
-export class HrService {
+export class HrService implements OnModuleInit {
   constructor(
     private readonly tdb: TenantDb,
     private readonly settings: ModuleSettingsService,
     private readonly finance: FinanceService,
     private readonly audit: AuditService,
+    private readonly team: TeamService,
+    private readonly teamLinks: TeamLinksRegistry,
   ) {}
 
   // ---- Colaboradores --------------------------------------------------------------------------
 
+  onModuleInit() {
+    // No cadastro da pessoa (core): "Colaborador (RH)".
+    this.teamLinks.register({
+      moduleKey: MODULE,
+      find: async (tx, ids) =>
+        (
+          await tx
+            .select({ id: hrEmployees.id, teamMemberId: hrEmployees.teamMemberId, status: hrEmployees.status })
+            .from(hrEmployees)
+            .where(inArray(hrEmployees.teamMemberId, ids))
+        ).map((e) => ({ teamMemberId: e.teamMemberId, label: 'Colaborador (RH)', path: `/rh/colaboradores/${e.id}`, active: e.status !== 'terminated' })),
+    });
+  }
+
   listEmployees(opts: { status?: string }): Promise<Employee[]> {
     return this.tdb.run(async (tx) => {
-      const rows = await tx
-        .select()
-        .from(hrEmployees)
+      const rows = await employeesQuery(tx)
         .where(opts.status ? eq(hrEmployees.status, opts.status as EmployeeRow['status']) : undefined)
-        .orderBy(asc(hrEmployees.name));
+        .orderBy(asc(teamMemberName));
       const vacations = await tx.select().from(hrVacations).where(eq(hrVacations.status, 'scheduled'));
       return rows.map((r) => toEmployee(r, vacations, null));
     });
@@ -108,30 +125,72 @@ export class HrService {
     });
   }
 
+  /**
+   * Admissão e edição. Os dados pessoais (nome, CPF, nascimento, e-mail, telefone) vão para a pessoa
+   * da equipe: a escolhida na ficha (teamMemberId), a já ligada ao colaborador ou, na admissão, quem
+   * já tem este CPF na equipe (ex.: um profissional da agenda). A admissão preenche "início na
+   * empresa" e o desligamento, "data de encerramento".
+   */
   saveEmployee(id: string | null, input: EmployeeInput) {
     const { tenantId } = requestContext.require();
     return this.tdb.run(async (tx) => {
       if (input.status === 'terminated' && !input.terminationDate) throw badRequest('TERMINATION_DATE', 'Informe a data do desligamento');
       if (input.experienceEnd && input.experienceEnd < input.admissionDate) throw badRequest('EXPERIENCE_END', 'O fim da experiência deve ser depois da admissão');
+      const { name, cpf, birthDate, email, phone, teamMemberId, ...contract } = input;
+      const current = id ? await employeeOrFail(tx, id) : null;
+
+      const memberId = teamMemberId ?? current?.teamMemberId ?? (await this.team.findByCpfInTx(tx, cpf))?.id ?? null;
+      const existing = memberId ? await this.team.findOrFailInTx(tx, memberId) : null;
+      if (memberId) {
+        const [other] = await tx
+          .select({ id: hrEmployees.id })
+          .from(hrEmployees)
+          .where(and(eq(hrEmployees.teamMemberId, memberId), id ? ne(hrEmployees.id, id) : undefined));
+        if (other) {
+          throw new ConflictException(
+            teamMemberId && teamMemberId !== current?.teamMemberId
+              ? { code: 'TEAM_MEMBER_TAKEN', message: 'Esta pessoa já é colaborador(a) cadastrado(a)' }
+              : { code: 'CPF_TAKEN', message: 'Já existe um colaborador com este CPF' },
+          );
+        }
+      }
+
+      const terminationDate = input.terminationDate ?? null;
+      const person: TeamMemberPatch = {
+        ...splitName(name),
+        cpf,
+        ...(birthDate !== undefined ? { birthDate } : {}),
+        ...(email !== undefined ? { email } : {}),
+        ...(phone !== undefined ? { phone } : {}),
+        // Início na empresa: a admissão, se a pessoa ainda não tinha (ou tinha uma data posterior).
+        ...(!existing?.startedOn || existing.startedOn > input.admissionDate ? { startedOn: input.admissionDate } : {}),
+        // Encerramento: o desligamento; desfeito o desligamento, sai a data que veio dele.
+        ...(terminationDate
+          ? { endedOn: terminationDate }
+          : current?.terminationDate && existing?.endedOn === current.terminationDate
+            ? { endedOn: null }
+            : {}),
+      };
+      const member = await this.team.saveInTx(tx, memberId, person);
+
       const values = {
-        ...input,
+        ...contract,
+        teamMemberId: member.id,
         salary: centsToDecimal(toCents(input.salary)),
-        birthDate: input.birthDate ?? null,
         experienceEnd: input.experienceEnd ?? null,
-        terminationDate: input.terminationDate ?? null,
+        terminationDate,
       };
       try {
         if (id) {
-          const [row] = await tx.update(hrEmployees).set(values).where(eq(hrEmployees.id, id)).returning({ id: hrEmployees.id });
-          if (!row) throw new NotFoundException({ code: 'EMPLOYEE_NOT_FOUND', message: 'Colaborador não encontrado' });
+          await tx.update(hrEmployees).set(values).where(eq(hrEmployees.id, id));
           await this.audit.log(tx, { action: 'hr.employee.updated', entity: 'hr_employee', entityId: id, data: { fields: Object.keys(input) } });
-          return { id };
+          return { id, teamMemberId: member.id };
         }
         const [row] = await tx.insert(hrEmployees).values({ ...values, tenantId }).returning({ id: hrEmployees.id });
-        await this.audit.log(tx, { action: 'hr.employee.created', entity: 'hr_employee', entityId: row!.id });
-        return { id: row!.id };
+        await this.audit.log(tx, { action: 'hr.employee.created', entity: 'hr_employee', entityId: row!.id, data: { teamMemberId: member.id } });
+        return { id: row!.id, teamMemberId: member.id };
       } catch (err) {
-        if (pgCode(err) === '23505') throw new ConflictException({ code: 'CPF_TAKEN', message: 'Já existe um colaborador com este CPF' });
+        if (pgCode(err) === '23505') throw new ConflictException({ code: 'TEAM_MEMBER_TAKEN', message: 'Esta pessoa já é colaborador(a) cadastrado(a)' });
         throw err;
       }
     });
@@ -430,7 +489,7 @@ export class HrService {
   }
 
   /** Holerite mensal com afastamentos, férias do mês e calendário do DSR. */
-  private async monthlyResult(tx: Tx, payroll: PayrollRow, e: EmployeeRow, daysWorked: number, salary: number, dependents: number, manual: ManualInputs): Promise<Payslip> {
+  private async monthlyResult(tx: Tx, payroll: PayrollRow, e: ContractRow, daysWorked: number, salary: number, dependents: number, manual: ManualInputs): Promise<Payslip> {
     const tables = tablesOf(payroll.tables);
     const start = `${payroll.competence}-01`;
     const end = lastDayOf(payroll.competence);
@@ -466,7 +525,7 @@ export class HrService {
     return receipts.length ? { ...slip, vacationReceipts: receipts } : slip;
   }
 
-  private async thirteenthResult(tx: Tx, installment: 1 | 2, year: number, e: EmployeeRow, salary: number, dependents: number, avos: number, average: number, tables: ReturnType<typeof tablesOf>): Promise<Payslip> {
+  private async thirteenthResult(tx: Tx, installment: 1 | 2, year: number, e: ContractRow, salary: number, dependents: number, avos: number, average: number, tables: ReturnType<typeof tablesOf>): Promise<Payslip> {
     const advance = installment === 2 ? ((await closedItem(tx, e.id, `${year}-11`, 'thirteenth_1'))?.gross ?? 0) : 0;
     return computeThirteenth(installment, { salary, variableAverage: average, avos, dependents, advance, apprentice: e.category === 'apprentice' }, tables);
   }
@@ -474,19 +533,20 @@ export class HrService {
   private async detailInTx(tx: Tx, id: string): Promise<Payroll> {
     const p = await payrollOrFail(tx, id);
     const items = await tx
-      .select({ i: hrPayrollItems, e: hrEmployees })
+      .select({ i: hrPayrollItems, e: hrEmployees, person: { name: teamMemberName, cpf: teamMembers.cpf } })
       .from(hrPayrollItems)
       .innerJoin(hrEmployees, eq(hrEmployees.id, hrPayrollItems.employeeId))
+      .innerJoin(teamMembers, eq(teamMembers.id, hrEmployees.teamMemberId))
       .where(eq(hrPayrollItems.payrollId, id))
-      .orderBy(asc(hrEmployees.name));
+      .orderBy(asc(teamMemberName));
     const terminations =
       p.type === 'termination' && items.length
         ? await tx.select({ id: hrTerminations.id, employeeId: hrTerminations.employeeId }).from(hrTerminations).where(inArray(hrTerminations.employeeId, items.map(({ e }) => e.id)))
         : [];
-    const list: PayrollItem[] = items.map(({ i, e }) => ({
+    const list: PayrollItem[] = items.map(({ i, e, person }) => ({
       ...normalizePayslip(i.result),
       id: i.id,
-      employee: { id: e.id, name: e.name, cpf: e.cpf, position: e.position, admissionDate: e.admissionDate, dependents: i.dependents, category: e.category },
+      employee: { id: e.id, name: person.name, cpf: person.cpf ?? '', position: e.position, admissionDate: e.admissionDate, dependents: i.dependents, category: e.category },
       salary: Number(i.salary),
       daysWorked: i.daysWorked,
       overtime50Hours: Number(i.overtime50Hours),
@@ -536,8 +596,9 @@ function toEmployee(r: EmployeeRow, vacations: (typeof hrVacations.$inferSelect)
   );
   return {
     id: r.id,
+    teamMemberId: r.teamMemberId,
     name: r.name,
-    cpf: r.cpf,
+    cpf: r.cpf ?? '',
     birthDate: r.birthDate,
     email: r.email,
     phone: r.phone,

@@ -6,3 +6,5 @@ export * from './files';
 export * from './widgets';
 export * from './spreadsheet';
 export * from './SpreadsheetImport';
+export * from './address';
+export * from './team';

@@ -1,13 +1,14 @@
 import { ApiError, formatMoney } from '@all/module-sdk/web';
-import { Alert, Button, Card, Field, Input, Select, Spinner, Textarea, cn } from '@all/ui';
+import { Alert, Button, Card, Field, Input, Select, Spinner, Textarea, applyBrand, brandPalette, cn, isHexColor } from '@all/ui';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { useParams } from 'react-router';
 import type { AvailabilitySlots, BookingSubjectField } from '../contracts';
 import { localToUtc, shiftDate, todayLocal } from './hooks';
 
 interface BookingInfo {
-  company: { name: string };
+  /** Marca da empresa (Dados da empresa): logo pela rota pública e cor principal. */
+  company: { name: string; logoUrl: string | null; brandColor: string | null };
   maxDays: number;
   services: { id: string; name: string; category: string | null; durationMin: number; price: number; description: string | null }[];
   professionals: { id: string; name: string; color: string; serviceIds: string[] }[];
@@ -34,6 +35,7 @@ const dayFmt = new Intl.DateTimeFormat('pt-BR', { weekday: 'short', day: '2-digi
 export function PublicBookingPage() {
   const { slug = '' } = useParams<{ slug: string }>();
   const info = useQuery({ queryKey: ['booking', slug], queryFn: () => publicApi<BookingInfo>(`/${slug}`), retry: false });
+  useCompanyColor(info.data?.company.brandColor ?? null);
   const [serviceIds, setServiceIds] = useState<string[]>([]);
   const [professionalId, setProfessionalId] = useState<string>('any');
   const [date, setDate] = useState(todayLocal());
@@ -83,7 +85,7 @@ export function PublicBookingPage() {
 
   if (book.data) {
     return (
-      <Shell company={company.name}>
+      <Shell company={company}>
         <Card className="space-y-3 p-6 text-center">
           <p className="font-display text-2xl font-medium">Horário marcado!</p>
           <p className="text-fg-muted">
@@ -112,7 +114,7 @@ export function PublicBookingPage() {
   }
 
   return (
-    <Shell company={company.name}>
+    <Shell company={company}>
       <Step n={1} title="Serviço">
         <div className="grid gap-2 sm:grid-cols-2">
           {services.map((s) => {
@@ -227,13 +229,33 @@ export function PublicBookingPage() {
   );
 }
 
-function Shell({ company, children }: { company?: string; children: ReactNode }) {
+/**
+ * Cor da empresa nesta página. Usa um <style> próprio e mais específico que o do admin: quem
+ * está logado no painel de outra empresa e abre esta página vê a cor desta.
+ */
+function useCompanyColor(color: string | null) {
+  useEffect(() => {
+    if (!color || !isHexColor(color)) return;
+    applyBrand(brandPalette(color), { id: 'brand-public', root: ':root:root:root' });
+    return () => applyBrand(null, { id: 'brand-public' });
+  }, [color]);
+}
+
+function Shell({ company, children }: { company?: BookingInfo['company']; children: ReactNode }) {
   return (
     <div className="min-h-screen bg-canvas">
-      <header className="bg-ink px-4 py-6 text-white">
-        <div className="mx-auto max-w-xl">
-          <p className="text-sm text-ink-fg-muted">Agendamento online</p>
-          <h1 className="font-display text-2xl font-medium">{company ?? ' '}</h1>
+      <header className="border-b-4 border-brand-600 bg-ink px-4 py-6 text-white">
+        <div className="mx-auto flex max-w-xl items-center gap-4">
+          {company?.logoUrl && (
+            // Fundo branco: a maioria dos logos é feita para papel.
+            <span className="flex h-16 max-w-[10rem] shrink-0 items-center justify-center rounded-xl bg-white p-2">
+              <img src={company.logoUrl} alt={`Logo de ${company.name}`} className="max-h-full max-w-full object-contain" />
+            </span>
+          )}
+          <div className="min-w-0">
+            <p className="text-sm text-ink-fg-muted">Agendamento online</p>
+            <h1 className="font-display text-2xl font-medium">{company?.name ?? ' '}</h1>
+          </div>
         </div>
       </header>
       <main className="mx-auto max-w-xl space-y-6 px-4 py-6">{children}</main>

@@ -4,6 +4,7 @@ export { TenantDb } from './db/tenant-db';
 export { AuditService, type AuditEntry } from './audit/audit.service';
 export { MailService, type MailMessage } from './mail/mail.service';
 export { TenancyService, type CreateTenantInput } from './tenancy/tenancy.service';
+export { companyLogoUrl } from './company/company.service';
 export { ModuleHooks, type ModuleLifecycle } from './tenancy/module-hooks';
 export { OutboxService, OutboxHandlers, OutboxRelay, type OutboxEvent } from './events/outbox';
 export { MessageChannels, type ChannelResult, type MessageChannel, type OutgoingMessage } from './events/channels';
@@ -19,7 +20,22 @@ export { SegmentationService, type CustomerRfm, type Segment, type SegmentSummar
 export { ZodPipe } from './common/zod.pipe';
 export { nextSequence } from './common/sequence';
 export { toCents, centsToDecimal, centsToNumber } from './common/money';
-export { addMonths, splitCents } from './common/dates';
+export { addMonths, localToday, splitCents } from './common/dates';
+export {
+  TeamService,
+  TEAM_MEMBER_ENDED,
+  splitName,
+  fullName,
+  teamMemberInput,
+  type TeamMemberEnded,
+  type TeamMemberInput,
+  type TeamMemberPatch,
+  type TeamMemberRow,
+  type TeamMemberSummary,
+  type TeamMemberDetail,
+} from './team/team.service';
+export { TeamLinksRegistry, type TeamLink, type TeamLinkProvider } from './team/team-links.registry';
+export { CepHttp, type CepAddress } from './cep/cep.controller';
 export { coreManifests, OWNER_ROLE } from './manifests';
 export * as coreSchema from './db/schema';
 export * as customersSchema from './customers/schema';

@@ -6,3 +6,4 @@ export * from './feedback';
 export * from './table';
 export * from './modal';
 export * from './qr';
+export * from './brand';

@@ -2,7 +2,8 @@
 // ortodontia), horários com repetição (séries semanais, quinzenais e mensais) e as manhãs do
 // salão preenchidas de hoje até os próximos dias úteis. Pode rodar de novo: salas e vínculos
 // existentes são mantidos, séries são reconhecidas pela observação e os horários só entram em
-// espaços livres (profissional, sala, bloqueio e expediente conferidos antes de marcar).
+// espaços livres (profissional, sala, bloqueio e expediente conferidos antes de marcar). Os
+// atendimentos futuros que exigem sala e ficaram sem recebem uma pela ação "Distribuir salas".
 import { DISTRICTS, STREETS, at, createRng, day, slugify, step } from '../lib.mjs';
 import { PAY_METHODS, round2, weighted } from '../verticals/_scheduling-beauty-group.mjs';
 
@@ -333,6 +334,22 @@ async function ensureRooms(api, log, defs) {
   log(`    salas/equipamentos: ${created} criados, ${linked} com vínculos completados, ${flagged} serviços passaram a exigir sala`);
 }
 
+/**
+ * Atendimentos futuros que exigem sala e estão sem (marcados antes de o serviço exigir sala)
+ * recebem a primeira sala livre que serve, pela ação "Distribuir salas" da agenda. Rodar de novo
+ * só pega o que ainda estiver sem sala; repete enquanto o servidor disser que ficou resto.
+ */
+async function distributeRooms(api, log) {
+  let assigned = 0;
+  let r;
+  for (let round = 0; round < 10; round++) {
+    r = await api.post('/scheduling/rooms/distribute');
+    assigned += r.assigned;
+    if (!r.remaining || !r.assigned) break;
+  }
+  log(`    ${assigned} atendimento(s) receberam sala; ${r.unassigned.length} sem sala livre no horário`);
+}
+
 // ---- Clínica de estética -----------------------------------------------------------------------
 
 const FACIAL = ['Limpeza de pele', 'Hidrafacial', 'Peeling químico', 'Microagulhamento'];
@@ -355,6 +372,7 @@ async function aesthetics(ctx) {
   if (!people.length) return log('  ✗ agenda: sem clientes');
 
   await step(log, 'salas e equipamentos', () => ensureRooms(api, log, AES_ROOMS));
+  await step(log, 'salas nos atendimentos sem sala', () => distributeRooms(api, log));
   const agenda = await step(log, 'agenda atual', async () => loadAgenda(api));
   if (!agenda) return;
   const { pros, rooms, services, appointments, board } = agenda;
@@ -482,6 +500,7 @@ async function orthodontics(ctx) {
   if (!people.length) return log('  ✗ agenda: sem pacientes');
 
   await step(log, 'consultórios e scanner', () => ensureRooms(api, log, ORTHO_ROOMS));
+  await step(log, 'consultórios nos atendimentos sem sala', () => distributeRooms(api, log));
   const agenda = await step(log, 'agenda atual', async () => loadAgenda(api));
   if (!agenda) return;
   const { pros, rooms, services, appointments, board } = agenda;

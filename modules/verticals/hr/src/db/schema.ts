@@ -1,21 +1,22 @@
-import { users } from '@all/core/schema';
+import { teamMembers, users } from '@all/core/schema';
 import { id, tenantId, tenantIsolation } from '@all/db';
 import { date, index, integer, jsonb, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 const ts = (name: string) => timestamp(name, { withTimezone: true });
 const money = (name: string) => numeric(name, { precision: 12, scale: 2 });
 
-/** Colaborador (dados pessoais e salário: acesso só com permissão de RH). */
+/**
+ * Colaborador: contrato de trabalho (cargo, salário…; acesso só com permissão de RH). Nome, CPF,
+ * nascimento, e-mail e telefone ficam na pessoa da equipe (core), a mesma do profissional da agenda.
+ */
 export const hrEmployees = pgTable(
   'hr_employees',
   {
     id: id(),
     tenantId: tenantId(),
-    name: text('name').notNull(),
-    cpf: text('cpf').notNull(),
-    birthDate: date('birth_date', { mode: 'string' }),
-    email: text('email'),
-    phone: text('phone'),
+    teamMemberId: uuid('team_member_id')
+      .notNull()
+      .references(() => teamMembers.id),
     position: text('position').notNull(),
     department: text('department'),
     admissionDate: date('admission_date', { mode: 'string' }).notNull(),
@@ -32,7 +33,7 @@ export const hrEmployees = pgTable(
     notes: text('notes'),
     createdAt: ts('created_at').notNull().defaultNow(),
   },
-  (t) => [uniqueIndex('hr_employees_cpf_key').on(t.tenantId, t.cpf), tenantIsolation()],
+  (t) => [uniqueIndex('hr_employees_team_member_key').on(t.tenantId, t.teamMemberId), tenantIsolation()],
 );
 
 /** Uma folha por competência e tipo: mensal, 13º (1ª e 2ª parcelas) e rescisões do mês. */

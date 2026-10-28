@@ -1,6 +1,7 @@
 import { RequirePermission } from '@all/module-sdk';
 import { Body, Controller, Delete, Get, Header, HttpCode, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { z } from 'zod';
+import { addressInput as address } from '../common/address';
 import { ZodPipe } from '../common/zod.pipe';
 import { CustomFieldsService } from './custom-fields.service';
 import { CustomersService } from './customers.service';
@@ -13,18 +14,6 @@ const optionalText = (max: number) =>
     .max(max)
     .nullish()
     .transform((v) => v || null);
-
-const address = z
-  .object({
-    zip: z.string().trim().max(9).optional(),
-    street: z.string().trim().max(200).optional(),
-    number: z.string().trim().max(20).optional(),
-    complement: z.string().trim().max(100).optional(),
-    district: z.string().trim().max(100).optional(),
-    city: z.string().trim().max(100).optional(),
-    state: z.string().trim().max(2).optional(),
-  })
-  .nullish();
 
 const customerBody = z.object({
   type: z.enum(['person', 'company']).default('person'),

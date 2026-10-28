@@ -145,6 +145,8 @@ export const laundryLogisticsJobs = pgTable(
     receiverName: text('receiver_name'),
     startedAt: ts('started_at'),
     completedAt: ts('completed_at'),
+    /** Última tentativa que não deu certo (fica depois de reagendar: as próximas são posteriores a ela). */
+    failedAt: ts('failed_at'),
     failReason: text('fail_reason'),
     attempts: integer('attempts').notNull().default(0),
     cancelReason: text('cancel_reason'),

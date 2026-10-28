@@ -1,4 +1,4 @@
-import { configureHttp, MailService, OutboxRelay, ScheduledJobs, TenancyService, type MailMessage } from '@all/core';
+import { CepHttp, configureHttp, MailService, OutboxRelay, ScheduledJobs, TenancyService, type MailMessage } from '@all/core';
 import { BankHttp } from '@all/banking';
 import { FipeHttp } from '@all/vehicles';
 import { WhatsAppHttp } from '@all/whatsapp';
@@ -57,7 +57,20 @@ export async function createTestApp(): Promise<TestApp> {
       code === '005340-6' ? [{ codigoFipe: code, marca: 'VW - VolksWagen', modelo: 'Gol 1.0', anoModelo: 2020, combustivel: 'Gasolina', valor: 48_500, mesReferencia: 'outubro de 2026' }] : [],
   };
 
+  // ViaCEP: 01001-000 existe, 99999-999 não existe, 12345-678 não responde (timeout).
+  const fakeCep = {
+    get: async (cep: string) => {
+      if (cep === '12345678') throw new Error('timeout');
+      if (cep === '01001000') {
+        return { status: 200, body: { cep: '01001-000', logradouro: 'Praça da Sé', complemento: 'lado ímpar', bairro: 'Sé', localidade: 'São Paulo', uf: 'SP' } };
+      }
+      return { status: 200, body: { erro: 'true' } };
+    },
+  };
+
   const moduleRef = await Test.createTestingModule({ imports: [AppModule.forRoot(testEnv)] })
+    .overrideProvider(CepHttp)
+    .useValue(fakeCep)
     .overrideProvider(MailService)
     .useValue(fakeMail)
     .overrideProvider(WhatsAppHttp)

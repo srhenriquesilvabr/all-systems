@@ -16,6 +16,8 @@ interface Entry {
   amount: number;
   accountId: string | null;
   categoryId: string | null;
+  dueDate: string;
+  paidAt: string | null;
 }
 
 describe('caixa do PDV: abertura, sangria/suprimento e fechamento', () => {
@@ -200,6 +202,78 @@ describe('caixa do PDV: abertura, sangria/suprimento e fechamento', () => {
     const { body: opened } = await s.as('post', '/sales/registers/sessions').send({ registerId: register.id, openingFloat: 0 }).expect(201);
     const { body: sale } = await sell({ registerId: register.id }).expect(201);
     expect(sale.registerSessionId).toBe(opened.id);
+  });
+
+  it('caixa de outro dia: abre, vende, movimenta e fecha no passado, sem cruzar com a sessão de agora', async () => {
+    const s = await bakery();
+    const milk = s.product('Leite integral 1 L');
+    const { body: bank } = await s.as('post', '/finance/accounts').send({ name: 'Banco', type: 'bank', initialBalance: 0 }).expect(201);
+    const { body: register } = await s.as('post', '/sales/registers').send({ name: 'Caixa 1' }).expect(201);
+    const day = plusDays(localToday(), -3);
+    const at = (hhmm: string) => new Date(`${day}T${hhmm}:00-03:00`).toISOString();
+    const open = (body: Record<string, unknown>) => s.as('post', '/sales/registers/sessions').send({ registerId: register.id, ...body });
+    const sell = (body: Record<string, unknown>) =>
+      s.as('post', '/sales').send({ registerId: register.id, items: [{ productId: milk.id, quantity: 2 }], payments: [{ method: 'cash', amount: 20 }], ...body });
+    const move = (id: string, body: Record<string, unknown>) => s.as('post', `/sales/registers/sessions/${id}/moves`).send(body);
+    const close = (id: string, body: Record<string, unknown>) => s.as('post', `/sales/registers/sessions/${id}/close`).send(body);
+
+    // O caixa está aberto agora; o de três dias atrás é lançado mesmo assim (os horários não se cruzam).
+    const { body: current } = await open({ openingFloat: 50 }).expect(201);
+    const { body: past } = await open({ openingFloat: 100, openedAt: at('08:00') }).expect(201);
+    expect(past).toMatchObject({ status: 'open', openedAt: at('08:00'), openUntil: current.openedAt });
+    expect(Date.parse(past.createdAt)).toBeGreaterThan(Date.parse(past.openedAt));
+    expect(current.openUntil).toBeNull();
+    // No PDV, o caixa aberto continua sendo o de agora.
+    const { body: overview } = await s.as('get', '/sales/registers').expect(200);
+    expect(overview.registers[0].openSession.id).toBe(current.id);
+
+    // Abertura no futuro, dentro da sessão de agora ou da que está sendo lançada: recusada.
+    expect((await open({ openingFloat: 0, openedAt: new Date(Date.now() + 3_600_000).toISOString() }).expect(400)).body.code).toBe('VALIDATION');
+    expect((await open({ openingFloat: 0, openedAt: new Date(Date.now() - 60_000).toISOString() }).expect(409)).body.code).toBe('REGISTER_ALREADY_OPEN');
+    expect((await open({ openingFloat: 0, openedAt: at('10:00') }).expect(409)).body.code).toBe('REGISTER_ALREADY_OPEN');
+
+    // Vendas: com o caixa e o horário daquele dia, entram na sessão lançada; antes da abertura, em
+    // sessão nenhuma (venda de outro dia, como antes); agora, na sessão de agora.
+    const { body: pastSale } = await sell({ soldAt: at('09:00') }).expect(201);
+    expect(pastSale).toMatchObject({ registerSessionId: past.id, soldAt: at('09:00'), change: 9.02 });
+    const { body: early } = await sell({ soldAt: at('07:00') }).expect(201);
+    expect(early.registerSessionId).toBeNull();
+    const { body: nowSale } = await sell({}).expect(201);
+    expect(nowSale.registerSessionId).toBe(current.id);
+
+    // Movimentos só dentro do horário da sessão (da abertura até a abertura da seguinte).
+    expect((await move(past.id, { kind: 'withdrawal', amount: 10, reason: 'Cedo demais', occurredAt: at('07:30') }).expect(400)).body.code).toBe('OUTSIDE_SESSION');
+    expect((await move(past.id, { kind: 'withdrawal', amount: 10, reason: 'Sem horário (agora)' }).expect(400)).body.code).toBe('OUTSIDE_SESSION');
+    const { body: afterMove } = await move(past.id, { kind: 'withdrawal', amount: 50, reason: 'Depósito no banco', accountId: bank.id, occurredAt: at('12:00') }).expect(201);
+    expect(afterMove.moves).toEqual([expect.objectContaining({ kind: 'withdrawal', amount: 50, occurredAt: at('12:00') })]);
+    const moveEntries = (await s.entries()).filter((e) => e.sourceId === afterMove.moves[0].id);
+    expect(moveEntries).toHaveLength(2);
+    expect(moveEntries.every((e) => e.dueDate === day && e.paidAt === day)).toBe(true);
+
+    // Fechamento: sem horário (agora) passaria da abertura da sessão de agora; antes do último
+    // movimento também não. No horário daquele dia, a quebra entra no financeiro naquele dia.
+    expect((await close(past.id, { counted: { cash: 58.98 } }).expect(400)).body.code).toBe('SESSION_OVERLAP');
+    expect((await close(past.id, { counted: { cash: 58.98 }, closedAt: at('11:00') }).expect(400)).body.code).toBe('CLOSE_BEFORE_LAST_EVENT');
+    expect((await close(past.id, { counted: { cash: 58.98 }, closedAt: new Date(Date.now() + 3_600_000).toISOString() }).expect(400)).body.code).toBe('VALIDATION');
+    const { body: closed } = await close(past.id, { counted: { cash: 58.98 }, closedAt: at('18:00') }).expect(201);
+    // Esperado: 100 + 10,98 − 50 = 60,98; contado 58,98 → quebra de 2,00.
+    expect(closed).toMatchObject({ status: 'closed', closedAt: at('18:00'), expectedCash: 60.98, cashDifference: -2, salesCount: 1, openUntil: null });
+    const shortage = (await s.entries()).filter((e) => e.sourceId === past.id);
+    expect(shortage).toEqual([expect.objectContaining({ kind: 'expense', amount: 2, dueDate: day, paidAt: day })]);
+
+    // Fechada, o horário dela continua ocupado; venda daquele dia depois do fechamento fica fora de sessão.
+    expect((await open({ openingFloat: 0, openedAt: at('17:00') }).expect(409)).body.code).toBe('SESSION_OVERLAP');
+    const { body: late } = await sell({ soldAt: at('19:00') }).expect(201);
+    expect(late.registerSessionId).toBeNull();
+    // Outra sessão naquele dia, depois do fechamento, pode.
+    const { body: evening } = await open({ openingFloat: 0, openedAt: at('18:30') }).expect(201);
+    await close(evening.id, { counted: { cash: 0 }, closedAt: at('20:00') }).expect(201);
+
+    // No histórico, cada sessão no dia dela.
+    const { body: thatDay } = await s.as('get', `/sales/registers/sessions?from=${day}&to=${day}`).expect(200);
+    expect(thatDay.map((h: { id: string }) => h.id)).toEqual([evening.id, past.id]);
+    const { body: today } = await s.as('get', `/sales/registers/sessions?from=${localToday()}&to=${localToday()}`).expect(200);
+    expect(today.map((h: { id: string }) => h.id)).toEqual([current.id]);
   });
 
   it('o papel Caixa abre, movimenta e fecha, mas não vê o histórico', async () => {

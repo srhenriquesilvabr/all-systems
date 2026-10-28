@@ -71,6 +71,60 @@ export const windowText = (j: Pick<LogisticsJob, 'period' | 'windowStart' | 'win
 
 export const errorText = (e: unknown) => (e instanceof ApiError ? e.message : e ? 'Erro inesperado' : '');
 
+// ---- Registrar depois: quando aconteceu --------------------------------------------------------
+
+/** Valor de um input datetime-local ('YYYY-MM-DDTHH:mm') no horário deste aparelho. */
+function toLocalInput(d: Date | string) {
+  const v = new Date(d);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${v.getFullYear()}-${p(v.getMonth() + 1)}-${p(v.getDate())}T${p(v.getHours())}:${p(v.getMinutes())}`;
+}
+
+/** Para a API: sem data (campo fechado ou vazio) é agora, e não vai no corpo. */
+const whenBody = (value: string | null) => (value ? new Date(value).toISOString() : undefined);
+
+/**
+ * Sugestão para registrar uma tarefa de um dia que já passou: o início da janela, ou logo depois
+ * do último evento (saída, tentativa que falhou). Tarefa de hoje ou futura: null (agora).
+ */
+function pastSuggestion(job: LogisticsJob, minutesAfter = 0) {
+  if (job.date >= today()) return null;
+  const events = [new Date(`${job.date}T${job.windowStart}`).getTime(), job.startedAt ? Date.parse(job.startedAt) : 0, job.failedAt ? Date.parse(job.failedAt) : 0];
+  return toLocalInput(new Date(Math.min(Math.max(...events) + minutesAfter * 60_000, Date.now())));
+}
+
+/** Menor horário aceito para o evento: o dia da tarefa, a saída e a tentativa que falhou. */
+function eventMin(job: LogisticsJob) {
+  const events = [new Date(`${job.date}T00:00`).getTime(), job.startedAt ? Date.parse(job.startedAt) : 0, job.failedAt ? Date.parse(job.failedAt) : 0];
+  return toLocalInput(new Date(Math.max(...events)));
+}
+
+/**
+ * "Quando aconteceu": vazio é agora. Como nas outras telas de lançamento retroativo, o campo só
+ * aparece quando a pessoa pede (ou já vem aberto na tarefa de um dia que já passou); o ✕ volta para agora.
+ */
+function WhenField({ label, value, onChange, min }: { label: string; value: string | null; onChange: (value: string | null) => void; min?: string }) {
+  if (value === null) {
+    return (
+      <button type="button" className="text-left text-sm text-brand-700 hover:underline" onClick={() => onChange(toLocalInput(new Date()))}>
+        Aconteceu em outro horário
+      </button>
+    );
+  }
+  return (
+    <Field label={label} hint="Vazio é agora. Registrando depois, o cliente não é avisado; a taxa recebida entra no financeiro nesta data.">
+      {(id) => (
+        <div className="flex items-center gap-2">
+          <Input id={id} type="datetime-local" className="w-auto" min={min} max={toLocalInput(new Date())} value={value} onChange={(e) => onChange(e.target.value)} />
+          <Button variant="ghost" size="sm" aria-label="Usar agora" onClick={() => onChange(null)}>
+            ✕
+          </Button>
+        </div>
+      )}
+    </Field>
+  );
+}
+
 export function JobBadges({ job }: { job: LogisticsJob }) {
   return (
     <span className="inline-flex flex-wrap gap-1">
@@ -112,7 +166,14 @@ export function ContactLinks({ job }: { job: LogisticsJob }) {
 
 /** Comprovante: quem recebeu, quando, peças coletadas, fotos. */
 export function JobProof({ job }: { job: LogisticsJob }) {
-  if (job.status === 'failed') return <p className="text-sm text-danger-700">Não realizada: {job.failReason}</p>;
+  if (job.status === 'failed') {
+    return (
+      <p className="text-sm text-danger-700">
+        Não realizada: {job.failReason}
+        {job.failedAt && <span className="text-fg-muted"> · {formatDateTime(job.failedAt)}</span>}
+      </p>
+    );
+  }
   if (job.status === 'cancelled') return <p className="text-sm text-fg-muted">Cancelada{job.cancelReason ? `: ${job.cancelReason}` : ''}</p>;
   if (job.status !== 'done') {
     return job.attempts > 0 && job.failReason ? <p className="text-sm text-fg-muted">Tentativa anterior: {job.failReason}</p> : null;
@@ -138,15 +199,18 @@ export function JobProof({ job }: { job: LogisticsJob }) {
 export function JobActions({ job, onChanged, size = 'md' }: { job: LogisticsJob; onChanged: () => void; size?: 'sm' | 'md' }) {
   const [completing, setCompleting] = useState(false);
   const [failing, setFailing] = useState(false);
+  const [starting, setStarting] = useState(false);
   const start = useMutation({ mutationFn: () => api(`/laundry/logistics/jobs/${job.id}/start`, { method: 'POST' }), onSuccess: onChanged });
   if (job.status !== 'scheduled' && job.status !== 'en_route') return null;
+  // Tarefa de um dia que já passou: a saída é registrada com o horário (janela com o campo aberto).
+  const past = job.date < today();
 
   return (
     <div className="space-y-2">
       {start.error && <Alert>{errorText(start.error)}</Alert>}
       <div className="flex flex-wrap gap-2">
         {job.status === 'scheduled' && (
-          <Button size={size} variant="secondary" className="flex-1" loading={start.isPending} onClick={() => start.mutate()}>
+          <Button size={size} variant="secondary" className="flex-1" loading={start.isPending} onClick={() => (past ? setStarting(true) : start.mutate())}>
             Sair para {job.kind === 'pickup' ? 'a coleta' : 'a entrega'}
           </Button>
         )}
@@ -177,7 +241,48 @@ export function JobActions({ job, onChanged, size = 'md' }: { job: LogisticsJob;
           }}
         />
       )}
+      {starting && (
+        <StartModal
+          job={job}
+          onClose={() => setStarting(false)}
+          onDone={() => {
+            setStarting(false);
+            onChanged();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/** Saída para a rota registrada depois (tarefa de um dia que já passou). */
+function StartModal({ job, onClose, onDone }: { job: LogisticsJob; onClose: () => void; onDone: () => void }) {
+  const [occurredAt, setOccurredAt] = useState<string | null>(pastSuggestion(job));
+  const save = useMutation({
+    mutationFn: () => api(`/laundry/logistics/jobs/${job.id}/start`, { method: 'POST', body: { occurredAt: whenBody(occurredAt) } }),
+    onSuccess: onDone,
+  });
+  return (
+    <Modal
+      open
+      title={`Saída para ${job.kind === 'pickup' ? 'a coleta' : 'a entrega'} — ${job.customer.name}`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Voltar
+          </Button>
+          <Button loading={save.isPending} onClick={() => save.mutate()}>
+            Registrar saída
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        {save.error && <Alert>{errorText(save.error)}</Alert>}
+        <WhenField label="Saiu em" value={occurredAt} onChange={setOccurredAt} min={eventMin(job)} />
+      </div>
+    </Modal>
   );
 }
 
@@ -189,6 +294,7 @@ function CompleteModal({ job, onClose, onDone }: { job: LogisticsJob; onClose: (
   const [feeReceived, setFeeReceived] = useState(false);
   const [feeMethod, setFeeMethod] = useState<FeeMethod>('cash');
   const [photos, setPhotos] = useState<{ id: string; filename: string }[]>(job.photos);
+  const [occurredAt, setOccurredAt] = useState<string | null>(pastSuggestion(job, 20));
   const upload = useMutation({
     mutationFn: (file: File) => apiUpload<{ id: string; filename: string }>(`/laundry/logistics/jobs/${job.id}/photos`, 'photo', file),
     onSuccess: (photo) => setPhotos([...photos, photo]),
@@ -202,6 +308,7 @@ function CompleteModal({ job, onClose, onDone }: { job: LogisticsJob; onClose: (
           itemsCount: job.kind === 'pickup' ? Number(itemsCount) || null : null,
           notes: notes || null,
           feeMethod: feeReceived ? feeMethod : null,
+          occurredAt: whenBody(occurredAt),
         },
       }),
     onSuccess: onDone,
@@ -276,6 +383,7 @@ function CompleteModal({ job, onClose, onDone }: { job: LogisticsJob; onClose: (
           </div>
         )}
         <Field label="Observação (opcional)">{(id) => <Textarea id={id} value={notes} onChange={(e) => setNotes(e.target.value)} />}</Field>
+        <WhenField label="Concluída em" value={occurredAt} onChange={setOccurredAt} min={eventMin(job)} />
       </div>
     </Modal>
   );
@@ -285,7 +393,11 @@ const FAIL_REASONS = ['Cliente ausente', 'Endereço não encontrado', 'Cliente p
 
 function FailModal({ job, onClose, onDone }: { job: LogisticsJob; onClose: () => void; onDone: () => void }) {
   const [reason, setReason] = useState('');
-  const save = useMutation({ mutationFn: () => api(`/laundry/logistics/jobs/${job.id}/fail`, { method: 'POST', body: { reason } }), onSuccess: onDone });
+  const [occurredAt, setOccurredAt] = useState<string | null>(pastSuggestion(job, 15));
+  const save = useMutation({
+    mutationFn: () => api(`/laundry/logistics/jobs/${job.id}/fail`, { method: 'POST', body: { reason, occurredAt: whenBody(occurredAt) } }),
+    onSuccess: onDone,
+  });
   return (
     <Modal
       open
@@ -312,6 +424,7 @@ function FailModal({ job, onClose, onDone }: { job: LogisticsJob; onClose: () =>
           ))}
         </div>
         <Field label="Motivo">{(id) => <Textarea id={id} value={reason} onChange={(e) => setReason(e.target.value)} />}</Field>
+        <WhenField label="Tentativa em" value={occurredAt} onChange={setOccurredAt} min={eventMin(job)} />
         {job.kind === 'delivery' && <p className="text-sm text-fg-muted">A ordem volta para “Pronta” e o escritório pode reagendar a entrega.</p>}
       </div>
     </Modal>
@@ -351,6 +464,9 @@ export function ScheduleModal({
   const [fee, setFee] = useState(job ? String(job.fee).replace('.', ',') : '');
   const [driverUserId, setDriverUserId] = useState(job?.driver?.id ?? '');
   const [notes, setNotes] = useState(job?.notes ?? '');
+  // Nova tarefa pode ser de um dia que já passou (registro); a tentativa que falhou, a partir do dia
+  // dela; a tarefa agendada que ainda não aconteceu, só de hoje em diante (ou mantém o dia que tem).
+  const dateMin = !job ? undefined : job.status === 'failed' && job.failedAt ? toLocalInput(job.failedAt).slice(0, 10) : job.date < today() ? job.date : today();
 
   // Endereço do cadastro do cliente, para quem está agendando agora.
   const customerDetail = useQuery({
@@ -430,7 +546,12 @@ export function ScheduleModal({
 
         <Section title="Quando">
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Dia">{(id) => <Input id={id} type="date" min={today()} value={date} onChange={(e) => setDate(e.target.value)} />}</Field>
+            <Field
+              label="Dia"
+              hint={date < today() ? (job ? 'Nova tentativa que já aconteceu: depois de remarcar, registre a saída e a conclusão com o horário.' : 'Dia que já passou: registra o que já aconteceu, sem aviso ao cliente. Depois, conclua com o horário.') : undefined}
+            >
+              {(id) => <Input id={id} type="date" min={dateMin} value={date} onChange={(e) => setDate(e.target.value)} />}
+            </Field>
             <Field label="Período">
               {(id) => (
                 <Select id={id} value={mode} onChange={(e) => setMode(e.target.value as WindowMode)}>

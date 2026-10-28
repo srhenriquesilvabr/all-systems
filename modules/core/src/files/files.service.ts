@@ -16,6 +16,12 @@ export interface UploadedFile {
 
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const DOCUMENT_TYPES = new Set([...IMAGE_TYPES, 'application/pdf']);
+const RESUME_MIME_BY_EXT: Record<string, string> = {
+  pdf: 'application/pdf',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+};
+const RESUME_TYPES = new Set(Object.values(RESUME_MIME_BY_EXT));
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 export const MAX_DOCUMENT_BYTES = 15 * 1024 * 1024;
 
@@ -57,6 +63,22 @@ export class FilesService {
     if (file.size > MAX_DOCUMENT_BYTES) {
       throw new BadRequestException({ code: 'FILE_TOO_LARGE', message: 'O arquivo pode ter no máximo 15 MB' });
     }
+    return this.store(tx, file, owner);
+  }
+
+  /** Currículo: PDF ou Word (DOC/DOCX). Alguns navegadores mandam o .doc sem tipo: vale a extensão. */
+  saveResumeInTx(tx: Tx, file: UploadedFile, owner: { entity: string; id: string }): Promise<FileDto> {
+    const ext = file.originalname.toLowerCase().match(/\.(pdf|docx?)$/)?.[1];
+    const mime = RESUME_TYPES.has(file.mimetype) ? file.mimetype : file.mimetype === 'application/octet-stream' && ext ? RESUME_MIME_BY_EXT[ext]! : null;
+    if (!mime) throw new BadRequestException({ code: 'INVALID_FILE_TYPE', message: 'Envie o currículo em PDF ou Word (DOC/DOCX)' });
+    if (file.size > MAX_DOCUMENT_BYTES) {
+      throw new BadRequestException({ code: 'FILE_TOO_LARGE', message: 'O arquivo pode ter no máximo 15 MB' });
+    }
+    return this.store(tx, { ...file, mimetype: mime }, owner);
+  }
+
+  /** Arquivo cujo tipo e tamanho quem chama já conferiu (ex.: logo da empresa, que aceita SVG checado). */
+  saveCheckedInTx(tx: Tx, file: UploadedFile, owner: { entity: string; id: string }): Promise<FileDto> {
     return this.store(tx, file, owner);
   }
 

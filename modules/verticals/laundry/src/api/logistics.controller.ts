@@ -26,11 +26,14 @@ import {
   jobUpdateInput,
   linkOrderInput,
   pickupInput,
+  startJobInput,
   type CompleteJobInput,
   type DeliveryInput,
+  type FailJobInput,
   type JobsQuery,
   type JobUpdateInput,
   type PickupInput,
+  type StartJobInput,
 } from '../contracts';
 import { LaundryLogisticsService } from './logistics.service';
 
@@ -41,6 +44,7 @@ const routeQuery = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).opti
 /**
  * Coleta e entrega. Escritório (manage): agenda, atribui, reagenda e cancela. Motorista (drive):
  * só as tarefas dele — sair para a rota, concluir (com comprovante) ou registrar que não deu.
+ * Sair, concluir e "não deu" aceitam `occurredAt` (registrar depois o que já aconteceu).
  */
 @Controller('laundry')
 @ModuleRoute('laundry')
@@ -93,8 +97,8 @@ export class LaundryLogisticsController {
   @Post('logistics/jobs/:id/start')
   @HttpCode(200)
   @RequireAnyPermission(DRIVE, MANAGE)
-  start(@Param('id', ParseUUIDPipe) id: string) {
-    return this.logistics.start(id);
+  start(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(startJobInput)) body: StartJobInput) {
+    return this.logistics.start(id, body);
   }
 
   @Post('logistics/jobs/:id/complete')
@@ -107,8 +111,8 @@ export class LaundryLogisticsController {
   @Post('logistics/jobs/:id/fail')
   @HttpCode(200)
   @RequireAnyPermission(DRIVE, MANAGE)
-  fail(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(failJobInput)) body: z.infer<typeof failJobInput>) {
-    return this.logistics.fail(id, body.reason);
+  fail(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(failJobInput)) body: FailJobInput) {
+    return this.logistics.fail(id, body);
   }
 
   @Post('logistics/jobs/:id/cancel')

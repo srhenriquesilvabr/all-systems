@@ -1,4 +1,4 @@
-import { api, ApiError } from '@all/module-sdk/web';
+import { AddressFields, api, ApiError } from '@all/module-sdk/web';
 import { Alert, Button, Card, Checkbox, Field, Input, Select, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { IdCard, MapPin, NotebookPen, Phone, type LucideIcon } from 'lucide-react';
@@ -109,17 +109,7 @@ export function CustomerForm({ customer, onCancel, onSaved }: { customer?: Custo
       </FormSection>
 
       <FormSection icon={MapPin} title="Endereço">
-        <div className="grid gap-3 sm:grid-cols-[8rem_1fr_6rem]">
-          <Input aria-label="CEP" placeholder="CEP" value={address.zip ?? ''} onChange={(e) => setAddress({ ...address, zip: e.target.value })} />
-          <Input aria-label="Rua" placeholder="Rua" value={address.street ?? ''} onChange={(e) => setAddress({ ...address, street: e.target.value })} />
-          <Input aria-label="Número" placeholder="Nº" value={address.number ?? ''} onChange={(e) => setAddress({ ...address, number: e.target.value })} />
-        </div>
-        <div className="grid gap-3 sm:grid-cols-[1fr_1fr_1fr_5rem]">
-          <Input aria-label="Complemento" placeholder="Complemento" value={address.complement ?? ''} onChange={(e) => setAddress({ ...address, complement: e.target.value })} />
-          <Input aria-label="Bairro" placeholder="Bairro" value={address.district ?? ''} onChange={(e) => setAddress({ ...address, district: e.target.value })} />
-          <Input aria-label="Cidade" placeholder="Cidade" value={address.city ?? ''} onChange={(e) => setAddress({ ...address, city: e.target.value })} />
-          <Input aria-label="UF" placeholder="UF" maxLength={2} value={address.state ?? ''} onChange={(e) => setAddress({ ...address, state: e.target.value.toUpperCase() })} />
-        </div>
+        <AddressFields value={address} onChange={setAddress} />
       </FormSection>
 
       <FormSection icon={NotebookPen} title="Outras informações">

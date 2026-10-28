@@ -176,7 +176,8 @@ export class ServiceOrdersService implements OnModuleInit {
 
   /** Para verticais: muda o status na transação delas (ex.: ordem pronta quando todas as peças ficam prontas). */
   /** `notify: false` muda o status sem avisar o cliente (ex.: entrega que falhou e volta para "Pronta"). */
-  async transitionInTx(tx: Tx, id: string, to: string, reason?: string | null, opts: { notify?: boolean } = {}): Promise<OrderDetail> {
+  /** `at`: quando aconteceu, se foi antes (entrega registrada depois); vale para o histórico e o encerramento. */
+  async transitionInTx(tx: Tx, id: string, to: string, reason?: string | null, opts: { notify?: boolean; at?: Date } = {}): Promise<OrderDetail> {
     const { tenantId, userId } = requestContext.requireTenant();
     const order = await this.findOrFail(tx, id, true);
     const workflow = this.workflowOf(order.workflow);
@@ -191,12 +192,14 @@ export class ServiceOrdersService implements OnModuleInit {
       .update(soOrders)
       .set({
         status: to,
-        closedAt: target.terminal ? new Date() : null,
+        closedAt: target.terminal ? (opts.at ?? new Date()) : null,
         cancelReason: target.cancelled ? reason : null,
       })
       .where(eq(soOrders.id, id))
       .returning();
-    await tx.insert(soStatusHistory).values({ tenantId, orderId: id, fromStatus: order.status, toStatus: to, reason: reason ?? null, userId: userId ?? null });
+    await tx
+      .insert(soStatusHistory)
+      .values({ tenantId, orderId: id, fromStatus: order.status, toStatus: to, reason: reason ?? null, userId: userId ?? null, ...(opts.at ? { createdAt: opts.at } : {}) });
 
     await this.syncReceivable(tx, updated!);
     await this.customers.addTimeline(tx, {

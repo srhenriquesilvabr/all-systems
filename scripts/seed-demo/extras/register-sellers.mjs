@@ -1,20 +1,22 @@
 // Fluxos novos de venda nas empresas de demonstração:
-// - Caixas do PDV (padaria, pet shop e lavanderia): caixas cadastrados, sessões fechadas com troco
-//   inicial, vendas na sessão, sangria/suprimento e fechamento conferido (com quebra e sobra), e uma
-//   sessão aberta com algumas vendas.
+// - Caixas do PDV (padaria, pet shop e lavanderia): caixas cadastrados, uma sessão fechada por dia
+//   útil da semana passada em cada caixa (troco inicial, vendas, sangria/suprimento e fechamento
+//   conferido com quebra e sobra, tudo nos horários do dia) e a sessão de hoje aberta com vendas.
 // - Vendedor/corretor e motivos de perda (revenda, imobiliária e consórcio): equipe de vendas,
 //   negociações em aberto distribuídas entre os vendedores, vendas e perdas do mês por vendedor
 //   (com motivos padronizados), para o "resumo do mês por vendedor" ter conteúdo.
 //
-// A API carimba a abertura e o fechamento da sessão com o horário do servidor e venda de outro dia
-// não entra em sessão nenhuma: as sessões (inclusive as fechadas) ficam todas com a data de hoje.
-// Pode rodar de novo: o que já existe é pulado.
-import { slugify, step } from '../lib.mjs';
+// As sessões da semana passada são lançadas como caixa de outro dia (abertura, vendas, movimentos e
+// fechamento com o horário em que aconteceram). Pode rodar de novo: o que já existe é pulado — a
+// sessão de um caixa num dia é achada pela data da abertura, e as sessões de hoje (inclusive as
+// fechadas de uma versão anterior deste seed, que lançava tudo hoje) contam como o "hoje".
+import { at, day, slugify, step } from '../lib.mjs';
 import { applicantFor, pickers } from '../verticals/_banking.mjs';
 
 /**
- * Caixas por empresa: `closed` sessões fechadas, alternando entre os caixas, e uma aberta no primeiro.
- * `diffs` é a diferença de dinheiro em cada fechamento (negativa = quebra, positiva = sobra);
+ * Caixas por empresa: uma sessão por dia útil da semana passada em cada caixa e a de hoje aberta no
+ * primeiro. `hours` é o horário de cada caixa (abre, fecha); `float`, o troco inicial de cada um.
+ * `diffs` é a diferença de dinheiro em cada fechamento, em sequência (negativa = quebra, positiva = sobra);
  * `expense` é uma sangria sem conta (dinheiro que sai da gaveta para uma despesa do dia);
  * `maxPrice` limita o que se vende no balcão (sem bolo inteiro nem saco de ração de 15 kg em todo cupom).
  */
@@ -22,15 +24,18 @@ const PDV = {
   'fake-padaria': {
     registers: ['Caixa 1 — Balcão', 'Caixa 2 — Café'],
     float: [150, 100],
-    closed: 6,
-    diffs: [0, -2.35, 0, 0.5, -5, 0],
+    hours: [
+      [6, 20],
+      [7, 14],
+    ],
+    diffs: [0, -2.35, 0, 0.5, -5, 0, 0, 1, 0, -0.8],
     expense: { amount: 18, reason: 'Compra de gelo e guardanapos no mercado' },
     maxPrice: 40,
   },
   'fake-petshop': {
     registers: ['Caixa da loja'],
     float: [100],
-    closed: 5,
+    hours: [[9, 19]],
     diffs: [0, -3.2, 0, 2, 0],
     expense: { amount: 25, reason: 'Pagamento do motoboy (entrega de ração)' },
     maxPrice: 160,
@@ -38,7 +43,7 @@ const PDV = {
   'fake-lavanderia': {
     registers: ['Balcão'],
     float: [80],
-    closed: 5,
+    hours: [[8, 18]],
     diffs: [0, 0, -1.5, 0, 3],
     expense: { amount: 12, reason: 'Compra de sacos plásticos para embalagem' },
     maxPrice: 60,
@@ -246,8 +251,8 @@ async function ensureCounterProducts({ api, log, tenant }) {
 
 async function seedRegisters(ctx, cfg) {
   const { api, rng, log, customers } = ctx;
-  const sessions = await api.get('/sales/registers/sessions', { limit: 100 });
-  if (sessions.length >= cfg.closed + 1) return log(`    já tem ${sessions.length} sessões de caixa`);
+  const days = lastWeekWorkdays();
+  const sessions = await api.get('/sales/registers/sessions', { from: day(days[0]), to: day(0), limit: 500 });
 
   // Caixas pelo nome (rodar de novo não duplica: o nome é único na empresa).
   let overview = await api.get('/sales/registers');
@@ -261,67 +266,121 @@ async function seedRegisters(ctx, cfg) {
 
   const counter = await counterProducts(api, cfg);
   const people = customers.filter((c) => c.type !== 'company');
-  const done = { sessions: 0, sales: 0, cancelled: 0, moves: 0, diffs: [] };
+  const done = { sessions: 0, kept: 0, skipped: 0, sales: 0, cancelled: 0, moves: 0, diffs: [] };
 
-  // Sessões fechadas, retomando de onde uma rodada interrompida parou.
-  for (let i = sessions.filter((s) => s.status === 'closed').length; i < cfg.closed; i++) {
-    const register = registers[i % registers.length];
-    let session = await openOrResume(api, register, cfg.float[i % cfg.float.length]);
-    const fresh = !session.sales.length && !session.moves.length;
-
-    if (fresh && bank && i % 2 === 0) {
-      await api.post(`/sales/registers/sessions/${session.id}/moves`, { kind: 'deposit', amount: 50, reason: 'Troco em moedas trazido do banco', accountId: bank.id });
-      done.moves++;
-    }
-    if (!session.sales.length) {
-      const sold = await sellInSession(api, rng, counter, people, register, rng.int(4, 7));
-      done.sales += sold.length;
-      // Uma venda cancelada no caixa (não entra no esperado do fechamento).
-      if (i === 1 && sold[1]) {
-        await api.post(`/sales/${sold[1].id}/cancel`, { reason: 'Produto registrado em duplicidade' });
-        done.cancelled++;
+  // Semana passada: um caixa por dia útil em cada caixa, retomando de onde uma rodada interrompida
+  // parou (sessão do dia ainda aberta). `k` numera as sessões do plano (quebra/sobra, despesa).
+  let k = 0;
+  for (const d of days) {
+    for (const [ri, register] of registers.entries()) {
+      const plan = { d, k: k++, open: cfg.hours[ri % cfg.hours.length][0], close: cfg.hours[ri % cfg.hours.length][1] };
+      let session = sessions.find((s) => s.register.id === register.id && spDay(s.openedAt) === day(d));
+      if (session?.status === 'closed') {
+        done.kept++;
+        continue;
       }
-    }
-    session = await api.get(`/sales/registers/sessions/${session.id}`);
-    if (!session.moves.some((m) => m.kind === 'withdrawal')) {
-      done.moves += await withdrawals(api, session, cfg, bank, i);
+      if (!session) {
+        // Abertura com o horário daquele dia. Se o horário cruzar outra sessão do caixa (uma aberta
+        // há mais de uma semana, por exemplo), o dia é pulado.
+        session = await api
+          .post('/sales/registers/sessions', { registerId: register.id, openingFloat: cfg.float[ri % cfg.float.length], openedAt: at(d, plan.open) })
+          .catch((err) => (err.status === 409 ? null : Promise.reject(err)));
+        if (!session) {
+          done.skipped++;
+          continue;
+        }
+      }
       session = await api.get(`/sales/registers/sessions/${session.id}`);
-    }
+      const fresh = !session.sales.length && !session.moves.length;
 
-    // Fechamento: dinheiro contado com a diferença do plano; Pix e cartões conferem com o esperado.
-    const diff = cfg.diffs[i % cfg.diffs.length];
-    const counted = { cash: cents(session.expectedCash + diff) };
-    for (const t of session.totals) if (COUNTED.includes(t.method) && t.expected > 0) counted[t.method] = t.expected;
-    const notes = diff < 0 ? 'Quebra: troco dado a mais em uma venda em dinheiro.' : diff > 0 ? 'Sobra: cliente deixou o troco.' : null;
-    const result = await api.post(`/sales/registers/sessions/${session.id}/close`, { counted, notes });
-    done.sessions++;
-    if (result.cashDifference) done.diffs.push(result.cashDifference);
+      if (fresh && bank && plan.k % 2 === 0) {
+        await api.post(`/sales/registers/sessions/${session.id}/moves`, {
+          kind: 'deposit',
+          amount: 50,
+          reason: 'Troco em moedas trazido do banco',
+          accountId: bank.id,
+          occurredAt: at(d, plan.open, 10),
+        });
+        done.moves++;
+      }
+      if (!session.sales.length) {
+        const sold = await sellInSession(api, rng, counter, people, register, saleTimes(rng, plan, rng.int(4, 7)));
+        done.sales += sold.length;
+        // Uma venda cancelada no caixa (não entra no esperado do fechamento).
+        if (plan.k === 1 && sold[1]) {
+          await api.post(`/sales/${sold[1].id}/cancel`, { reason: 'Produto registrado em duplicidade' });
+          done.cancelled++;
+        }
+      }
+      session = await api.get(`/sales/registers/sessions/${session.id}`);
+      if (!session.moves.some((m) => m.kind === 'withdrawal')) {
+        done.moves += await withdrawals(api, session, cfg, bank, plan);
+        session = await api.get(`/sales/registers/sessions/${session.id}`);
+      }
+
+      // Fechamento no fim do expediente: dinheiro contado com a diferença do plano; Pix e cartões
+      // conferem com o esperado. A quebra/sobra entra no financeiro naquele dia.
+      const diff = cfg.diffs[plan.k % cfg.diffs.length];
+      const counted = { cash: cents(session.expectedCash + diff) };
+      for (const t of session.totals) if (COUNTED.includes(t.method) && t.expected > 0) counted[t.method] = t.expected;
+      const notes = diff < 0 ? 'Quebra: troco dado a mais em uma venda em dinheiro.' : diff > 0 ? 'Sobra: cliente deixou o troco.' : null;
+      const result = await api.post(`/sales/registers/sessions/${session.id}/close`, { counted, notes, closedAt: at(d, plan.close) });
+      done.sessions++;
+      if (result.cashDifference) done.diffs.push(result.cashDifference);
+    }
   }
 
-  // A sessão de hoje fica aberta no primeiro caixa, com algumas vendas.
+  // Hoje: as sessões que já existem (inclusive as fechadas de uma rodada antiga) contam como o dia;
+  // sem nenhuma, abre a do primeiro caixa. A aberta no primeiro caixa recebe algumas vendas.
+  const todays = sessions.filter((s) => spDay(s.openedAt) === day(0));
   overview = await api.get('/sales/registers');
-  const openNow = overview.registers.find((r) => registers.some((x) => x.id === r.id) && r.openSession);
-  const today = openNow ? await api.get(`/sales/registers/sessions/${openNow.openSession.id}`) : await openOrResume(api, registers[0], cfg.float[0]);
-  if (!today.sales.length) done.sales += (await sellInSession(api, rng, counter, people, today.register, rng.int(3, 5))).length;
+  let openNow = overview.registers.find((r) => r.id === registers[0].id)?.openSession ?? null;
+  if (!openNow && !todays.length) openNow = await api.post('/sales/registers/sessions', { registerId: registers[0].id, openingFloat: cfg.float[0] });
+  if (openNow) {
+    const today = await api.get(`/sales/registers/sessions/${openNow.id}`);
+    if (!today.sales.length) done.sales += (await sellInSession(api, rng, counter, people, today.register, Array.from({ length: rng.int(3, 5) }, () => null))).length;
+  }
 
   const diffs = done.diffs.map((d) => (d > 0 ? `sobra de R$ ${brl(d)}` : `quebra de R$ ${brl(-d)}`)).join(', ');
-  log(`    ${done.sessions} sessões fechadas${diffs ? ` (${diffs})` : ''}, 1 aberta; ${done.sales} vendas (${done.cancelled} cancelada), ${done.moves} sangrias/suprimentos`);
+  log(
+    `    semana passada: ${done.sessions} sessões fechadas agora${diffs ? ` (${diffs})` : ''}, ${done.kept} já existiam${done.skipped ? `, ${done.skipped} dias pulados (horário ocupado)` : ''}; ` +
+      `hoje: ${Math.max(todays.length, openNow ? 1 : 0)} sessão(ões); ${done.sales} vendas (${done.cancelled} cancelada), ${done.moves} sangrias/suprimentos`,
+  );
 }
 
-/** Sessão aberta do caixa (de uma rodada interrompida) ou uma nova, com o troco inicial. */
-async function openOrResume(api, register, openingFloat) {
-  const overview = await api.get('/sales/registers');
-  const open = overview.registers.find((r) => r.id === register.id)?.openSession;
-  if (open) return api.get(`/sales/registers/sessions/${open.id}`);
-  return api.post('/sales/registers/sessions', { registerId: register.id, openingFloat });
+/** Dias úteis (segunda a sexta) da semana passada, como deslocamento em dias a partir de hoje. */
+function lastWeekWorkdays() {
+  const weekday = new Date(`${day(0)}T12:00:00-03:00`).getUTCDay();
+  const monday = -(weekday === 0 ? 6 : weekday - 1) - 7;
+  return [0, 1, 2, 3, 4].map((i) => monday + i);
 }
 
-/** Sangria para o banco quando a gaveta enche e, em uma sessão, uma despesa paga com o dinheiro do caixa. */
-async function withdrawals(api, session, cfg, bank, i) {
+/** Dia (YYYY-MM-DD) de um momento ISO no fuso de Brasília. */
+const spDay = (iso) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date(iso));
+
+/** Horários das vendas do dia (em ordem), entre meia hora depois de abrir e meia hora antes de fechar. */
+function saleTimes(rng, plan, n) {
+  const first = plan.open * 60 + 30;
+  const last = plan.close * 60 - 30;
+  const minutes = Array.from({ length: n }, () => rng.int(first, last)).sort((a, b) => a - b);
+  return minutes.map((m) => at(plan.d, Math.floor(m / 60), m % 60));
+}
+
+/**
+ * Sangria para o banco no fim da tarde quando a gaveta enche e, em uma sessão, uma despesa paga com
+ * o dinheiro do caixa no meio do dia (no financeiro, ambas na data do caixa).
+ */
+async function withdrawals(api, session, cfg, bank, plan) {
   let moves = 0;
   let available = session.expectedCash;
-  if (i === 2 && available >= cfg.expense.amount + 10) {
-    await api.post(`/sales/registers/sessions/${session.id}/moves`, { kind: 'withdrawal', amount: cfg.expense.amount, reason: cfg.expense.reason, accountId: null });
+  if (plan.k === 2 && available >= cfg.expense.amount + 10) {
+    await api.post(`/sales/registers/sessions/${session.id}/moves`, {
+      kind: 'withdrawal',
+      amount: cfg.expense.amount,
+      reason: cfg.expense.reason,
+      accountId: null,
+      occurredAt: at(plan.d, Math.floor((plan.open + plan.close) / 2), 15),
+    });
     available -= cfg.expense.amount;
     moves++;
   }
@@ -333,6 +392,8 @@ async function withdrawals(api, session, cfg, bank, i) {
       amount: excess,
       reason: bank ? 'Sangria para depósito no banco' : 'Sangria: dinheiro guardado no cofre',
       accountId: bank?.id ?? null,
+      // Depois da última venda (meia hora antes de fechar), antes do fechamento.
+      occurredAt: at(plan.d, plan.close - 1, 45),
     });
     moves++;
   }
@@ -349,10 +410,14 @@ async function counterProducts(api, cfg) {
   return { list, stock: new Map(list.map((p) => [p.id, p.stock])) };
 }
 
-/** Vendas no caixa, em sequência: as duas primeiras em dinheiro (com troco), as demais variadas. */
-async function sellInSession(api, rng, counter, people, register, n) {
+/**
+ * Vendas no caixa, em sequência: as duas primeiras em dinheiro (com troco), as demais variadas.
+ * `times` traz o horário de cada venda (null = agora); com horário, a venda entra na sessão do caixa
+ * daquele horário.
+ */
+async function sellInSession(api, rng, counter, people, register, times) {
   const sold = [];
-  for (let k = 0; k < n; k++) {
+  for (let k = 0; k < times.length; k++) {
     const lines = new Map();
     for (let j = rng.int(1, 3); j > 0; j--) {
       const p = rng.pick(counter.list);
@@ -380,7 +445,7 @@ async function sellInSession(api, rng, counter, people, register, n) {
       payments = [{ method, amount: due / 100 }];
     }
     const customerId = people.length && rng.chance(0.25) ? rng.pick(people).id : null;
-    sold.push(await api.post('/sales', { customerId, items, discount: 0, payments, registerId: register.id }));
+    sold.push(await api.post('/sales', { customerId, items, discount: 0, payments, registerId: register.id, ...(times[k] ? { soldAt: times[k] } : {}) }));
     for (const it of items) if (counter.stock.has(it.productId)) counter.stock.set(it.productId, counter.stock.get(it.productId) - it.quantity);
   }
   return sold;

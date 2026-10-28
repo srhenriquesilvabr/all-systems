@@ -178,6 +178,11 @@ export const openSessionInput = z.object({
   registerId: z.string().uuid(),
   /** Troco inicial: dinheiro que já está na gaveta na abertura. */
   openingFloat: money,
+  /**
+   * Quando o caixa abriu; sem data, é agora. Data e hora passadas registram o caixa de um dia que
+   * já foi (não pode cruzar o horário de outra sessão do mesmo caixa).
+   */
+  openedAt: pastMoment('A abertura do caixa não pode ser no futuro').optional(),
 });
 export type OpenSessionInput = z.infer<typeof openSessionInput>;
 
@@ -194,6 +199,8 @@ export const registerMoveInput = z.object({
    * suprimento. Sem conta, a sangria é uma despesa e o suprimento uma receita.
    */
   accountId: z.string().uuid().nullish(),
+  /** Quando o dinheiro saiu/entrou; sem data, é agora. Precisa estar dentro do horário da sessão. */
+  occurredAt: pastMoment('A data do movimento não pode ser no futuro').optional(),
 });
 export type RegisterMoveInput = z.infer<typeof registerMoveInput>;
 
@@ -211,6 +218,8 @@ export const closeSessionInput = z.object({
     other: money.nullish(),
   }),
   notes: z.string().trim().max(500).nullish(),
+  /** Quando o caixa fechou; sem data, é agora. Não pode ser antes da última venda ou movimento da sessão. */
+  closedAt: pastMoment('O fechamento do caixa não pode ser no futuro').optional(),
 });
 export type CloseSessionInput = z.infer<typeof closeSessionInput>;
 
@@ -244,6 +253,8 @@ export interface RegisterSessionSummary {
   countedCash: number | null;
   cashDifference: number | null;
   notes: string | null;
+  /** Quando a sessão foi lançada no sistema (difere da abertura no caixa registrado depois). */
+  createdAt: string;
 }
 
 export interface RegisterMove {
@@ -253,10 +264,17 @@ export interface RegisterMove {
   reason: string;
   accountName: string | null;
   userName: string | null;
+  /** Quando o dinheiro saiu/entrou (pode ser anterior ao registro). */
+  occurredAt: string;
   createdAt: string;
 }
 
 export interface RegisterSession extends RegisterSessionSummary {
+  /**
+   * Sessão aberta de outro dia, com outra sessão do mesmo caixa depois dela (caixa lançado depois):
+   * vendas, movimentos e o fechamento precisam ser até a abertura da seguinte (este momento).
+   */
+  openUntil: string | null;
   /** Por forma de pagamento; na sessão aberta, `counted` e `difference` são null. */
   totals: RegisterSessionTotal[];
   moves: RegisterMove[];

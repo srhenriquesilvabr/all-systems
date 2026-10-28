@@ -17,6 +17,64 @@ import { brl, registersKey, salesKey, useRegisterSession } from './hooks';
 const cents = (n: number) => Math.round(n * 100);
 const errorText = (err: unknown, fallback: string) => (err instanceof ApiError ? err.message : fallback);
 
+// ---- Data e hora de um caixa lançado depois ----------------------------------------------------
+
+/** Valor de um input datetime-local ('YYYY-MM-DDTHH:mm') no horário deste computador. */
+export function toLocalInput(d: Date | string) {
+  const v = new Date(d);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${v.getFullYear()}-${p(v.getMonth() + 1)}-${p(v.getDate())}T${p(v.getHours())}:${p(v.getMinutes())}`;
+}
+
+/** Para a API: sem data (campo fechado ou vazio) é agora, e não vai no corpo. */
+export const whenBody = (value: string | null) => (value ? new Date(value).toISOString() : undefined);
+
+/** Lançamento retroativo: mais de uma hora entre quando aconteceu e o registro no sistema. */
+export const backdated = (at: string, createdAt: string) => Date.parse(createdAt) - Date.parse(at) > 3_600_000;
+
+/**
+ * "Quando": vazio é agora. Como nas outras telas de lançamento retroativo, o campo só aparece
+ * quando a pessoa pede (caixa de outro dia, movimento esquecido); o ✕ volta para "agora".
+ */
+export function WhenField({
+  label,
+  action,
+  hint,
+  value,
+  onChange,
+  min,
+  max,
+}: {
+  label: string;
+  /** Texto do link que abre o campo. */
+  action: string;
+  hint?: string;
+  value: string | null;
+  onChange: (value: string | null) => void;
+  min?: string;
+  /** Sem limite, até agora. */
+  max?: string;
+}) {
+  if (value === null) {
+    return (
+      <button type="button" className="text-left text-sm text-brand-700 hover:underline" onClick={() => onChange(toLocalInput(new Date()))}>
+        {action}
+      </button>
+    );
+  }
+  return (
+    <Field label={label} hint={hint}>
+      {(id) => (
+        <div className="flex items-center gap-2">
+          <Input id={id} type="datetime-local" className="w-auto" min={min} max={max ?? toLocalInput(new Date())} value={value} onChange={(e) => onChange(e.target.value)} />
+          <Button variant="ghost" size="sm" aria-label="Usar agora" onClick={() => onChange(null)}>
+            ✕
+          </Button>
+        </div>
+      )}
+    </Field>
+  );
+}
 
 /** "Sobra R$ 2,00" / "Quebra R$ 5,00" / "Sem diferença". */
 export function DifferenceBadge({ value }: { value: number | null }) {
@@ -49,6 +107,7 @@ export function OpenRegisterForm({
   const [creating, setCreating] = useState(active.length === 0);
   const [name, setName] = useState(active.length === 0 ? 'Caixa 1' : '');
   const [float, setFloat] = useState('');
+  const [openedAt, setOpenedAt] = useState<string | null>(null);
 
   const create = useMutation({
     mutationFn: () => api<CashRegister>('/sales/registers', { method: 'POST', body: { name } }),
@@ -60,9 +119,11 @@ export function OpenRegisterForm({
     },
   });
   const open = useMutation({
-    mutationFn: () => api<RegisterSession>('/sales/registers/sessions', { method: 'POST', body: { registerId: selected!.id, openingFloat: cents(floatValue) / 100 } }),
+    mutationFn: () =>
+      api<RegisterSession>('/sales/registers/sessions', { method: 'POST', body: { registerId: selected!.id, openingFloat: cents(floatValue) / 100, openedAt: whenBody(openedAt) } }),
     onSuccess: async () => {
       setFloat('');
+      setOpenedAt(null);
       await queryClient.invalidateQueries({ queryKey: registersKey });
       onOpened?.();
     },
@@ -135,6 +196,13 @@ export function OpenRegisterForm({
               <Field label="Troco inicial" hint="Dinheiro que está na gaveta agora.">
                 {(id) => <Input id={id} inputMode="decimal" className="w-40 text-right tabular-nums" placeholder="0,00" value={float} onChange={(e) => setFloat(e.target.value)} autoFocus />}
               </Field>
+              <WhenField
+                label="Data e hora da abertura"
+                action="Abriu em outro horário"
+                hint="Vazio é agora. Horário passado registra um caixa que abriu antes: as vendas e os movimentos daquele horário entram nele."
+                value={openedAt}
+                onChange={setOpenedAt}
+              />
               <Button type="submit" loading={open.isPending} disabled={!floatValid}>
                 Abrir caixa
               </Button>
@@ -205,6 +273,37 @@ export function SessionPanel({
   );
 }
 
+/**
+ * Sangria, suprimento e fechamento de uma sessão aberta (botões e janelas). Usado no painel do PDV
+ * e na página da sessão, onde também se completa o caixa de outro dia.
+ */
+export function SessionActions({ session, overview, onClosed }: { session: RegisterSession; overview: RegistersOverview; onClosed: (s: RegisterSession) => void }) {
+  const [moving, setMoving] = useState<RegisterMoveKind | null>(null);
+  const [closing, setClosing] = useState(false);
+  return (
+    <>
+      <Button variant="secondary" onClick={() => setMoving('withdrawal')}>
+        Sangria
+      </Button>
+      <Button variant="secondary" onClick={() => setMoving('deposit')}>
+        Suprimento
+      </Button>
+      <Button onClick={() => setClosing(true)}>Fechar caixa</Button>
+      {moving && <MoveModal session={session} kind={moving} overview={overview} onClose={() => setMoving(null)} />}
+      {closing && (
+        <CloseModal
+          session={session}
+          onClose={() => setClosing(false)}
+          onClosed={(closed) => {
+            setClosing(false);
+            onClosed(closed);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
 /** Resumo, totais por forma, sangrias/suprimentos. Usado no PDV e no histórico. */
 export function SessionDetails({ session: s }: { session: RegisterSession }) {
   return (
@@ -214,6 +313,7 @@ export function SessionDetails({ session: s }: { session: RegisterSession }) {
         {s.openedByName && ` por ${s.openedByName}`}
         {s.closedAt && ` · fechado em ${formatDateTime(s.closedAt)}`}
         {s.closedByName && ` por ${s.closedByName}`}
+        {backdated(s.openedAt, s.createdAt) && ` · lançado em ${formatDateTime(s.createdAt)}`}
       </p>
       <dl className="grid gap-3 sm:grid-cols-4">
         <Info label="Troco inicial" value={brl(s.openingFloat)} />
@@ -253,7 +353,8 @@ export function SessionDetails({ session: s }: { session: RegisterSession }) {
                   <span className="font-medium">{registerMoveLabel[m.kind]}</span> · {m.reason}
                   <span className="text-fg-muted">
                     {' '}
-                    · {formatDateTime(m.createdAt)}
+                    · {formatDateTime(m.occurredAt)}
+                    {backdated(m.occurredAt, m.createdAt) && ` (lançado em ${formatDateTime(m.createdAt)})`}
                     {m.userName && ` · ${m.userName}`}
                     {m.accountName && ` · ${m.kind === 'withdrawal' ? 'para' : 'de'} ${m.accountName}`}
                   </span>
@@ -290,11 +391,13 @@ function MoveModal({ session, kind, overview, onClose }: { session: RegisterSess
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
   const [accountId, setAccountId] = useState('');
+  // Caixa de outro dia sendo lançado: o movimento é daquele dia (o campo já vem aberto, na hora da abertura).
+  const [occurredAt, setOccurredAt] = useState<string | null>(session.openUntil ? toLocalInput(session.openedAt) : null);
   const others = overview.accounts.filter((a) => a.id !== overview.cashAccountId);
   const value = parseMoney(amount);
   const valid = value > 0 && reason.trim().length >= 3;
   const save = useMutation({
-    mutationFn: () => api<RegisterSession>(`/sales/registers/sessions/${session.id}/moves`, { method: 'POST', body: { kind, amount: cents(value) / 100, reason, accountId: accountId || null } }),
+    mutationFn: () => api<RegisterSession>(`/sales/registers/sessions/${session.id}/moves`, { method: 'POST', body: { kind, amount: cents(value) / 100, reason, accountId: accountId || null, occurredAt: whenBody(occurredAt) } }),
     onSuccess: (updated) => {
       queryClient.setQueryData([...registersKey, 'session', session.id], updated);
       queryClient.invalidateQueries({ queryKey: registersKey });
@@ -346,6 +449,15 @@ function MoveModal({ session, kind, overview, onClose }: { session: RegisterSess
             </Select>
           )}
         </Field>
+        <WhenField
+          label={withdrawal ? 'Data e hora da sangria' : 'Data e hora do suprimento'}
+          action="Aconteceu em outro horário"
+          hint={`${session.openUntil ? `Entre ${formatDateTime(session.openedAt)} e ${formatDateTime(session.openUntil)}` : `Vazio é agora. Depois da abertura do caixa (${formatDateTime(session.openedAt)})`}; o financeiro usa esta data.`}
+          value={occurredAt}
+          onChange={setOccurredAt}
+          min={toLocalInput(session.openedAt)}
+          max={session.openUntil ? toLocalInput(session.openUntil) : undefined}
+        />
       </form>
     </Modal>
   );
@@ -358,6 +470,9 @@ function CloseModal({ session, onClose, onClosed }: { session: RegisterSession; 
   const methods = countedMethods.filter((m) => m === 'cash' || expected.has(m));
   const [values, setValues] = useState<Partial<Record<CountedMethod, string>>>({});
   const [notes, setNotes] = useState('');
+  // Caixa de outro dia sendo lançado: o fechamento é daquele dia (o campo já vem aberto, na última venda ou movimento).
+  const lastEvent = [session.openedAt, ...session.sales.map((x) => x.soldAt), ...session.moves.map((m) => m.occurredAt)].reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a));
+  const [closedAt, setClosedAt] = useState<string | null>(session.openUntil ? toLocalInput(lastEvent) : null);
   const parsed = (m: CountedMethod) => {
     const raw = values[m]?.trim();
     return raw ? cents(parseMoney(raw)) / 100 : null;
@@ -371,7 +486,7 @@ function CloseModal({ session, onClose, onClosed }: { session: RegisterSession; 
     mutationFn: () =>
       api<RegisterSession>(`/sales/registers/sessions/${session.id}/close`, {
         method: 'POST',
-        body: { counted: Object.fromEntries(methods.map((m) => [m, parsed(m)])), notes: notes.trim() || null },
+        body: { counted: Object.fromEntries(methods.map((m) => [m, parsed(m)])), notes: notes.trim() || null, closedAt: whenBody(closedAt) },
       }),
     onSuccess: (closed) => {
       queryClient.setQueryData([...registersKey, 'session', session.id], closed);
@@ -442,6 +557,15 @@ function CloseModal({ session, onClose, onClosed }: { session: RegisterSession; 
         </Table>
         {expected.has('on_account') && <p className="text-sm text-fg-muted">Fiado (a receber): {brl(expected.get('on_account')!)}, não entra na conferência.</p>}
         <Field label="Observações">{(id) => <Textarea id={id} value={notes} maxLength={500} onChange={(e) => setNotes(e.target.value)} />}</Field>
+        <WhenField
+          label="Data e hora do fechamento"
+          action="Fechou em outro horário"
+          hint={`${session.openUntil ? `Até ${formatDateTime(session.openUntil)}, quando abriu a sessão seguinte deste caixa` : 'Vazio é agora'}. Não pode ser antes da última venda ou movimento (${formatDateTime(lastEvent)}); quebra ou sobra entram no financeiro nesta data.`}
+          value={closedAt}
+          onChange={setClosedAt}
+          min={toLocalInput(lastEvent)}
+          max={session.openUntil ? toLocalInput(session.openUntil) : undefined}
+        />
       </form>
     </Modal>
   );
@@ -491,7 +615,7 @@ export function ClosingReport({ session: s }: { session: RegisterSession }) {
           {line}
           {s.moves.map((m) => (
             <div key={m.id}>
-              {row(`${registerMoveLabel[m.kind]} ${new Date(m.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`, `${m.kind === 'withdrawal' ? '-' : ''}${brl(m.amount)}`)}
+              {row(`${registerMoveLabel[m.kind]} ${new Date(m.occurredAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`, `${m.kind === 'withdrawal' ? '-' : ''}${brl(m.amount)}`)}
               <div>  {m.reason}</div>
             </div>
           ))}

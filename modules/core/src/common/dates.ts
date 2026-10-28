@@ -12,3 +12,6 @@ export function splitCents(totalCents: number, parts: number): number[] {
   const base = Math.floor(totalCents / parts);
   return Array.from({ length: parts }, (_, i) => (i === 0 ? base + (totalCents - base * parts) : base));
 }
+
+/** Data de hoje no fuso da empresa (São Paulo), em ISO (AAAA-MM-DD). */
+export const localToday = (now = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(now);

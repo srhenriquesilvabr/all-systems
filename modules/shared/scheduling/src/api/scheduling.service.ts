@@ -9,30 +9,39 @@ import {
   OutboxHandlers,
   OutboxService,
   ScheduledJobs,
+  splitName,
+  TEAM_MEMBER_ENDED,
+  TeamLinksRegistry,
+  TeamService,
   TenantDb,
   coreSchema,
+  localToday,
   toCents,
+  type TeamMemberEnded,
 } from '@all/core';
 import { customers } from '@all/core/schema';
 import type { Tx } from '@all/db';
 import { requestContext } from '@all/module-sdk';
 import { NotificationsService } from '@all/notifications';
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { and, asc, eq, gte, inArray, isNull, lt, ne, notInArray, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { randomUUID } from 'node:crypto';
 import {
   appointmentStatusLabel,
+  closedStatuses,
   MAX_OCCURRENCES,
   statusTransitions,
   type Appointment,
   type AppointmentInput,
+  type AppointmentRoomOptions,
   type AppointmentSeriesInput,
   type AppointmentStatus,
   type AvailabilitySlots,
   type BookingSubjectField,
   type Resource,
   type ResourceInput,
+  type RoomDistributionResult,
   type SchedulingSettings,
   type SeriesResult,
   type Service,
@@ -94,6 +103,9 @@ export interface BookingSubjectProvider {
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const badRequest = (code: string, message: string) => new BadRequestException({ code, message });
 const roomTaken = (message = 'Esta sala/equipamento já está ocupado neste horário') => new ConflictException({ code: 'ROOM_TAKEN', message });
+const roomRequired = () => badRequest('ROOM_REQUIRED', 'Um dos serviços deste atendimento exige sala/equipamento: escolha outra sala em vez de deixar sem');
+/** Quantos atendimentos "distribuir salas" grava por vez (o resto fica para a próxima rodada). */
+const MAX_ROOM_DISTRIBUTION = 500;
 
 type AppointmentRow = typeof schAppointments.$inferSelect;
 
@@ -114,12 +126,26 @@ export class SchedulingService implements OnModuleInit {
     private readonly handlers: OutboxHandlers,
     private readonly outbox: OutboxService,
     private readonly customerData: CustomerDataRegistry,
+    private readonly team: TeamService,
+    private readonly teamLinks: TeamLinksRegistry,
   ) {}
 
   onModuleInit() {
     this.jobs.every('scheduling.reminders', 5 * 60_000, () => this.sendReminders());
     // Resposta do cliente pelo botão do WhatsApp ("Confirmar"/"Cancelar" do lembrete).
     this.handlers.on<{ payload?: string }>('integration.whatsapp.reply', 'scheduling.whatsapp-reply', (e) => this.handleReply(e.payload.payload));
+    // Pessoa da equipe encerrada (rescisão no RH ou data de encerramento no cadastro).
+    this.handlers.on<TeamMemberEnded>(TEAM_MEMBER_ENDED, 'scheduling.team-member-ended', (e) => this.deactivateEnded(e.payload.teamMemberId));
+    this.teamLinks.register({
+      moduleKey: MODULE,
+      find: async (tx, ids) =>
+        (
+          await tx
+            .select({ teamMemberId: schResources.teamMemberId, active: schResources.active })
+            .from(schResources)
+            .where(inArray(schResources.teamMemberId, ids))
+        ).map((r) => ({ teamMemberId: r.teamMemberId!, label: 'Profissional da agenda', path: '/agenda/profissionais', active: r.active })),
+    });
     this.customerData.register({
       moduleKey: MODULE,
       export: async (tx, customerId) => {
@@ -146,6 +172,7 @@ export class SchedulingService implements OnModuleInit {
         name: r.name,
         kind: r.kind,
         userId: r.userId,
+        teamMemberId: r.teamMemberId,
         color: r.color,
         active: r.active,
         serviceIds: links.filter((l) => l.resourceId === r.id).map((l) => l.serviceId),
@@ -154,16 +181,45 @@ export class SchedulingService implements OnModuleInit {
     });
   }
 
+  /**
+   * Profissional = pessoa da equipe: vincula a uma pessoa já cadastrada (teamMemberId) ou cria uma
+   * com o nome do profissional; `person` grava os dados pessoais junto (exige core.team.manage).
+   * Pessoa com encerramento já passado deixa o profissional inativo.
+   */
   saveResource(id: string | null, input: ResourceInput) {
-    const { tenantId } = requestContext.require();
+    const ctx = requestContext.require();
+    const { tenantId } = ctx;
     return this.tdb.run(async (tx) => {
-      const { serviceIds, ...data } = input;
+      const { serviceIds, person, teamMemberId, ...data } = input;
+      const current = id ? await this.resourceOrFail(tx, id) : null;
+      let memberId: string | null = null;
+      if (data.kind === 'professional') {
+        if (person && !ctx.permissions?.has('core.team.manage')) {
+          throw new ForbiddenException({ code: 'MISSING_PERMISSION', message: 'Você não tem permissão para editar os dados pessoais da equipe', missing: ['core.team.manage'] });
+        }
+        const patch = person ? this.team.parse(person, true) : {};
+        memberId = teamMemberId !== undefined ? teamMemberId : (current?.teamMemberId ?? null);
+        let member;
+        if (memberId) {
+          member = await this.team.findOrFailInTx(tx, memberId);
+          const [other] = await tx
+            .select({ id: schResources.id })
+            .from(schResources)
+            .where(and(eq(schResources.teamMemberId, memberId), id ? ne(schResources.id, id) : undefined));
+          if (other) throw new ConflictException({ code: 'TEAM_MEMBER_TAKEN', message: 'Esta pessoa já é outro profissional da agenda' });
+          if (person) member = await this.team.saveInTx(tx, memberId, patch);
+        } else {
+          member = await this.team.saveInTx(tx, null, { ...splitName(data.name), ...(data.userId ? { userId: data.userId } : {}), ...patch });
+        }
+        memberId = member.id;
+        if (member.endedOn && member.endedOn < localToday()) data.active = false;
+      }
+      const values = { ...data, teamMemberId: memberId };
       let resourceId = id;
       if (id) {
-        const [row] = await tx.update(schResources).set(data).where(eq(schResources.id, id)).returning({ id: schResources.id });
-        if (!row) throw new NotFoundException({ code: 'RESOURCE_NOT_FOUND', message: 'Profissional não encontrado' });
+        await tx.update(schResources).set(values).where(eq(schResources.id, id));
       } else {
-        resourceId = (await tx.insert(schResources).values({ ...data, tenantId }).returning({ id: schResources.id }))[0]!.id;
+        resourceId = (await tx.insert(schResources).values({ ...values, tenantId }).returning({ id: schResources.id }))[0]!.id;
         // Expediente inicial comum (seg–sex 9h–18h com almoço, sábado 9h–13h); ajustável depois.
         await tx.insert(schWorkingHours).values(defaultHours().map((h) => ({ ...h, tenantId, resourceId: resourceId! })));
       }
@@ -171,8 +227,31 @@ export class SchedulingService implements OnModuleInit {
         await tx.delete(schServiceResources).where(eq(schServiceResources.resourceId, resourceId!));
         if (serviceIds.length) await tx.insert(schServiceResources).values(serviceIds.map((serviceId) => ({ tenantId, serviceId, resourceId: resourceId! })));
       }
-      await this.audit.log(tx, { action: id ? 'scheduling.resource.updated' : 'scheduling.resource.created', entity: 'sch_resource', entityId: resourceId!, data: input });
-      return { id: resourceId! };
+      // Os dados pessoais ficam na auditoria do cadastro da pessoa (core), não aqui.
+      await this.audit.log(tx, {
+        action: id ? 'scheduling.resource.updated' : 'scheduling.resource.created',
+        entity: 'sch_resource',
+        entityId: resourceId!,
+        data: { ...values, serviceIds, personFields: person ? Object.keys(person) : undefined },
+      });
+      return { id: resourceId!, teamMemberId: memberId };
+    });
+  }
+
+  /** Evento do core: a pessoa saiu da empresa. O profissional dela sai da agenda (fica inativo). */
+  private deactivateEnded(teamMemberId: string) {
+    return this.tdb.run(async (tx) => {
+      const member = await this.team.findInTx(tx, teamMemberId);
+      // Entrega repetida ou data alterada depois: só desativa se o encerramento ainda está no passado.
+      if (!member?.endedOn || member.endedOn >= localToday()) return;
+      const rows = await tx
+        .update(schResources)
+        .set({ active: false })
+        .where(and(eq(schResources.teamMemberId, teamMemberId), eq(schResources.active, true)))
+        .returning({ id: schResources.id });
+      for (const r of rows) {
+        await this.audit.log(tx, { action: 'scheduling.resource.deactivated', entity: 'sch_resource', entityId: r.id, data: { reason: 'team_member_ended', endedOn: member.endedOn } });
+      }
     });
   }
 
@@ -500,31 +579,151 @@ export class SchedulingService implements OnModuleInit {
     return lines;
   }
 
-  reschedule(id: string, input: { startsAt: Date; resourceId?: string }) {
+  reschedule(id: string, input: { startsAt: Date; resourceId?: string; roomId?: string | null }) {
     return this.tdb.run(async (tx) => {
-      const current = await this.findOrFail(tx, id);
+      const current = await this.findOrFail(tx, id, true);
       if (current.status !== 'scheduled' && current.status !== 'confirmed') {
         throw badRequest('APPOINTMENT_STARTED', 'Só horários ainda não iniciados podem ser remarcados');
       }
+      const svc = await this.appointmentServiceInfo(tx, id);
       const resourceId = input.resourceId ?? current.resourceId;
       if (resourceId !== current.resourceId) {
-        const serviceIds = (await tx.select().from(schAppointmentServices).where(eq(schAppointmentServices.appointmentId, id)))
-          .map((s) => s.serviceId)
-          .filter((s): s is string => !!s);
-        if (!(await this.eligibleResources(tx, serviceIds, resourceId)).length) throw badRequest('RESOURCE_NOT_ELIGIBLE', 'Este profissional não faz todos os serviços do atendimento');
+        if (!(await this.eligibleResources(tx, svc.serviceIds, resourceId)).length) throw badRequest('RESOURCE_NOT_ELIGIBLE', 'Este profissional não faz todos os serviços do atendimento');
       }
       const duration = current.endsAt.getTime() - current.startsAt.getTime();
-      // A sala vai junto: precisa estar livre no novo horário.
-      if (current.roomId && (await this.busyIntervals(tx, [current.roomId], input.startsAt, new Date(input.startsAt.getTime() + duration), id)).length) throw roomTaken();
+      const endsAt = new Date(input.startsAt.getTime() + duration);
+      const roomId = await this.rescheduleRoom(tx, current, svc, input.roomId, input.startsAt, endsAt);
       await this.guardOverlap(() =>
         tx
           .update(schAppointments)
-          .set({ startsAt: input.startsAt, endsAt: new Date(input.startsAt.getTime() + duration), resourceId, reminderSentAt: null, confirmedAt: null, status: 'scheduled' })
+          .set({ startsAt: input.startsAt, endsAt, resourceId, roomId, reminderSentAt: null, confirmedAt: null, status: 'scheduled' })
           .where(eq(schAppointments.id, id)),
       );
       await this.notify(tx, id, 'shared.scheduling.rescheduled');
-      await this.audit.log(tx, { action: 'appointment.rescheduled', entity: 'appointment', entityId: id, data: { from: current.startsAt, to: input.startsAt } });
+      await this.audit.log(tx, {
+        action: 'appointment.rescheduled',
+        entity: 'appointment',
+        entityId: id,
+        data: { from: current.startsAt, to: input.startsAt, ...(roomId !== current.roomId ? { roomFrom: current.roomId, roomTo: roomId } : {}) },
+      });
       return this.detailInTx(tx, id);
+    });
+  }
+
+  // ---- Sala de atendimentos já marcados ----------------------------------------------------------
+
+  /** Salas que servem para os serviços do atendimento e se estão livres (no horário dele ou em `startsAt`). */
+  roomOptions(id: string, startsAt?: Date): Promise<AppointmentRoomOptions> {
+    return this.tdb.run(async (tx) => {
+      const current = await this.findOrFail(tx, id);
+      const svc = await this.appointmentServiceInfo(tx, id);
+      const start = startsAt ?? current.startsAt;
+      const end = new Date(start.getTime() + current.endsAt.getTime() - current.startsAt.getTime());
+      const rooms = await this.eligibleResources(tx, svc.serviceIds, undefined, 'room');
+      const busy = await this.busyIntervals(tx, rooms.map((r) => r.id), start, end, id);
+      return {
+        requiresRoom: svc.requiresRoom,
+        roomId: current.roomId,
+        rooms: rooms.map((r) => ({ id: r.id, name: r.name, free: !busy.some((b) => b.resourceId === r.id) })),
+      };
+    });
+  }
+
+  /**
+   * Define, troca (roomId) ou remove (null) a sala de um atendimento, no mesmo horário. A sala
+   * precisa servir para os serviços e estar livre; serviço que exige sala não fica sem.
+   */
+  setRoom(id: string, roomId: string | null) {
+    return this.tdb.run(async (tx) => {
+      const current = await this.findOrFail(tx, id, true);
+      if (closedStatuses.includes(current.status)) throw badRequest('APPOINTMENT_CLOSED', 'Atendimento cancelado, concluído ou com falta não muda de sala');
+      if (current.roomId === roomId) return this.detailInTx(tx, id);
+      const svc = await this.appointmentServiceInfo(tx, id);
+      if (!roomId && svc.requiresRoom) throw roomRequired();
+      if (roomId) await this.checkRoom(tx, svc.serviceIds, roomId, current.startsAt, current.endsAt, id);
+      await this.guardOverlap(() => tx.update(schAppointments).set({ roomId }).where(eq(schAppointments.id, id)));
+      await this.audit.log(tx, { action: 'appointment.room_changed', entity: 'appointment', entityId: id, data: { from: current.roomId, to: roomId } });
+      return this.detailInTx(tx, id);
+    });
+  }
+
+  /**
+   * Atendimentos futuros (a partir de agora) que exigem sala e estão sem: cada um, em ordem de
+   * horário, recebe a primeira sala livre que serve. Os que não têm sala livre voltam na lista.
+   */
+  distributeRooms(): Promise<RoomDistributionResult> {
+    return this.tdb.run(async (tx) => {
+      const needsRoom = tx
+        .select({ id: schAppointmentServices.appointmentId })
+        .from(schAppointmentServices)
+        .innerJoin(schServices, eq(schServices.id, schAppointmentServices.serviceId))
+        .where(eq(schServices.requiresRoom, true));
+      const pending = await tx
+        .select({ a: schAppointments, resourceName: schResources.name, customerName: customers.name })
+        .from(schAppointments)
+        .innerJoin(schResources, eq(schResources.id, schAppointments.resourceId))
+        .innerJoin(customers, eq(customers.id, schAppointments.customerId))
+        .where(and(isNull(schAppointments.roomId), gte(schAppointments.startsAt, new Date()), notInArray(schAppointments.status, closedStatuses), inArray(schAppointments.id, needsRoom)))
+        .orderBy(asc(schAppointments.startsAt), asc(schAppointments.createdAt));
+      const result: RoomDistributionResult = { assigned: 0, unassigned: [], remaining: 0 };
+      if (!pending.length) return result;
+
+      const lines = await tx
+        .select({ appointmentId: schAppointmentServices.appointmentId, serviceId: schAppointmentServices.serviceId, name: schAppointmentServices.name })
+        .from(schAppointmentServices)
+        .where(inArray(schAppointmentServices.appointmentId, pending.map((p) => p.a.id)));
+      // Salas que servem, por combinação de serviços (poucas combinações diferentes).
+      const eligible = new Map<string, { id: string }[]>();
+      const optionsOf = new Map<string, { id: string }[]>();
+      for (const p of pending) {
+        const serviceIds = lines.filter((l) => l.appointmentId === p.a.id && l.serviceId).map((l) => l.serviceId!);
+        const key = [...serviceIds].sort().join(',');
+        if (!eligible.has(key)) eligible.set(key, await this.eligibleResources(tx, serviceIds, undefined, 'room'));
+        optionsOf.set(p.a.id, eligible.get(key)!);
+      }
+      const roomIds = [...new Set([...eligible.values()].flat().map((r) => r.id))];
+      const from = pending[0]!.a.startsAt;
+      const to = new Date(Math.max(...pending.map((p) => p.a.endsAt.getTime())));
+      const busy = await this.busyIntervals(tx, roomIds, from, to);
+
+      for (const [i, p] of pending.entries()) {
+        if (result.assigned >= MAX_ROOM_DISTRIBUTION) {
+          result.remaining = pending.length - i;
+          break;
+        }
+        const { startsAt, endsAt } = p.a;
+        const room = optionsOf.get(p.a.id)!.find((r) => !busy.some((b) => b.resourceId === r.id && b.start < endsAt && b.end > startsAt));
+        if (room) {
+          try {
+            // Savepoint: um conflito de última hora (constraint) desfaz só este atendimento.
+            const updated = await tx.transaction((sp) =>
+              this.guardOverlap(() =>
+                sp
+                  .update(schAppointments)
+                  .set({ roomId: room.id })
+                  .where(and(eq(schAppointments.id, p.a.id), isNull(schAppointments.roomId)))
+                  .returning({ id: schAppointments.id }),
+              ),
+            );
+            if (updated.length) {
+              busy.push({ resourceId: room.id, start: startsAt, end: endsAt });
+              await this.audit.log(tx, { action: 'appointment.room_changed', entity: 'appointment', entityId: p.a.id, data: { from: null, to: room.id, auto: true } });
+              result.assigned++;
+            }
+            continue;
+          } catch (err) {
+            if (!(err instanceof ConflictException)) throw err;
+          }
+        }
+        result.unassigned.push({
+          id: p.a.id,
+          startsAt: startsAt.toISOString(),
+          customerName: p.customerName,
+          resourceName: p.resourceName,
+          services: lines.filter((l) => l.appointmentId === p.a.id).map((l) => l.name),
+        });
+      }
+      return result;
     });
   }
 
@@ -714,19 +913,65 @@ export class SchedulingService implements OnModuleInit {
    */
   private async pickRoom(tx: Tx, services: { id: string; requiresRoom: boolean }[], roomId: string | null, start: Date, end: Date): Promise<string | null> {
     const serviceIds = services.map((s) => s.id);
-    if (roomId) {
-      const [r] = await tx.select().from(schResources).where(eq(schResources.id, roomId));
-      if (!r || r.kind !== 'room' || !r.active) throw badRequest('ROOM_NOT_FOUND', 'Sala/equipamento não encontrado ou inativo');
-      if (!(await this.eligibleResources(tx, serviceIds, roomId, 'room')).length) throw badRequest('ROOM_NOT_ELIGIBLE', `${r.name} não serve para todos os serviços escolhidos`);
-      if ((await this.busyIntervals(tx, [roomId], start, end)).length) throw roomTaken();
-      return roomId;
-    }
+    if (roomId) return this.checkRoom(tx, serviceIds, roomId, start, end);
     if (!services.some((s) => s.requiresRoom)) return null;
-    const rooms = await this.eligibleResources(tx, serviceIds, undefined, 'room');
-    const busy = await this.busyIntervals(tx, rooms.map((r) => r.id), start, end);
-    const free = rooms.find((r) => !busy.some((b) => b.resourceId === r.id));
+    const free = await this.freeRoom(tx, serviceIds, start, end);
     if (!free) throw roomTaken('Nenhuma sala/equipamento livre neste horário');
     return free.id;
+  }
+
+  /** A sala escolhida é uma sala ativa, serve para os serviços e está livre no período. */
+  private async checkRoom(tx: Tx, serviceIds: string[], roomId: string, start: Date, end: Date, exceptAppointmentId?: string): Promise<string> {
+    const [r] = await tx.select().from(schResources).where(eq(schResources.id, roomId));
+    if (!r || r.kind !== 'room' || !r.active) throw badRequest('ROOM_NOT_FOUND', 'Sala/equipamento não encontrado ou inativo');
+    if (!(await this.eligibleResources(tx, serviceIds, roomId, 'room')).length) throw badRequest('ROOM_NOT_ELIGIBLE', `${r.name} não serve para todos os serviços escolhidos`);
+    if ((await this.busyIntervals(tx, [roomId], start, end, exceptAppointmentId)).length) throw roomTaken(`${r.name} já tem reserva neste horário`);
+    return roomId;
+  }
+
+  /** Primeira sala livre no período, entre as que servem para os serviços (ou null). */
+  private async freeRoom(tx: Tx, serviceIds: string[], start: Date, end: Date, exceptAppointmentId?: string) {
+    const rooms = await this.eligibleResources(tx, serviceIds, undefined, 'room');
+    const busy = await this.busyIntervals(tx, rooms.map((r) => r.id), start, end, exceptAppointmentId);
+    return rooms.find((r) => !busy.some((b) => b.resourceId === r.id)) ?? null;
+  }
+
+  /**
+   * Sala ao remarcar: a escolhida (conferida); null = sem sala; sem escolha, a atual se estiver livre
+   * no novo horário, senão outra livre que sirva para os serviços — ou recusa, dizendo por quê.
+   */
+  private async rescheduleRoom(
+    tx: Tx,
+    current: AppointmentRow,
+    svc: { serviceIds: string[]; requiresRoom: boolean },
+    roomId: string | null | undefined,
+    start: Date,
+    end: Date,
+  ): Promise<string | null> {
+    if (roomId === null) {
+      if (svc.requiresRoom) throw roomRequired();
+      return null;
+    }
+    if (roomId) return this.checkRoom(tx, svc.serviceIds, roomId, start, end, current.id);
+    if (current.roomId && !(await this.busyIntervals(tx, [current.roomId], start, end, current.id)).length) return current.roomId;
+    if (!current.roomId && !svc.requiresRoom) return null;
+    const free = await this.freeRoom(tx, svc.serviceIds, start, end, current.id);
+    if (free) return free.id;
+    if (!current.roomId) throw roomTaken('Nenhuma sala/equipamento livre que sirva para os serviços neste horário. Escolha outro horário.');
+    const [r] = await tx.select({ name: schResources.name }).from(schResources).where(eq(schResources.id, current.roomId));
+    throw roomTaken(
+      `${r?.name ?? 'A sala/equipamento'} já tem reserva no novo horário e não há outra sala/equipamento livre que sirva para os serviços. Escolha outro horário${svc.requiresRoom ? '' : ' ou remarque sem sala'}.`,
+    );
+  }
+
+  /** Serviços do atendimento que ainda existem e se algum deles exige sala. */
+  private async appointmentServiceInfo(tx: Tx, appointmentId: string) {
+    const rows = await tx
+      .select({ serviceId: schAppointmentServices.serviceId, requiresRoom: schServices.requiresRoom })
+      .from(schAppointmentServices)
+      .leftJoin(schServices, eq(schServices.id, schAppointmentServices.serviceId))
+      .where(eq(schAppointmentServices.appointmentId, appointmentId));
+    return { serviceIds: rows.map((r) => r.serviceId).filter((s): s is string => !!s), requiresRoom: rows.some((r) => r.requiresRoom === true) };
   }
 
   /** Ocupação de salas no período: horários que as reservam e bloqueios delas. */

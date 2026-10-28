@@ -1,4 +1,4 @@
-import { CustomersService, ModuleSettingsService, TenancyService, TenantDb } from '@all/core';
+import { companyLogoUrl, CustomersService, ModuleSettingsService, TenancyService, TenantDb } from '@all/core';
 import { requestContext } from '@all/module-sdk';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, eq, sql } from 'drizzle-orm';
@@ -45,7 +45,8 @@ export class BookingService {
             .where(eq(schResources.kind, 'professional')),
         ]);
         return {
-          company: { name: tenant.name },
+          // Marca da empresa (Dados da empresa): a página aplica a cor e mostra o logo.
+          company: { name: tenant.name, logoUrl: companyLogoUrl(tenant), brandColor: tenant.brandColor },
           maxDays: settings.onlineMaxDays,
           services: services.map((s) => ({ ...s, price: Number(s.price) })),
           professionals: resources.map((r) => ({
@@ -131,7 +132,11 @@ export class BookingService {
   /** Resolve a empresa pelo slug e roda no escopo dela, sem usuário logado. */
   private async withTenant<T>(
     slug: string,
-    fn: (tenant: { id: string; name: string }, settings: SchedulingSettings, subject: BookingSubjectProvider | null) => Promise<T>,
+    fn: (
+      tenant: { id: string; name: string; slug: string | null; logoFileId: string | null; brandColor: string | null },
+      settings: SchedulingSettings,
+      subject: BookingSubjectProvider | null,
+    ) => Promise<T>,
   ): Promise<T> {
     const tenant = await this.tenancy.tenantBySlug(slug);
     if (!tenant) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Empresa não encontrada' });

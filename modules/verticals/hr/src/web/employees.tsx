@@ -1,8 +1,8 @@
-import { api, ApiError, formatDate, formatMoney, parseMoney, SpreadsheetImport, useCan } from '@all/module-sdk/web';
+import { api, ApiError, AuthImage, formatDate, formatMoney, formatPhone, parseMoney, SpreadsheetImport, teamKey, TeamLinks, TeamMemberPicker, useCan, useTeamMember, type TeamMemberDetail } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent, type ReactNode } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { Link, useNavigate, useParams } from 'react-router';
 import { employeeCategoryLabel, employeeStatusLabel, leaveTypeLabel, leaveTypes, terminationTypeLabel, vacationPay, type Employee, type Leave, type LeaveType, type Vacation } from '../contracts';
 import { employeeImportSpec } from './employeeImport';
 import { hrKey } from './hrKey';
@@ -128,6 +128,7 @@ export function EmployeePage() {
       />
       <div className="grid gap-6 lg:grid-cols-[18rem_1fr]">
         <Card className="h-fit space-y-2 p-5 text-sm">
+          <PersonInfo teamMemberId={e.teamMemberId} />
           <Info label="CPF">{cpfMask(e.cpf)}</Info>
           <Info label="Admissão">{formatDate(e.admissionDate)}</Info>
           {e.experienceEnd && <Info label="Fim da experiência">{formatDate(e.experienceEnd)}</Info>}
@@ -142,7 +143,7 @@ export function EmployeePage() {
           <Info label="Jornada">{e.weeklyHours}h semanais</Info>
           <Info label="Dependentes (IR)">{e.dependents}</Info>
           {e.email && <Info label="E-mail">{e.email}</Info>}
-          {e.phone && <Info label="Telefone">{e.phone}</Info>}
+          {e.phone && <Info label="Telefone">{formatPhone(e.phone)}</Info>}
           {e.pixKey && <Info label="Chave Pix">{e.pixKey}</Info>}
         </Card>
         <div className="space-y-4">
@@ -255,6 +256,37 @@ export function EmployeePage() {
   );
 }
 
+/**
+ * A pessoa da equipe por trás do colaborador (com permissão para ver a equipe): foto, link para o
+ * cadastro completo e onde mais ela aparece (ex.: profissional da agenda).
+ */
+function PersonInfo({ teamMemberId }: { teamMemberId: string }) {
+  const canReadTeam = useCan('core.team.read');
+  const member = useTeamMember(teamMemberId, canReadTeam);
+  if (!canReadTeam || !member.data) return null;
+  const m = member.data;
+  const others = m.links.filter((l) => l.moduleKey !== 'hr');
+  return (
+    <div className="mb-3 flex items-center gap-3 border-b border-line pb-3">
+      <div className="size-12 shrink-0 overflow-hidden rounded-full bg-muted">
+        {m.photoFileId ? (
+          <AuthImage fileId={m.photoFileId} alt={`Foto de ${m.name}`} className="size-full object-cover" />
+        ) : (
+          <span className="flex size-full items-center justify-center font-medium text-fg-muted" aria-hidden>
+            {m.firstName[0]?.toUpperCase()}
+          </span>
+        )}
+      </div>
+      <div className="min-w-0 space-y-1">
+        <Link to={`/equipe/${m.id}`} className="text-brand-700 hover:underline">
+          Cadastro da pessoa
+        </Link>
+        {others.length > 0 && <TeamLinks links={others} renderLink={(l, badge) => <Link to={l.path!}>{badge}</Link>} />}
+      </div>
+    </div>
+  );
+}
+
 function Info({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
@@ -271,7 +303,7 @@ function EmployeeModal({ employee, onClose, onSaved }: { employee: Employee | nu
     cpf: employee?.cpf ?? '',
     birthDate: employee?.birthDate ?? '',
     email: employee?.email ?? '',
-    phone: employee?.phone ?? '',
+    phone: formatPhone(employee?.phone),
     position: employee?.position ?? '',
     department: employee?.department ?? '',
     admissionDate: employee?.admissionDate ?? '',
@@ -286,12 +318,33 @@ function EmployeeModal({ employee, onClose, onSaved }: { employee: Employee | nu
     notes: employee?.notes ?? '',
   });
   const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
+  // Pessoa da equipe: na admissão, dá para escolher alguém já cadastrado (ex.: profissional da agenda).
+  const canReadTeam = useCan('core.team.read');
+  const [person, setPerson] = useState<{ id: string; name: string } | null>(employee ? { id: employee.teamMemberId, name: employee.name } : null);
+  const [picking, setPicking] = useState(false);
+  const pick = useMutation({
+    mutationFn: (id: string) => api<TeamMemberDetail>(`/team/${id}`),
+    onSuccess: (m) => {
+      setPerson({ id: m.id, name: m.name });
+      setPicking(false);
+      setForm({
+        ...form,
+        name: m.name,
+        cpf: m.cpf ?? '',
+        birthDate: m.birthDate ?? '',
+        email: m.email ?? '',
+        phone: formatPhone(m.phone),
+        admissionDate: form.admissionDate || m.startedOn || '',
+      });
+    },
+  });
   const save = useMutation({
     mutationFn: () =>
       api<{ id: string }>(employee ? `/hr/employees/${employee.id}` : '/hr/employees', {
         method: employee ? 'PATCH' : 'POST',
         body: {
           ...form,
+          ...(person && person.id !== employee?.teamMemberId ? { teamMemberId: person.id } : {}),
           birthDate: form.birthDate || null,
           email: form.email || null,
           phone: form.phone || null,
@@ -307,6 +360,7 @@ function EmployeeModal({ employee, onClose, onSaved }: { employee: Employee | nu
       }),
     onSuccess: (r) => {
       queryClient.invalidateQueries({ queryKey: hrKey });
+      queryClient.invalidateQueries({ queryKey: teamKey });
       onSaved?.(r.id);
       onClose();
     },
@@ -315,6 +369,33 @@ function EmployeeModal({ employee, onClose, onSaved }: { employee: Employee | nu
     ev.preventDefault();
     save.mutate();
   }
+  const personPicker = canReadTeam && !employee && (
+    <div className="space-y-2 rounded-xl border border-line p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+        <span>
+          {person ? (
+            <>
+              Pessoa da equipe: <span className="font-medium">{person.name}</span> (os dados abaixo atualizam o cadastro dela)
+            </>
+          ) : (
+            'A pessoa já está na equipe (ex.: profissional da agenda)? Escolha para aproveitar o cadastro.'
+          )}
+        </span>
+        <span className="flex gap-2">
+          {person && (
+            <Button size="sm" variant="ghost" onClick={() => setPerson(null)}>
+              Pessoa nova
+            </Button>
+          )}
+          <Button size="sm" variant="secondary" onClick={() => setPicking(!picking)}>
+            {picking ? 'Fechar busca' : person ? 'Trocar' : 'Escolher pessoa da equipe'}
+          </Button>
+        </span>
+      </div>
+      {pick.error && <Alert>{pick.error instanceof ApiError ? pick.error.message : 'Erro ao carregar a pessoa'}</Alert>}
+      {picking && <TeamMemberPicker autoFocus onSelect={(m) => pick.mutate(m.id)} />}
+    </div>
+  );
   return (
     <Modal
       open
@@ -333,6 +414,7 @@ function EmployeeModal({ employee, onClose, onSaved }: { employee: Employee | nu
     >
       <form id="hr-employee-form" onSubmit={submit} className="space-y-4">
         {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao salvar'}</Alert>}
+        {personPicker}
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="sm:col-span-2">
             <Field label="Nome completo">{(id) => <Input id={id} required value={form.name} onChange={(e) => set({ name: e.target.value })} autoFocus />}</Field>

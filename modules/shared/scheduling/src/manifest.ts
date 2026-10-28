@@ -12,7 +12,7 @@ export const schedulingManifest = defineModule({
   description: 'Agenda de profissionais e serviços, com agendamento online.',
   icon: 'calendar',
   version: '1.0.0',
-  dependsOn: ['core.customers', 'core.finance', 'shared.notifications'],
+  dependsOn: ['core.customers', 'core.finance', 'core.team', 'shared.notifications'],
   optionalDependsOn: ['integration.whatsapp'],
   events: { publishes: ['shared.scheduling.status_changed'], subscribes: ['integration.whatsapp.reply'] },
   permissions: [

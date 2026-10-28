@@ -3,7 +3,7 @@ import { finAccounts, users } from '@all/core/schema';
 import type { Tx } from '@all/db';
 import { requestContext } from '@all/module-sdk';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { aliasedTable, and, asc, desc, eq, gte, inArray, lt, ne, sql } from 'drizzle-orm';
+import { aliasedTable, and, asc, desc, eq, gt, gte, inArray, lt, lte, max, ne, sql } from 'drizzle-orm';
 import {
   registerMoveLabel,
   salePaymentMethods,
@@ -33,6 +33,12 @@ type Live = { byMethod: Map<SalePaymentMethod, number>; salesCount: number; sale
 const badRequest = (code: string, message: string) => new BadRequestException({ code, message });
 const conflict = (code: string, message: string) => new ConflictException({ code, message });
 const brl = (cents: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(cents / 100);
+/** Horário informado (a validação aceita até 5 min à frente, relógio do aparelho adiantado) ou agora. */
+const upToNow = (d: Date | undefined) => {
+  const now = new Date();
+  return d && d < now ? d : now;
+};
+const moment = (d: Date) => new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' }).format(d);
 
 export interface SessionFilters {
   from?: string;
@@ -48,8 +54,13 @@ export interface SessionFilters {
  * Caixas do PDV e suas sessões: abertura com troco inicial, sangria e suprimento, fechamento
  * conferido (esperado × contado por forma de pagamento). Fechada, a sessão não muda mais.
  *
+ * Caixa de outro dia: abertura, movimentos e fechamento aceitam o horário em que aconteceram
+ * (nunca no futuro). As sessões do mesmo caixa não se cruzam no tempo: a sessão em vigor num
+ * momento é a última aberta até ele, e vale até fechar ou até a abertura da seguinte.
+ *
  * Financeiro: as vendas já lançam a receita (origem 'sale'); aqui só entram o dinheiro que sai
- * ou entra na gaveta sem ser venda (sangria/suprimento) e a quebra/sobra do fechamento.
+ * ou entra na gaveta sem ser venda (sangria/suprimento) e a quebra/sobra do fechamento, na data
+ * em que aconteceram.
  */
 @Injectable()
 export class RegistersService {
@@ -66,13 +77,15 @@ export class RegistersService {
     return this.tdb.run(async (tx) => {
       const settings = await this.settings.getInTx<SalesSettings>(tx, MODULE);
       const opener = aliasedTable(users, 'opener');
-      const [registers, accounts, cashAccountId] = await Promise.all([
+      const [registers, latest, accounts, cashAccountId] = await Promise.all([
+        tx.select().from(salesRegisters).orderBy(asc(salesRegisters.name)),
+        // A sessão mais recente de cada caixa: aberta, é a de agora (as vendas sem data entram nela).
+        // Uma sessão de outro dia ainda aberta, com outra depois dela, não é "o caixa aberto".
         tx
-          .select({ r: salesRegisters, s: salesRegisterSessions, openedByName: opener.name })
-          .from(salesRegisters)
-          .leftJoin(salesRegisterSessions, and(eq(salesRegisterSessions.registerId, salesRegisters.id), eq(salesRegisterSessions.status, 'open')))
+          .selectDistinctOn([salesRegisterSessions.registerId], { s: salesRegisterSessions, openedByName: opener.name })
+          .from(salesRegisterSessions)
           .leftJoin(opener, eq(opener.id, salesRegisterSessions.openedBy))
-          .orderBy(asc(salesRegisters.name)),
+          .orderBy(salesRegisterSessions.registerId, desc(salesRegisterSessions.openedAt), desc(salesRegisterSessions.number)),
         tx
           .select({ id: finAccounts.id, name: finAccounts.name, type: finAccounts.type })
           .from(finAccounts)
@@ -80,14 +93,20 @@ export class RegistersService {
           .orderBy(sql`${finAccounts.type} = 'cash' desc`, asc(finAccounts.name)),
         this.finance.defaultAccountId(tx),
       ]);
+      const current = new Map(latest.filter((l) => l.s.status === 'open').map((l) => [l.s.registerId, l]));
       return {
         requireSession: settings.requireRegisterSession,
-        registers: registers.map(({ r, s, openedByName }) => ({
-          id: r.id,
-          name: r.name,
-          active: r.active,
-          openSession: s ? { id: s.id, number: s.number, openedAt: s.openedAt.toISOString(), openedByName, openingFloat: Number(s.openingFloat) } : null,
-        })),
+        registers: registers.map((r) => {
+          const open = current.get(r.id);
+          return {
+            id: r.id,
+            name: r.name,
+            active: r.active,
+            openSession: open
+              ? { id: open.s.id, number: open.s.number, openedAt: open.s.openedAt.toISOString(), openedByName: open.openedByName, openingFloat: Number(open.s.openingFloat) }
+              : null,
+          };
+        }),
         accounts,
         cashAccountId: cashAccountId ?? null,
       };
@@ -131,14 +150,29 @@ export class RegistersService {
       const [register] = await tx.select().from(salesRegisters).where(eq(salesRegisters.id, input.registerId)).for('update');
       if (!register) throw new NotFoundException({ code: 'REGISTER_NOT_FOUND', message: 'Caixa não encontrado' });
       if (!register.active) throw badRequest('REGISTER_INACTIVE', 'Este caixa está desativado');
-      if (await this.openSessionOf(tx, register.id)) throw conflict('REGISTER_ALREADY_OPEN', `${register.name} já está aberto`);
+
+      // Caixa de outro dia: a abertura não pode cair dentro de outra sessão do mesmo caixa (nem da
+      // aberta agora, que vale da abertura dela em diante).
+      const openedAt = upToNow(input.openedAt);
+      const current = await this.sessionAt(tx, register.id, openedAt);
+      if (current && covers(current, openedAt)) {
+        if (current.status === 'open') {
+          throw conflict('REGISTER_ALREADY_OPEN', input.openedAt ? `${register.name} está com a sessão #${current.number} aberta desde ${moment(current.openedAt)}` : `${register.name} já está aberto`);
+        }
+        throw conflict('SESSION_OVERLAP', `${register.name} já tem a sessão #${current.number} nesse horário (${moment(current.openedAt)} a ${moment(current.closedAt!)})`);
+      }
 
       const number = await nextSequence(tx, tenantId, 'register_session');
       const [session] = await tx
         .insert(salesRegisterSessions)
-        .values({ tenantId, registerId: register.id, number, openingFloat: centsToDecimal(toCents(input.openingFloat)), openedBy: userId ?? null })
+        .values({ tenantId, registerId: register.id, number, openingFloat: centsToDecimal(toCents(input.openingFloat)), openedBy: userId ?? null, openedAt })
         .returning();
-      await this.audit.log(tx, { action: 'sales.register_session.opened', entity: 'sales_register_session', entityId: session!.id, data: { register: register.name, openingFloat: input.openingFloat } });
+      await this.audit.log(tx, {
+        action: 'sales.register_session.opened',
+        entity: 'sales_register_session',
+        entityId: session!.id,
+        data: { register: register.name, openingFloat: input.openingFloat, ...(input.openedAt ? { openedAt: openedAt.toISOString() } : {}) },
+      });
       return this.detailInTx(tx, session!.id);
     });
   }
@@ -148,6 +182,8 @@ export class RegistersService {
     return this.tdb.run(async (tx) => {
       const session = await this.lockOpen(tx, sessionId);
       const [register] = await tx.select().from(salesRegisters).where(eq(salesRegisters.id, session.registerId));
+      const occurredAt = upToNow(input.occurredAt);
+      await this.assertWithin(tx, session, occurredAt, 'O movimento');
       const cents = toCents(input.amount);
 
       if (input.kind === 'withdrawal') {
@@ -162,12 +198,12 @@ export class RegistersService {
 
       const [move] = await tx
         .insert(salesRegisterMoves)
-        .values({ tenantId, sessionId: session.id, kind: input.kind, amount: centsToDecimal(cents), reason: input.reason, accountId: other?.id ?? null, userId: userId ?? null })
+        .values({ tenantId, sessionId: session.id, kind: input.kind, amount: centsToDecimal(cents), reason: input.reason, accountId: other?.id ?? null, userId: userId ?? null, occurredAt })
         .returning();
 
       // Com conta do outro lado é transferência (sai de uma conta, entra na outra, sem categoria:
-      // não é receita nem despesa). Sem conta, o dinheiro saiu/entrou do negócio.
-      const day = localDay(new Date());
+      // não é receita nem despesa). Sem conta, o dinheiro saiu/entrou do negócio. Data: a do movimento.
+      const day = localDay(occurredAt);
       const label = `${registerMoveLabel[input.kind]} ${register!.name} (sessão #${session.number})`;
       const base = { status: 'paid' as const, amount: cents / 100, dueDate: day, paidAt: day, paymentMethod: 'cash', sourceType: SOURCE_MOVE, sourceId: move!.id, notes: input.reason };
       if (input.kind === 'withdrawal') {
@@ -184,7 +220,12 @@ export class RegistersService {
         await this.finance.recordInTx(tx, { ...base, kind: 'income', description: `${label}: ${input.reason}`, accountId: cashAccount, categoryKey: 'other_income' });
       }
 
-      await this.audit.log(tx, { action: `sales.register_session.${input.kind}`, entity: 'sales_register_session', entityId: session.id, data: { moveId: move!.id, amount: input.amount, reason: input.reason, accountId: other?.id ?? null } });
+      await this.audit.log(tx, {
+        action: `sales.register_session.${input.kind}`,
+        entity: 'sales_register_session',
+        entityId: session.id,
+        data: { moveId: move!.id, amount: input.amount, reason: input.reason, accountId: other?.id ?? null, ...(input.occurredAt ? { occurredAt: occurredAt.toISOString() } : {}) },
+      });
       return this.detailInTx(tx, session.id);
     });
   }
@@ -196,6 +237,8 @@ export class RegistersService {
       // bloqueia as novas até o fechamento confirmar; depois disso elas não acham sessão aberta.
       const session = await this.lockOpen(tx, sessionId);
       const [register] = await tx.select().from(salesRegisters).where(eq(salesRegisters.id, session.registerId));
+      const closedAt = upToNow(input.closedAt);
+      await this.assertClosing(tx, session, closedAt);
       const live = (await this.liveInTx(tx, [session.id])).get(session.id)!;
       const counted: Partial<Record<SalePaymentMethod, number | null | undefined>> = input.counted;
       // Dinheiro sempre; as demais formas quando houve venda ou o operador contou alguma coisa.
@@ -220,24 +263,27 @@ export class RegistersService {
         deposits: centsToNumber(live.deposits),
       };
 
-      await tx
-        .update(salesRegisterSessions)
-        .set({
-          status: 'closed',
-          closedAt: new Date(),
-          closedBy: userId ?? null,
-          expectedCash: centsToDecimal(cash.expected),
-          countedCash: centsToDecimal(cash.counted!),
-          cashDifference: centsToDecimal(cash.difference!),
-          closing,
-          notes: input.notes || null,
-        })
-        .where(eq(salesRegisterSessions.id, session.id));
+      await guardOverlap(() =>
+        tx
+          .update(salesRegisterSessions)
+          .set({
+            status: 'closed',
+            closedAt,
+            closedBy: userId ?? null,
+            expectedCash: centsToDecimal(cash.expected),
+            countedCash: centsToDecimal(cash.counted!),
+            cashDifference: centsToDecimal(cash.difference!),
+            closing,
+            notes: input.notes || null,
+          })
+          .where(eq(salesRegisterSessions.id, session.id)),
+      );
 
-      // Quebra (faltou dinheiro) é despesa; sobra é receita. Diferença em cartão/Pix fica só no
-      // relatório: o valor das vendas já foi lançado na conta certa e costuma ser forma trocada.
+      // Quebra (faltou dinheiro) é despesa; sobra é receita, no dia do fechamento. Diferença em
+      // cartão/Pix fica só no relatório: o valor das vendas já foi lançado na conta certa e costuma
+      // ser forma trocada.
       if (cash.difference) {
-        const day = localDay(new Date());
+        const day = localDay(closedAt);
         const over = cash.difference > 0;
         await this.finance.recordInTx(tx, {
           kind: over ? 'income' : 'expense',
@@ -259,7 +305,12 @@ export class RegistersService {
         action: 'sales.register_session.closed',
         entity: 'sales_register_session',
         entityId: session.id,
-        data: { expectedCash: centsToNumber(cash.expected), countedCash: centsToNumber(cash.counted!), cashDifference: centsToNumber(cash.difference!) },
+        data: {
+          expectedCash: centsToNumber(cash.expected),
+          countedCash: centsToNumber(cash.counted!),
+          cashDifference: centsToNumber(cash.difference!),
+          ...(input.closedAt ? { closedAt: closedAt.toISOString() } : {}),
+        },
       });
       return this.detailInTx(tx, session.id);
     });
@@ -281,21 +332,28 @@ export class RegistersService {
   }
 
   /**
-   * Sessão em que a venda entra. Com caixa informado, ele precisa estar aberto (a sessão fica
-   * travada em FOR SHARE até o fim da transação). Sem caixa, só passa se a empresa não exige caixa.
-   * Venda lançada depois (de outro dia) não entra em sessão nenhuma: o dinheiro dela não está na gaveta.
+   * Sessão em que a venda entra. Com caixa informado, é a sessão do caixa em vigor no horário da
+   * venda, se estiver aberta (fica travada em FOR SHARE até o fim da transação): a de agora, ou a de
+   * outro dia que está sendo lançada. Sem sessão aberta naquele horário, a venda de hoje é recusada
+   * (caixa fechado) e a de outro dia entra sem sessão: o dinheiro dela não está numa gaveta a conferir.
+   * Sem caixa, só passa se a empresa não exige caixa (ou se é venda de outro dia).
    */
   async sessionForSaleInTx(tx: Tx, opts: { registerId: string | null; required: boolean; soldAt: Date }): Promise<string | null> {
-    if (localDay(opts.soldAt) < localDay(new Date())) return null;
+    const past = localDay(opts.soldAt) < localDay(new Date());
     if (opts.registerId) {
       const [session] = await tx
-        .select({ id: salesRegisterSessions.id })
+        .select({ id: salesRegisterSessions.id, status: salesRegisterSessions.status })
         .from(salesRegisterSessions)
-        .where(and(eq(salesRegisterSessions.registerId, opts.registerId), eq(salesRegisterSessions.status, 'open')))
+        .where(and(eq(salesRegisterSessions.registerId, opts.registerId), lte(salesRegisterSessions.openedAt, opts.soldAt)))
+        .orderBy(desc(salesRegisterSessions.openedAt), desc(salesRegisterSessions.number))
+        .limit(1)
         .for('share');
-      if (!session) throw conflict('REGISTER_CLOSED', 'Este caixa está fechado. Abra o caixa para vender.');
-      return session.id;
+      // A última aberta até a venda, se ainda aberta, contém a venda (a seguinte abriu depois dela).
+      if (session?.status === 'open') return session.id;
+      if (past) return null;
+      throw conflict('REGISTER_CLOSED', 'Este caixa está fechado. Abra o caixa para vender.');
     }
+    if (past) return null;
     if (opts.required) throw conflict('REGISTER_SESSION_REQUIRED', 'Abra o caixa para vender.');
     return null;
   }
@@ -306,8 +364,55 @@ export class RegistersService {
     const [row] = await tx
       .select({ id: salesRegisterSessions.id })
       .from(salesRegisterSessions)
-      .where(and(eq(salesRegisterSessions.registerId, registerId), eq(salesRegisterSessions.status, 'open')));
+      .where(and(eq(salesRegisterSessions.registerId, registerId), eq(salesRegisterSessions.status, 'open')))
+      .limit(1);
     return row;
+  }
+
+  /** Sessão do caixa em vigor num momento: a última aberta até ele (pode já ter fechado antes). */
+  private async sessionAt(tx: Tx, registerId: string, at: Date): Promise<SessionRow | undefined> {
+    const [row] = await tx
+      .select()
+      .from(salesRegisterSessions)
+      .where(and(eq(salesRegisterSessions.registerId, registerId), lte(salesRegisterSessions.openedAt, at)))
+      .orderBy(desc(salesRegisterSessions.openedAt), desc(salesRegisterSessions.number))
+      .limit(1);
+    return row;
+  }
+
+  /** Próxima sessão do mesmo caixa: o limite de uma sessão de outro dia ainda aberta. */
+  private async nextSession(tx: Tx, session: SessionRow): Promise<SessionRow | undefined> {
+    const [row] = await tx
+      .select()
+      .from(salesRegisterSessions)
+      .where(and(eq(salesRegisterSessions.registerId, session.registerId), gt(salesRegisterSessions.openedAt, session.openedAt)))
+      .orderBy(asc(salesRegisterSessions.openedAt))
+      .limit(1);
+    return row;
+  }
+
+  /** Movimento dentro da janela da sessão: da abertura até a abertura da sessão seguinte (ou agora). */
+  private async assertWithin(tx: Tx, session: SessionRow, at: Date, what: string) {
+    if (at < session.openedAt) throw badRequest('OUTSIDE_SESSION', `${what} não pode ser antes da abertura do caixa (${moment(session.openedAt)})`);
+    const next = await this.nextSession(tx, session);
+    if (next && at >= next.openedAt) {
+      throw badRequest('OUTSIDE_SESSION', `${what} precisa ser antes de ${moment(next.openedAt)}, quando abriu a sessão #${next.number} deste caixa`);
+    }
+  }
+
+  /** Fechamento: depois da última venda/movimento da sessão e até a abertura da sessão seguinte. */
+  private async assertClosing(tx: Tx, session: SessionRow, closedAt: Date) {
+    if (closedAt < session.openedAt) throw badRequest('CLOSE_BEFORE_OPEN', `O fechamento não pode ser antes da abertura do caixa (${moment(session.openedAt)})`);
+    const next = await this.nextSession(tx, session);
+    if (next && closedAt > next.openedAt) {
+      throw badRequest('SESSION_OVERLAP', `Informe o horário do fechamento: precisa ser até ${moment(next.openedAt)}, quando abriu a sessão #${next.number} deste caixa`);
+    }
+    const [[sale], [move]] = await Promise.all([
+      tx.select({ at: max(salesSales.soldAt) }).from(salesSales).where(eq(salesSales.registerSessionId, session.id)),
+      tx.select({ at: max(salesRegisterMoves.occurredAt) }).from(salesRegisterMoves).where(eq(salesRegisterMoves.sessionId, session.id)),
+    ]);
+    const last = [sale?.at, move?.at].filter((d): d is Date => d instanceof Date).sort((a, b) => b.getTime() - a.getTime())[0];
+    if (last && closedAt < last) throw badRequest('CLOSE_BEFORE_LAST_EVENT', `Há vendas ou movimentos nesta sessão até ${moment(last)}: o fechamento não pode ser antes disso`);
   }
 
   private async lockOpen(tx: Tx, id: string): Promise<SessionRow> {
@@ -392,6 +497,7 @@ export class RegistersService {
     const [row] = await this.sessionRows(tx, { ids: [id] });
     if (!row) throw new NotFoundException({ code: 'SESSION_NOT_FOUND', message: 'Sessão de caixa não encontrada' });
     const live = row.s.status === 'open' ? (await this.liveInTx(tx, [id])).get(id) : undefined;
+    const next = row.s.status === 'open' ? await this.nextSession(tx, row.s) : undefined;
     const mover = aliasedTable(users, 'mover');
     const [moves, sales] = await Promise.all([
       tx
@@ -400,12 +506,12 @@ export class RegistersService {
         .leftJoin(finAccounts, eq(finAccounts.id, salesRegisterMoves.accountId))
         .leftJoin(mover, eq(mover.id, salesRegisterMoves.userId))
         .where(eq(salesRegisterMoves.sessionId, id))
-        .orderBy(asc(salesRegisterMoves.createdAt), asc(salesRegisterMoves.id)),
+        .orderBy(asc(salesRegisterMoves.occurredAt), asc(salesRegisterMoves.createdAt), asc(salesRegisterMoves.id)),
       tx
         .select({ id: salesSales.id, number: salesSales.number, soldAt: salesSales.soldAt, status: salesSales.status, total: salesSales.total })
         .from(salesSales)
         .where(eq(salesSales.registerSessionId, id))
-        .orderBy(asc(salesSales.number)),
+        .orderBy(asc(salesSales.soldAt), asc(salesSales.number)),
     ]);
     const payments = sales.length
       ? await tx
@@ -422,6 +528,7 @@ export class RegistersService {
           .map((t) => ({ method: t.method, expected: centsToNumber(t.expected), counted: null, difference: null }));
     return {
       ...toSummary(row, live),
+      openUntil: next?.openedAt.toISOString() ?? null,
       totals,
       moves: moves.map(({ m, accountName, userName }) => ({
         id: m.id,
@@ -430,6 +537,7 @@ export class RegistersService {
         reason: m.reason,
         accountName,
         userName,
+        occurredAt: m.occurredAt.toISOString(),
         createdAt: m.createdAt.toISOString(),
       })),
       sales: sales.map((s) => ({
@@ -442,6 +550,11 @@ export class RegistersService {
       })),
     };
   }
+}
+
+/** A sessão (a última aberta até `at`) ainda está valendo em `at`: aberta, ou fechou depois. */
+function covers(session: SessionRow, at: Date) {
+  return session.status === 'open' || (session.closedAt !== null && session.closedAt > at);
 }
 
 /**
@@ -485,15 +598,27 @@ function toSummary({ s, register, openedByName, closedByName }: SummaryRow, live
     countedCash: s.countedCash === null ? null : Number(s.countedCash),
     cashDifference: s.cashDifference === null ? null : Number(s.cashDifference),
     notes: s.notes,
+    createdAt: s.createdAt.toISOString(),
   };
 }
+
+const pgCode = (err: unknown) => (err as { cause?: { code?: string }; code?: string }).cause?.code ?? (err as { code?: string }).code;
 
 async function guardName<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (err) {
-    const code = (err as { cause?: { code?: string }; code?: string }).cause?.code ?? (err as { code?: string }).code;
-    if (code === '23505') throw new ConflictException({ code: 'REGISTER_NAME_TAKEN', message: 'Já existe um caixa com este nome' });
+    if (pgCode(err) === '23505') throw new ConflictException({ code: 'REGISTER_NAME_TAKEN', message: 'Já existe um caixa com este nome' });
+    throw err;
+  }
+}
+
+/** Restrição de exclusão do banco (sessões fechadas do mesmo caixa que se cruzam). */
+async function guardOverlap<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (pgCode(err) === '23P01') throw conflict('SESSION_OVERLAP', 'O horário desta sessão cruza o de outra sessão do mesmo caixa');
     throw err;
   }
 }

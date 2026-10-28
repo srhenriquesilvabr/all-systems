@@ -45,6 +45,16 @@ export const resourceInput = z.object({
     .default('#2d4bff'),
   active: z.boolean().default(true),
   serviceIds: z.array(z.string().uuid()).optional(),
+  /**
+   * Profissional: a pessoa da equipe que ele é. Ausente mantém o vínculo; sem vínculo, o
+   * profissional ganha uma pessoa com o nome dele.
+   */
+  teamMemberId: z.string().uuid().nullish(),
+  /**
+   * Dados da pessoa (nome, sobrenome, CPF, endereço…), validados pelo core. Só com a permissão
+   * `core.team.manage` (dado pessoal); campos ausentes ficam como estão.
+   */
+  person: z.record(z.unknown()).nullish(),
 });
 export type ResourceInput = z.infer<typeof resourceInput>;
 
@@ -116,7 +126,18 @@ export type AppointmentSeriesInput = z.infer<typeof appointmentSeriesInput>;
 
 export const cancelSeriesInput = z.object({ reason: z.string().trim().min(1, 'Informe o motivo do cancelamento').max(300) });
 
-export const rescheduleInput = z.object({ startsAt: z.coerce.date(), resourceId: z.string().uuid().optional() });
+export const rescheduleInput = z.object({
+  startsAt: z.coerce.date(),
+  resourceId: z.string().uuid().optional(),
+  /**
+   * Sala no novo horário: ausente = mantém a atual se estiver livre (senão, outra livre que sirva);
+   * null = sem sala (não vale se algum serviço exige sala).
+   */
+  roomId: z.string().uuid().nullish(),
+});
+/** Define, troca (id) ou remove (null) a sala/equipamento de um atendimento já marcado. */
+export const appointmentRoomInput = z.object({ roomId: z.string().uuid().nullable() });
+export const appointmentRoomsQuery = z.object({ startsAt: z.coerce.date().optional() });
 export const statusInput = z.object({ status: z.enum(appointmentStatuses), reason: z.string().trim().max(300).nullish() });
 
 export const availabilityQuery = z.object({
@@ -167,6 +188,8 @@ export interface Resource {
   name: string;
   kind: 'professional' | 'room';
   userId: string | null;
+  /** Pessoa da equipe (só profissionais). */
+  teamMemberId: string | null;
   color: string;
   active: boolean;
   serviceIds: string[];
@@ -215,6 +238,23 @@ export interface AvailabilitySlots {
   resourceId: string;
   resourceName: string;
   slots: string[];
+}
+
+/** Salas que servem para os serviços de um atendimento, e se cada uma está livre no horário. */
+export interface AppointmentRoomOptions {
+  /** Algum serviço do atendimento exige sala (não pode ficar sem). */
+  requiresRoom: boolean;
+  roomId: string | null;
+  rooms: { id: string; name: string; free: boolean }[];
+}
+
+/** Resultado de "distribuir salas": atendimentos futuros que exigem sala e estavam sem. */
+export interface RoomDistributionResult {
+  assigned: number;
+  /** Os que ficaram sem sala livre adequada. */
+  unassigned: { id: string; startsAt: string; customerName: string; resourceName: string; services: string[] }[];
+  /** Além do limite desta rodada; rodar de novo continua. */
+  remaining: number;
 }
 
 export interface SeriesResult {

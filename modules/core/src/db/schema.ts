@@ -2,6 +2,7 @@ import { CURRENT_TENANT, CURRENT_USER, id, tenantId, tenantIsolation } from '@al
 import { sql } from 'drizzle-orm';
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -13,6 +14,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
+import type { Address } from '../customers/schema';
 
 const ts = (name: string) => timestamp(name, { withTimezone: true });
 const createdAt = () => ts('created_at').notNull().defaultNow();
@@ -27,20 +29,42 @@ const updatedAt = () =>
 // ou para operações da própria plataforma (catálogo de módulos).
 // ---------------------------------------------------------------------------
 
-export const tenants = pgTable('tenants', {
-  id: id(),
-  name: text('name').notNull(),
-  /** Endereço público da empresa (ex.: agendamento online em /agendar/<slug>). */
-  slug: text('slug').unique(),
-  legalName: text('legal_name'),
-  document: text('document'),
-  status: text('status', { enum: ['trial', 'active', 'suspended', 'cancelled'] })
-    .notNull()
-    .default('active'),
-  packageKey: text('package_key'),
-  createdAt: createdAt(),
-  updatedAt: updatedAt(),
-});
+export const tenants = pgTable(
+  'tenants',
+  {
+    id: id(),
+    /** Nome fantasia: o que aparece no admin, nas páginas públicas e nas mensagens. */
+    name: text('name').notNull(),
+    /** Endereço público da empresa (ex.: agendamento online em /agendar/<slug>). */
+    slug: text('slug').unique(),
+    legalName: text('legal_name'),
+    /** CPF (11 dígitos) ou CNPJ (14 caracteres; o CNPJ novo pode ter letras), sem pontuação. */
+    document: text('document'),
+    stateRegistration: text('state_registration'),
+    municipalRegistration: text('municipal_registration'),
+    email: text('email'),
+    /** Telefone/WhatsApp em E.164. */
+    phone: text('phone'),
+    website: text('website'),
+    /** Só o usuário, sem @. */
+    instagram: text('instagram'),
+    address: jsonb('address').$type<Address>(),
+    /**
+     * Logo, guardado em `files` (dono `company_logo`). Sem FK: `files` é tabela de tenant (RLS)
+     * e importa este arquivo; quem mantém o vínculo é o serviço da empresa.
+     */
+    logoFileId: uuid('logo_file_id'),
+    /** Cor principal do painel (#rrggbb, minúsculas). Nulo = padrão Palmer. */
+    brandColor: text('brand_color'),
+    status: text('status', { enum: ['trial', 'active', 'suspended', 'cancelled'] })
+      .notNull()
+      .default('active'),
+    packageKey: text('package_key'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  () => [check('tenants_brand_color_chk', sql`brand_color ~ '^#[0-9a-f]{6}$'`)],
+);
 
 /** Espelho dos manifestos instalados; sincronizado no boot da API. */
 export const modules = pgTable('modules', {

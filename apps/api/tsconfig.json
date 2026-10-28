@@ -85,6 +85,9 @@
     },
     {
       "path": "../../modules/verticals/hr"
+    },
+    {
+      "path": "../../modules/verticals/hr-consulting"
     }
   ]
 }

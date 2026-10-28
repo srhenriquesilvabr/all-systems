@@ -5,8 +5,9 @@ import { useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router';
 import { useAuth } from '../auth/auth';
 import { BrandLogo } from './BrandLogo';
+import { CompanyBrand, CompanyLogo } from './CompanyBrand';
 import { iconFor } from './icons';
-import { useTheme, type ThemePreference } from './theme';
+import { useCompanyBrand, useTheme, type ThemePreference } from './theme';
 
 const COLLAPSED_KEY = 'palmer:sidebar-collapsed';
 
@@ -20,8 +21,11 @@ function readCollapsed() {
 }
 
 export function AppLayout() {
+  const session = useSession();
   const [open, setOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(readCollapsed);
+  // Cor da empresa nos dois temas; troca junto com a empresa.
+  useCompanyBrand(session.tenant.brandColor);
 
   const toggleCollapsed = () => {
     const next = !collapsed;
@@ -41,7 +45,11 @@ export function AppLayout() {
       )}
     >
       <header className="flex items-center justify-between bg-ink px-4 py-3 md:hidden print:hidden">
-        <BrandLogo tone="dark" size="sm" />
+        {session.tenant.logoUrl ? (
+          <CompanyLogo name={session.tenant.name} logoUrl={session.tenant.logoUrl} className="h-10 max-w-[12rem] px-2 py-1" />
+        ) : (
+          <BrandLogo tone="dark" size="sm" />
+        )}
         <Button variant="ghost" size="sm" className="text-white hover:bg-white/10 hover:text-white" onClick={() => setOpen(!open)} aria-label={open ? 'Fechar menu' : 'Abrir menu'}>
           {open ? <X className="size-5" /> : <Menu className="size-5" />}
         </Button>
@@ -80,11 +88,7 @@ function Sidebar({ collapsed, onToggle, onNavigate }: { collapsed: boolean; onTo
     <div className={cn('flex h-full flex-col gap-5 p-4 md:sticky md:top-0 md:h-screen', collapsed && 'md:px-3')}>
       <div>
         <div className={cn('mb-5 hidden items-center justify-between gap-2 md:flex', collapsed && 'flex-col')}>
-          {collapsed ? (
-            <img src="/brand/palmer-simbolo-white.svg" alt="Palmer Tech" width={30} height={30} className="size-[1.875rem]" />
-          ) : (
-            <BrandLogo tone="dark" className="px-2" />
-          )}
+          <CompanyBrand name={session.tenant.name} logoUrl={session.tenant.logoUrl} collapsed={collapsed} />
           <button
             type="button"
             onClick={onToggle}

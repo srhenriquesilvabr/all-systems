@@ -532,8 +532,6 @@ describe('lavanderia — coleta e entrega', () => {
       .expect(201);
     expect(job.addressText).toBe('Av. Brasil, 500 — Santos');
 
-    const past = await s.as('post', '/laundry/logistics/pickups').send({ customerId: s.customer.id, date: spDay(-1), period: 'morning' }).expect(400);
-    expect(past.body.code).toBe('DATE_IN_PAST');
     await s.as('post', '/laundry/logistics/pickups').send({ customerId: s.customer.id, date: spDay(0) }).expect(400);
     await s.as('post', '/laundry/logistics/pickups').send({ customerId: s.customer.id, date: spDay(0), windowStart: '15:00', windowEnd: '14:00' }).expect(400);
 
@@ -542,5 +540,68 @@ describe('lavanderia — coleta e entrega', () => {
     await s.as('post', `/service-orders/${order.id}/transition`).send({ to: 'delivered' }).expect(201);
     const closed = await s.as('post', `/laundry/orders/${order.id}/delivery`).send({ date: spDay(0), period: 'morning' }).expect(400);
     expect(closed.body.code).toBe('ORDER_NOT_OPEN');
+  });
+
+  it('registra depois coleta e entrega que já aconteceram: dia passado, horário de cada passo, taxa na data e sem aviso ao cliente', async () => {
+    const s = await setup();
+    await s.as('put', '/modules/laundry/settings').send({ pickupFee: 8, deliveryFee: 12 }).expect(204);
+    const day = spDay(-2);
+    const at = (hhmm: string, d = day) => new Date(`${d}T${hhmm}:00-03:00`).toISOString();
+    const job = (id: string, action: string, body: Record<string, unknown> = {}) => s.as('post', `/laundry/logistics/jobs/${id}/${action}`).send(body);
+
+    // Ordem que entrou quatro dias atrás e já está pronta (os avisos dela saem antes da contagem).
+    const lines = [{ serviceId: s.service('Lavar e passar').id, quantity: 2 }];
+    const { body: created } = await s.as('post', '/laundry/orders').send({ customerId: s.customer.id, lines, receivedAt: spDay(-4) }).expect(201);
+    await s.as('post', '/laundry/pieces/status').send({ itemIds: created.pieces.map((p: { itemId: string }) => p.itemId), status: 'ready' }).expect(200);
+    await t.relay.drain();
+    const mailsBefore = t.mails.filter((m) => m.to === s.customerEmail).length;
+
+    // Coleta de dois dias atrás: agendada no passado, saiu e foi concluída nos horários informados.
+    const { body: pickup } = (await s.as('post', '/laundry/logistics/pickups').send({ customerId: s.customer.id, date: day, period: 'morning' }).expect(201)) as { body: Job };
+    expect(pickup).toMatchObject({ status: 'scheduled', date: day, feeStatus: 'pending' });
+    expect((await job(pickup.id, 'start', { occurredAt: at('10:00', spDay(-3)) }).expect(400)).body.code).toBe('BEFORE_JOB_DATE');
+    expect((await job(pickup.id, 'start', { occurredAt: new Date(Date.now() + 3_600_000).toISOString() }).expect(400)).body.code).toBe('VALIDATION');
+    const { body: started } = await job(pickup.id, 'start', { occurredAt: at('08:10') }).expect(200);
+    expect(started).toMatchObject({ status: 'en_route', startedAt: at('08:10') });
+    expect((await job(pickup.id, 'complete', { itemsCount: 5, occurredAt: at('08:05') }).expect(400)).body.code).toBe('BEFORE_START');
+    const { body: picked } = await job(pickup.id, 'complete', { itemsCount: 5, feeMethod: 'pix', occurredAt: at('08:40') }).expect(200);
+    expect(picked).toMatchObject({ status: 'done', startedAt: at('08:10'), completedAt: at('08:40'), feeStatus: 'paid' });
+    const fees = await s.as('get', '/finance/entries?limit=200').expect(200);
+    const paidFee = fees.body.items.find((e: { sourceId: string; status: string }) => e.sourceId === pickup.id && e.status === 'paid');
+    expect(paidFee).toMatchObject({ amount: 8, paymentMethod: 'pix', dueDate: day, paidAt: day });
+
+    // Entrega no mesmo dia: a primeira tentativa não deu certo; a nova tentativa (à tarde) deu.
+    const { body: delivery } = (await s.as('post', `/laundry/orders/${created.order.id}/delivery`).send({ date: day, period: 'morning' }).expect(201)) as { body: Job };
+    const { body: failed } = await job(delivery.id, 'fail', { reason: 'Cliente ausente', occurredAt: at('09:30') }).expect(200);
+    expect(failed).toMatchObject({ status: 'failed', failedAt: at('09:30'), attempts: 1 });
+    // Remarcar para o passado só a partir do dia da tentativa que falhou.
+    const before = await s.as('patch', `/laundry/logistics/jobs/${delivery.id}`).send({ date: spDay(-3), period: 'afternoon' }).expect(400);
+    expect(before.body.code).toBe('DATE_BEFORE_FAILURE');
+    const { body: retry } = await s.as('patch', `/laundry/logistics/jobs/${delivery.id}`).send({ date: day, period: 'afternoon' }).expect(200);
+    expect(retry).toMatchObject({ status: 'scheduled', date: day, attempts: 1, failedAt: at('09:30') });
+    expect((await job(delivery.id, 'start', { occurredAt: at('09:00') }).expect(400)).body.code).toBe('BEFORE_FAILURE');
+    await job(delivery.id, 'start', { occurredAt: at('14:00') }).expect(200);
+    const { body: delivered } = await job(delivery.id, 'complete', { receiverName: 'Porteiro Zé', feeMethod: 'cash', occurredAt: at('14:30') }).expect(200);
+    expect(delivered).toMatchObject({ status: 'done', completedAt: at('14:30'), order: { status: 'delivered' } });
+
+    // A ordem foi entregue naquele horário (histórico e relatório de prazo usam essa data).
+    const { body: detail } = await s.as('get', `/laundry/orders/${created.order.id}`).expect(200);
+    const when = (to: string) => detail.order.history.find((h: { to: string }) => h.to === to)?.createdAt;
+    expect([when('out_for_delivery'), when('delivered')]).toEqual([at('14:00'), at('14:30')]);
+    expect(detail.order.status).toBe('delivered');
+
+    // Nada disso avisa o cliente: é registro do que já passou.
+    await t.relay.drain();
+    expect(t.mails.filter((m) => m.to === s.customerEmail)).toHaveLength(mailsBefore);
+
+    // A agendada que ainda não aconteceu não volta para o passado.
+    const { body: future } = await s.as('post', '/laundry/logistics/pickups').send({ customerId: s.customer.id, date: spDay(1), period: 'morning' }).expect(201);
+    const back = await s.as('patch', `/laundry/logistics/jobs/${future.id}`).send({ date: spDay(-1) }).expect(400);
+    expect(back.body.code).toBe('DATE_IN_PAST');
+    // A entrega não pode ser antes da entrada da ordem.
+    const { body: newer } = await s.as('post', '/laundry/orders').send({ customerId: s.customer.id, lines }).expect(201);
+    await s.as('post', '/laundry/pieces/status').send({ itemIds: newer.pieces.map((p: { itemId: string }) => p.itemId), status: 'ready' }).expect(200);
+    const { body: early } = await s.as('post', `/laundry/orders/${newer.order.id}/delivery`).send({ date: day, period: 'morning' }).expect(201);
+    expect((await job(early.id, 'start', { occurredAt: at('09:00') }).expect(400)).body.code).toBe('BEFORE_ORDER');
   });
 });

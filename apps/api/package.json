@@ -22,6 +22,7 @@
     "@all/core": "workspace:*",
     "@all/db": "workspace:*",
     "@all/hr": "workspace:*",
+    "@all/hr-consulting": "workspace:*",
     "@all/laundry": "workspace:*",
     "@all/legal": "workspace:*",
     "@all/medical-records": "workspace:*",

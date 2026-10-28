@@ -6,3 +6,4 @@ export * from './finance/schema';
 export * from './events/schema';
 export * from './files/schema';
 export * from './segmentation/schema';
+export * from './team/schema';
