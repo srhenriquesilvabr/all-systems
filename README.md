@@ -1,6 +1,6 @@
 # All Systems
 
-Sistema de gestão da **Palmer Tech**. Manual de uso: [docs/manual](docs/manual/README.md).
+Sistema de gestão da **Palmer Tech**. Manual de uso: [docs/manual](docs/manual/README.md). Contas e acessos: [docs/acessos.md](docs/acessos.md).
 
 Plataforma SaaS modular e multi-tenant: um core comum (login, usuários, permissões, auditoria…) e verticais contratáveis por empresa (lavanderia, salão, pet shop, veterinária, estética, ortodontia, padaria, advocacia, veículos, imobiliária, consórcio, contabilidade e RH). A arquitetura está em [docs/arquitetura](docs/arquitetura/README.md).
 
