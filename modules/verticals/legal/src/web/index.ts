@@ -16,4 +16,5 @@ export const legalWeb = defineWebModule({
     { path: 'juridico/prazos', permission: 'legal.cases.read', Component: DeadlinesPage },
   ],
   customerTabs: [{ key: 'legal.cases', label: 'Processos', permission: 'legal.cases.read', Component: CustomerCasesTab }],
+  manual: () => import('./manual').then((m) => m.manual),
 });

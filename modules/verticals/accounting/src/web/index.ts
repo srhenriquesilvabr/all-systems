@@ -8,4 +8,5 @@ export const accountingWeb = defineWebModule({
     { path: 'contabil/empresas', permission: 'accounting.read', Component: ClientsPage },
   ],
   customerTabs: [{ key: 'accounting.obligations', label: 'Contabilidade', permission: 'accounting.read', Component: CustomerObligationsTab }],
+  manual: () => import('./manual').then((m) => m.manual),
 });

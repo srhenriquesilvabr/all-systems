@@ -16,4 +16,5 @@ export const aestheticsWeb = defineWebModule({
     { key: 'aesthetics.records', label: 'Prontuário', permission: 'shared.medical-records.read', Component: CustomerRecordsTab },
     { key: 'aesthetics.packages', label: 'Pacotes', permission: 'aesthetics.packages.read', Component: CustomerPackagesTab },
   ],
+  manual: () => import('./manual').then((m) => m.manual),
 });

@@ -1,6 +1,7 @@
 import {
   AlarmClock,
   Banknote,
+  BookOpen,
   Bell,
   Briefcase,
   Building2,
@@ -79,6 +80,7 @@ const icons: Record<string, LucideIcon> = {
   package: Package,
   smile: Smile,
   sparkles: Sparkles,
+  'book-open': BookOpen,
   scissors: Scissors,
   shirt: Shirt,
   register: ShoppingCart,

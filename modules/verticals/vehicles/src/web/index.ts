@@ -11,4 +11,5 @@ export const vehiclesWeb = defineWebModule({
     { path: 'veiculos/negociacoes/:id', permission: 'vehicles.deals.read', Component: DealPage },
   ],
   customerTabs: [{ key: 'vehicles.deals', label: 'Veículos', permission: 'vehicles.deals.read', Component: CustomerDealsTab }],
+  manual: () => import('./manual').then((m) => m.manual),
 });

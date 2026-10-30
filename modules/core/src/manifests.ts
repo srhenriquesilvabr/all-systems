@@ -9,6 +9,15 @@ export const authManifest = defineModule({
   version: '1.0.0',
 });
 
+/** Manual dentro do sistema: aberto a todos, mostra os ramos contratados pela empresa. */
+export const helpManifest = defineModule({
+  key: 'core.help',
+  name: 'Manual',
+  layer: 'core',
+  version: '1.0.0',
+  menu: [{ label: 'Manual', path: '/manual', icon: 'book-open' }],
+});
+
 /**
  * Cadastro e marca da empresa (logo e cor do painel). Módulo core novo: a reconciliação do boot
  * (ADR-011) o ativa nas empresas existentes, e o dono já tem a permissão (o dono tem todas).
@@ -126,4 +135,4 @@ export const teamManifest = defineModule({
 });
 
 // A ordem define a ordem no menu: "Dados da empresa" abre o grupo Configurações.
-export const coreManifests = [authManifest, companyManifest, usersManifest, accessManifest, auditManifest, customersManifest, financeManifest, segmentationManifest, teamManifest];
+export const coreManifests = [authManifest, helpManifest, companyManifest, usersManifest, accessManifest, auditManifest, customersManifest, financeManifest, segmentationManifest, teamManifest];

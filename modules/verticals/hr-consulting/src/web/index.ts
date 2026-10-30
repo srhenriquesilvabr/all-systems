@@ -9,4 +9,5 @@ export const hrConsultingWeb = defineWebModule({
     { path: 'consultoria-rh/empresas/:id', permission: 'hr.read', Component: ClientPage },
   ],
   customerTabs: [{ key: 'hr_consulting.client', label: 'RH (colaboradores e folhas)', permission: 'hr.read', Component: ClientTab }],
+  manual: () => import('./manual').then((m) => m.manual),
 });

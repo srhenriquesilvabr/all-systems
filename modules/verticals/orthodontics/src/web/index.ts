@@ -8,4 +8,5 @@ export const orthodonticsWeb = defineWebModule({
     { key: 'orthodontics.records', label: 'Prontuário', permission: 'shared.medical-records.read', Component: CustomerRecordsTab },
     { key: 'orthodontics.treatments', label: 'Tratamento', permission: 'orthodontics.treatments.read', Component: CustomerTreatmentsTab },
   ],
+  manual: () => import('./manual').then((m) => m.manual),
 });

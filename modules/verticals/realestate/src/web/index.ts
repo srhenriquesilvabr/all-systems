@@ -22,4 +22,5 @@ export const realEstateWeb = defineWebModule({
     { key: 'real_estate.deals', label: 'Imóveis', permission: 'real_estate.deals.read', Component: CustomerDealsTab },
     { key: 'real_estate.leases', label: 'Locações', permission: 'real_estate.leases.read', Component: CustomerLeasesTab },
   ],
+  manual: () => import('./manual').then((m) => m.manual),
 });

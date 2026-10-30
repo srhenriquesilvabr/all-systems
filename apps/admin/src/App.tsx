@@ -19,6 +19,7 @@ import { FinanceRegistryPage } from './pages/finance/FinanceRegistryPage';
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage';
 import { HomePage } from './pages/HomePage';
 import { LoginPage } from './pages/LoginPage';
+import { ManualPage } from './pages/manual/ManualPage';
 import { RolesPage } from './pages/RolesPage';
 import { SetPasswordPage } from './pages/SetPasswordPage';
 import { SignupPage } from './pages/SignupPage';
@@ -141,6 +142,9 @@ export function App() {
         <Route element={<AppLayout />}>
           <Route path="/entrar" element={<Navigate to={location.state?.from ?? '/'} replace />} />
           <Route index element={<HomePage />} />
+          <Route path="manual" element={<ManualPage />} />
+          <Route path="manual/:guide" element={<ManualPage />} />
+          <Route path="manual/:guide/:topic" element={<ManualPage />} />
           <Route path="configuracoes/empresa" element={<Guarded permission="core.company.manage" Component={CompanyPage} />} />
           <Route path="configuracoes/usuarios" element={<Guarded permission="core.users.read" Component={UsersPage} />} />
           <Route path="configuracoes/papeis" element={<Guarded permission="core.access.read" Component={RolesPage} />} />

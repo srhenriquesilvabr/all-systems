@@ -9,5 +9,6 @@ registerPetTab({ key: 'vet.vaccines', label: 'Vacinas', moduleKey: 'vet', permis
 
 export const vetWeb = defineWebModule({
   key: 'vet',
+  manual: () => import('./manual').then((m) => m.manual),
   routes: [{ path: 'vet/vacinas', permission: 'vet.vaccines.read', Component: VaccinesDuePage }],
 });

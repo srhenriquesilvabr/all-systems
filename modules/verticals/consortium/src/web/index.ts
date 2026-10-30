@@ -33,6 +33,7 @@ export const consortiumWeb = defineWebModule({
     { path: 'configuracoes/captacao', permission: 'core.access.settings', Component: LeadSettingsPage },
   ],
   customerTabs: [{ key: 'consortium.quotas', label: 'Consórcio', permission: 'consortium.read', Component: CustomerQuotasTab }],
+  manual: () => import('./manual').then((m) => m.manual),
 });
 
 // Simulador público (fora do login), montado pelo admin em /consorcio/:slug.

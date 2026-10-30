@@ -10,6 +10,7 @@ import { ServicesPage } from './ServicesPage';
 
 export const laundryWeb = defineWebModule({
   key: 'laundry',
+  manual: () => import('./manual').then((m) => m.manual),
   routes: [
     { path: 'lavanderia/ordens/nova', permission: 'laundry.orders.write', Component: NewLaundryOrderPage },
     { path: 'lavanderia/ordens/:id', permission: 'laundry.orders.read', Component: LaundryOrderPage },
