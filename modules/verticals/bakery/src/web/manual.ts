@@ -27,7 +27,7 @@ export const manual: ManualGuide = {
           list: [
             'Balcão: vender, abrir e fechar caixa, ver vendas, ordens de serviço completas e clientes.',
             'Produção: ver encomendas, mudar status, lançar estoque e cadastrar produtos.',
-            'Cancelar venda (shared.sales.cancel) e histórico de caixas (shared.sales.register.history) não estão nesses papéis: só o dono da conta os tem de início. Para outra pessoa, inclua em um papel próprio.',
+            'O papel Gerente soma ao Balcão cancelar venda (shared.sales.cancel), histórico de caixas (shared.sales.register.history), produtos e estoque.',
           ],
         },
         { text: 'Sem configuração própria na tela: o estoque pode ficar negativo, e Pix e cartão entram na conta padrão. O rodapé do cupom usa o texto padrão.' },

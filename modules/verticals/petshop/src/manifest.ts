@@ -33,6 +33,11 @@ export const petshopManifest = defineModule({
       permissions: [agenda.read, agenda.write, agenda.status, agenda.payments, 'core.customers.read', 'core.customers.write', 'shared.pets.read', 'shared.pets.write', 'shared.sales.sell', 'shared.sales.register'],
     },
     {
+      key: 'petshop.manager',
+      label: 'Gerente',
+      permissions: [agenda.read, agenda.write, agenda.status, agenda.payments, 'shared.scheduling.manage', 'core.customers.read', 'core.customers.write', 'shared.pets.read', 'shared.pets.write', 'shared.sales.sell', 'shared.sales.register', 'shared.sales.read', 'shared.sales.products', 'shared.sales.stock', 'shared.sales.register.history'],
+    },
+    {
       key: 'petshop.groomer',
       label: 'Banho e tosa',
       permissions: [agenda.read, agenda.status, 'core.customers.read', 'shared.pets.read'],

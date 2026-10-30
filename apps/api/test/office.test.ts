@@ -49,8 +49,44 @@ describe('contabilidade e RH', () => {
   });
 
   describe('RH e departamento pessoal', () => {
-    it('folha: proporcional na admissão, INSS/IRRF pelas tabelas, horas extras e fechamento no financeiro', async () => {
+    // Os valores destes testes foram conferidos à mão com o INSS de 2025: a empresa usa essa tabela.
+    const inss2025 = [
+      { upTo: 1518.0, rate: 0.075 },
+      { upTo: 2793.88, rate: 0.09 },
+      { upTo: 4190.83, rate: 0.12 },
+      { upTo: 8157.41, rate: 0.14 },
+    ];
+    const hrSession = async () => {
       const s = await ownerSession(t, ['hr']);
+      const { body } = await s.as('get', '/modules/hr/settings').expect(200);
+      await s.as('put', '/modules/hr/settings').send({ ...body, tables: { ...body.tables, inss: inss2025 } }).expect(204);
+      return s;
+    };
+
+    it('a folha aberta troca para as tabelas atuais só quando pedido', async () => {
+      const s = await ownerSession(t, ['hr']);
+      const competence = '2026-10';
+      await s.as('post', '/hr/employees').send({ name: 'Tabela Teste', cpf: '111.444.777-35', position: 'Auxiliar', admissionDate: '2024-01-15', salary: 9000 }).expect(201);
+      const { body: settings } = await s.as('get', '/modules/hr/settings').expect(200);
+      expect(settings.tables.inss.at(-1).upTo).toBe(8475.55);
+
+      await s.as('put', '/modules/hr/settings').send({ ...settings, tables: { ...settings.tables, label: 'Antiga', inss: inss2025 } }).expect(204);
+      const { body: payroll } = await s.as('post', '/hr/payrolls').send({ competence }).expect(201);
+      const teto = (p: { items: { inss: number }[] }) => p.items[0]!.inss;
+      const antigo = teto(payroll);
+      expect(payroll.tablesLabel).toBe('Antiga');
+
+      await s.as('put', '/modules/hr/settings').send(settings).expect(204);
+      const mantida = await s.as('post', `/hr/payrolls/${payroll.id}/recalculate`).send({}).expect(200);
+      expect(teto(mantida.body)).toBe(antigo);
+
+      const nova = await s.as('post', `/hr/payrolls/${payroll.id}/recalculate`).send({ useCurrentTables: true }).expect(200);
+      expect(teto(nova.body)).toBe(988.09);
+      expect(nova.body.tablesLabel).toContain('INSS 2026');
+    });
+
+    it('folha: proporcional na admissão, INSS/IRRF pelas tabelas, horas extras e fechamento no financeiro', async () => {
+      const s = await hrSession();
       const competence = localToday().slice(0, 7);
       const admit = (body: Record<string, unknown>) => s.as('post', '/hr/employees').send({ position: 'Auxiliar', admissionDate: '2024-01-15', ...body }).expect(201);
       await admit({ name: 'Ana Analista', cpf: '111.444.777-35', salary: 6000, dependents: 0 });
@@ -116,7 +152,7 @@ describe('contabilidade e RH', () => {
     };
 
     it('13º: 1ª e 2ª parcelas, ano inteiro e admitido no meio do ano (avos)', async () => {
-      const s = await ownerSession(t, ['hr']);
+      const s = await hrSession();
       const admit = (body: Record<string, unknown>) => s.as('post', '/hr/employees').send({ position: 'Auxiliar', ...body }).expect(201);
       await admit({ name: 'Eva Integral', cpf: '55566677720', salary: 3000, admissionDate: '2024-01-15' });
       // Admitida em 10/04/2025: abril tem 21 dias trabalhados (≥ 15) e conta; abril a dezembro = 9 avos.
@@ -156,7 +192,7 @@ describe('contabilidade e RH', () => {
     });
 
     it('rescisão sem justa causa com aviso indenizado proporcional e pedido de demissão', async () => {
-      const s = await ownerSession(t, ['hr']);
+      const s = await hrSession();
       const { body: gil } = await s.as('post', '/hr/employees').send({ name: 'Gil Rescisão', cpf: '77788899941', position: 'Auxiliar', admissionDate: '2024-03-01', salary: 3000 }).expect(201);
       const sem = { type: 'without_cause', terminationDate: '2025-06-15', notice: 'indemnified', fgtsBalance: 4000 };
       const { body: preview } = await s.as('post', `/hr/employees/${gil.id}/termination/preview`).send(sem).expect(200);

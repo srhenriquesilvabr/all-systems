@@ -28,6 +28,11 @@ export const beautyManifest = defineModule({
       permissions: [agenda.read, agenda.write, agenda.status, agenda.payments, 'core.customers.read', 'core.customers.write'],
     },
     {
+      key: 'beauty.manager',
+      label: 'Gerente',
+      permissions: [agenda.read, agenda.write, agenda.status, agenda.payments, 'shared.scheduling.manage', 'beauty.commissions.read', 'beauty.commissions.manage', 'core.customers.read', 'core.customers.write'],
+    },
+    {
       key: 'beauty.professional',
       label: 'Profissional',
       permissions: [agenda.read, agenda.status, 'core.customers.read'],

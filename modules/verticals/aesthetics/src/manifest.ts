@@ -65,6 +65,9 @@ export const aestheticsManifest = defineModule({
         'aesthetics.surgery.budget',
         'core.customers.read',
         'core.customers.write',
+        // Recebe as parcelas dos pacotes e dos orçamentos.
+        'core.finance.read',
+        'core.finance.write',
       ],
     },
     {

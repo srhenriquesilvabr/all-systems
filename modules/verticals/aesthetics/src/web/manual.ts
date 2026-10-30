@@ -39,7 +39,7 @@ export const manual: ManualGuide = {
             'Papel Médico(a) / dentista: o mesmo, mais marcar na agenda (shared.scheduling.write).',
             'Papel Recepção: agenda completa com pagamentos, vender pacotes (aesthetics.packages.sell), orçamentos (aesthetics.surgery.budget), clientes. Sem acesso ao prontuário.',
             'Papel Gestão da clínica: ver agenda, cadastros (aesthetics.setup.manage), orçamentos, pacotes, estoque (shared.sales.stock). Sem acesso ao prontuário.',
-            'Nenhum papel padrão traz shared.scheduling.manage, core.finance.write nem shared.medical-records.audit. Dê em Configurações › Papéis.',
+            'A Recepção dá baixa nas parcelas (core.finance.read e core.finance.write). Nenhum papel padrão traz shared.scheduling.manage nem shared.medical-records.audit: dê em Configurações › Papéis.',
           ],
         },
       ],
@@ -158,7 +158,7 @@ export const manual: ManualGuide = {
           list: [
             'Permissões: aesthetics.packages.read (Ver pacotes de sessões) e aesthetics.packages.sell (Vender e cancelar pacotes).',
             'De 2 a 100 sessões. A tela oferece até 12 parcelas. As parcelas viram "a receber" mensais, e a baixa é feita em Lançamentos. Baixar exige core.finance.write.',
-            'A tela Lançamentos não mostra a paciente: a descrição é só "Pacote <procedimento> (<n> sessões)" e a parcela. Pacotes iguais de pacientes diferentes ficam indistinguíveis ali.',
+            'A tela Lançamentos mostra a paciente na coluna Cliente, e a busca encontra pelo nome dela. A descrição é "Pacote <procedimento> (<n> sessões)" e a parcela.',
             'Ao marcar: se a paciente tem pacote ativo, dentro da validade e com saldo daquele serviço, a sessão fica reservada e a linha sai com R$ 0 e o texto "pacote 3/10". Vale o pacote mais antigo.',
             'Concluído usa a sessão. Cancelado ou Faltou devolve. A configuração noShowConsumesSession faria a falta gastar a sessão, mas não há campo para ela nesta tela.',
             'Com todas as sessões usadas, o pacote passa a Concluído e entra no histórico da paciente.',
@@ -393,7 +393,7 @@ export const manual: ManualGuide = {
             'Permissões: aesthetics.surgery.budget para orçamento, shared.scheduling.write para marcar, shared.medical-records.write para fichas e etapas, aesthetics.packages.sell para o pacote de drenagem.',
           ],
         },
-        { warn: 'O papel Recepção vê os tratamentos em Orçamentos de cirurgia › Detalhes, mas não carrega a lista de cirurgiões, que exige shared.medical-records.write ou aesthetics.setup.manage. A marcação só funciona para ela se o tratamento já tiver cirurgião.' },
+        { text: 'O papel Recepção vê os tratamentos em Orçamentos de cirurgia › Detalhes e carrega a lista de cirurgiões com CRM para marcar a cirurgia.' },
       ],
     },
     {

@@ -142,7 +142,11 @@ export const thirteenthCreate = z.object({
 });
 export type ThirteenthCreate = z.infer<typeof thirteenthCreate>;
 
-export const payrollRecalculate = z.object({ holidays: z.coerce.number().int().min(0).max(10).optional() });
+export const payrollRecalculate = z.object({
+  holidays: z.coerce.number().int().min(0).max(10).optional(),
+  /** Troca a cópia das tabelas guardada na folha aberta pelas tabelas atuais do RH. */
+  useCurrentTables: z.boolean().optional(),
+});
 
 export interface PayrollItem extends PayrollItemUpdate, Payslip {
   id: string;

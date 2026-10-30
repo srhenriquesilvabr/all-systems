@@ -2,7 +2,25 @@ import { describe, expect, it } from 'vitest';
 import { acquisitionPeriods, commercialDays, computePayslip, computeThirteenth, inss, irrf, monthCalendar, taxTables, thirteenthAvos, vacationAvos, vacationPay } from './payroll';
 import { computeTermination, noticeDaysFor, type TerminationCalcInput } from './termination';
 
-const t = taxTables.parse({});
+const t = taxTables.parse({
+  inss: [
+    { upTo: 1518.0, rate: 0.075 },
+    { upTo: 2793.88, rate: 0.09 },
+    { upTo: 4190.83, rate: 0.12 },
+    { upTo: 8157.41, rate: 0.14 },
+  ],
+});
+
+describe('tabelas padrão', () => {
+  it('INSS de 2026 (Portaria Interministerial MPS/MF 13/2026): teto de R$ 8.475,55', () => {
+    const atual = taxTables.parse({});
+    expect(atual.inss.at(-1)?.upTo).toBe(8475.55);
+    // 1.621 × 7,5% + 1.281,84 × 9% + 1.451,43 × 12% + 4.121,28 × 14%
+    expect(inss(8475.55, atual)).toBe(988.09);
+    expect(inss(20_000, atual)).toBe(988.09);
+    expect(inss(1621, atual)).toBeCloseTo(121.575, 1);
+  });
+});
 
 describe('folha de pagamento', () => {
   it('INSS progressivo por faixa, com teto', () => {

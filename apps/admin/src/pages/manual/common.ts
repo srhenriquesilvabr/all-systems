@@ -242,7 +242,7 @@ export const commonGuide: ManualGuide = {
         },
         { text: 'Em Visão geral, veja o que foi recebido e pago, o resultado, os vencidos, o saldo das contas e o que está previsto por mês.' },
         { warn: 'Depois de salvo, o lançamento não pode ser editado na tela, e a baixa não pode ser desfeita. Lançamento errado em aberto: clique em Cancelar e crie outro.' },
-        { tip: 'Para receita de um cliente entrar nos Segmentos, ela precisa estar ligada a ele. O formulário manual não tem o campo Cliente; use a planilha, que tem essa coluna.' },
+        { tip: 'Para receita de um cliente entrar nos Segmentos, ela precisa estar ligada a ele: preencha o campo Cliente ao lançar. A lista mostra o cliente de cada lançamento, e a busca encontra pelo nome dele.' },
       ],
       technical: [
         {

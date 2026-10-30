@@ -1,6 +1,7 @@
 import { defineWebModule } from '@all/module-sdk/web';
 import { EmployeePage, EmployeesPage } from './employees';
 import { PayrollPage, PayrollsPage } from './payroll';
+import { TaxTablesPage } from './tables';
 
 export const hrWeb = defineWebModule({
   key: 'hr',
@@ -9,6 +10,7 @@ export const hrWeb = defineWebModule({
     { path: 'rh/colaboradores/:id', permission: 'hr.read', Component: EmployeePage },
     { path: 'rh/folha', permission: 'hr.read', Component: PayrollsPage },
     { path: 'rh/folha/:id', permission: 'hr.read', Component: PayrollPage },
+    { path: 'configuracoes/tabelas-da-folha', permission: 'core.access.settings', Component: TaxTablesPage },
   ],
 });
 

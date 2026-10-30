@@ -3,7 +3,7 @@ import { Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
-import { bidStatusLabel, bidTypeLabel, type Assembly } from '../contracts';
+import { bidStatusLabel, bidTypeLabel, parseWinningBids, type Assembly } from '../contracts';
 import { bidTone, errorText, key, pct } from './common';
 
 const WEEKDAYS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
@@ -293,15 +293,9 @@ function ResultsModal({ assembly, onClose }: { assembly: Assembly | null; onClos
   const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
   const save = useMutation({
     mutationFn: () => {
-      const results = {
-        drawn: split(form.drawn),
-        // "045:32,5" = cota 045 com lance de 32,5%.
-        bids: split(form.bids).map((b) => {
-          const [quotaNumber, percent] = b.split(':');
-          return { quotaNumber, percent: Number((percent ?? '0').replace(',', '.')) };
-        }),
-        notes: form.notes || null,
-      };
+      const { bids, invalid } = parseWinningBids(form.bids);
+      if (invalid.length) throw new Error(`Lance sem percentual: ${invalid.join(', ')}. Use cota:percentual, como 045:32,5.`);
+      const results = { drawn: split(form.drawn), bids, notes: form.notes || null };
       return assembly
         ? api(`/consortium/assemblies/${assembly.id}/results`, { method: 'POST', body: results })
         : api('/consortium/assemblies', { method: 'POST', body: { groupCode: form.groupCode, heldOn: form.heldOn, ...results } });

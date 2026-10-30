@@ -28,7 +28,7 @@ export const manual: ManualGuide = {
           list: [
             'Recepção: agenda completa, pagamentos de atendimentos, clientes, pets, vender e abrir ou fechar o caixa.',
             'Banho e tosa: ver a agenda, mudar status, ver clientes e pets.',
-            'shared.scheduling.manage (profissionais, serviços e horários), shared.sales.products, shared.sales.stock, shared.sales.read e shared.sales.register.history não estão nesses papéis. Só o dono da conta os tem de início. Existe também o papel Estoquista.',
+            'O papel Gerente soma à Recepção shared.scheduling.manage (profissionais, serviços e horários), shared.sales.products, shared.sales.stock, shared.sales.read e shared.sales.register.history. Existe também o papel Estoquista.',
           ],
         },
         { text: 'Novo profissional começa com expediente de segunda a sexta, das 9h às 12h e das 13h às 18h, e sábado das 9h às 13h. Cada profissional também vira uma pessoa na Equipe.' },

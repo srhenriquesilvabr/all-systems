@@ -1,10 +1,11 @@
 import type { Tx } from '@all/db';
 import { requestContext } from '@all/module-sdk';
 import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
-import { aliasedTable, and, asc, count, desc, eq, gt, gte, ilike, inArray, lte, sql, type SQL } from 'drizzle-orm';
+import { aliasedTable, and, asc, count, desc, eq, gt, gte, ilike, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
 import { AuditService } from '../audit/audit.service';
 import { centsToDecimal, centsToNumber, toCents } from '../common/money';
 import { CustomerDataRegistry } from '../customers/customer-data.registry';
+import { customers } from '../customers/schema';
 import { TenantDb } from '../db/tenant-db';
 import { ModuleHooks } from '../tenancy/module-hooks';
 import { finAccounts, finCategories, finEntries } from './schema';
@@ -165,10 +166,11 @@ export class FinanceService implements OnModuleInit {
       const account = aliasedTable(finAccounts, 'account');
       const [rows, [totals]] = await Promise.all([
         tx
-          .select({ entry: finEntries, categoryName: category.name, accountName: account.name })
+          .select({ entry: finEntries, categoryName: category.name, accountName: account.name, customerName: customers.name })
           .from(finEntries)
           .leftJoin(category, eq(category.id, finEntries.categoryId))
           .leftJoin(account, eq(account.id, finEntries.accountId))
+          .leftJoin(customers, eq(customers.id, finEntries.customerId))
           .where(where)
           .orderBy(desc(finEntries.dueDate), desc(finEntries.createdAt))
           .limit(filters.limit)
@@ -183,7 +185,7 @@ export class FinanceService implements OnModuleInit {
           .where(where),
       ]);
       return {
-        items: rows.map((r) => ({ ...toEntryDto(r.entry), categoryName: r.categoryName, accountName: r.accountName })),
+        items: rows.map((r) => ({ ...toEntryDto(r.entry), categoryName: r.categoryName, accountName: r.accountName, customerName: r.customerName })),
         total: totals!.total,
         sums: { income: Number(totals!.income), expense: Number(totals!.expense) },
       };
@@ -536,7 +538,8 @@ function entryFilter(f: EntryFilters): SQL | undefined {
     f.accountId ? eq(finEntries.accountId, f.accountId) : undefined,
     f.categoryId ? eq(finEntries.categoryId, f.categoryId) : undefined,
     f.customerId ? eq(finEntries.customerId, f.customerId) : undefined,
-    like ? ilike(finEntries.description, like) : undefined,
+    // A busca acha pela descrição ou pelo nome do cliente: parcelas iguais de clientes diferentes se distinguem.
+    like ? or(ilike(finEntries.description, like), sql`exists (select 1 from ${customers} c where c.id = ${finEntries.customerId} and c.name ilike ${like})`) : undefined,
   );
 }
 

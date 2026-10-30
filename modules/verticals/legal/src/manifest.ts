@@ -26,12 +26,12 @@ export const legalManifest = defineModule({
     {
       key: 'legal.lawyer',
       label: 'Advogado(a)',
-      permissions: ['legal.cases.read', 'legal.cases.write', 'legal.fees.read', agenda.read, agenda.write, agenda.status, 'core.customers.read', 'core.customers.write'],
+      permissions: ['legal.cases.read', 'legal.cases.write', 'legal.fees.read', 'legal.fees.manage', agenda.read, agenda.write, agenda.status, 'shared.scheduling.payments', 'core.customers.read', 'core.customers.write'],
     },
     {
       key: 'legal.assistant',
       label: 'Secretaria / estagiário(a)',
-      permissions: ['legal.cases.read', 'legal.cases.write', agenda.read, agenda.write, agenda.status, 'core.customers.read', 'core.customers.write'],
+      permissions: ['legal.cases.read', 'legal.cases.write', agenda.read, agenda.write, agenda.status, 'shared.scheduling.payments', 'core.customers.read', 'core.customers.write', 'core.finance.read', 'core.finance.write'],
     },
   ],
   menu: [

@@ -37,9 +37,14 @@ export const vetManifest = defineModule({
       permissions: [agenda.read, agenda.status, records.read, records.write, 'shared.pets.read', 'shared.pets.write', 'vet.vaccines.read', 'vet.vaccines.write', 'core.customers.read'],
     },
     {
+      key: 'vet.manager',
+      label: 'Gerente',
+      permissions: [agenda.read, agenda.write, agenda.status, agenda.payments, 'shared.scheduling.manage', 'shared.medical-records.audit', 'shared.pets.read', 'shared.pets.write', 'vet.vaccines.read', 'core.customers.read', 'core.customers.write', 'shared.sales.sell', 'shared.sales.register', 'shared.sales.read', 'shared.sales.products', 'shared.sales.stock', 'shared.sales.register.history'],
+    },
+    {
       key: 'vet.reception',
       label: 'Recepção',
-      permissions: [agenda.read, agenda.write, agenda.status, agenda.payments, 'shared.pets.read', 'shared.pets.write', 'vet.vaccines.read', 'core.customers.read', 'core.customers.write'],
+      permissions: [agenda.read, agenda.write, agenda.status, agenda.payments, 'shared.pets.read', 'shared.pets.write', 'vet.vaccines.read', 'core.customers.read', 'core.customers.write', 'shared.sales.sell', 'shared.sales.register'],
     },
   ],
   menu: [{ label: 'Vacinas a vencer', path: '/vet/vacinas', icon: 'syringe', permission: 'vet.vaccines.read' }],

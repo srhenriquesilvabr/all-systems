@@ -74,8 +74,9 @@ export class SpecialtiesController {
 
   // ---- Registro no conselho --------------------------------------------------------------------
 
+  // A recepção escolhe o cirurgião ao marcar a cirurgia (BUDGET).
   @Get('credentials')
-  @RequireAnyPermission(SETUP, records.write)
+  @RequireAnyPermission(SETUP, records.write, BUDGET)
   credentials() {
     return this.setup.listCredentials();
   }

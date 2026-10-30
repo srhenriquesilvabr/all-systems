@@ -19,7 +19,7 @@ export const hrConsultingManifest = defineModule({
     {
       key: 'hr_consulting.manager',
       label: 'Gestor(a) de carteira (consultoria de RH)',
-      permissions: ['hr.read', 'hr.manage', 'hr.payroll', 'hr_consulting.fees.manage', 'core.team.read', 'core.customers.read', 'core.customers.write'],
+      permissions: ['hr.read', 'hr.manage', 'hr.payroll', 'hr_consulting.fees.manage', 'core.team.read', 'core.customers.read', 'core.customers.write', 'core.finance.read', 'core.finance.write'],
     },
   ],
   menu: [{ label: 'Empresas atendidas', path: '/consultoria-rh/empresas', icon: 'building', permission: 'hr.read' }],

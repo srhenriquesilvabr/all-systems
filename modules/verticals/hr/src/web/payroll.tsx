@@ -188,6 +188,10 @@ export function PayrollPage() {
   const [report, setReport] = useState(false);
   const invalidate = () => queryClient.invalidateQueries({ queryKey: hrKey });
   const close = useMutation({ mutationFn: () => api(`/hr/payrolls/${id}/close`, { method: 'POST' }), onSuccess: invalidate });
+  const useCurrentTables = useMutation({
+    mutationFn: () => api(`/hr/payrolls/${id}/recalculate`, { method: 'POST', body: { useCurrentTables: true } }),
+    onSuccess: invalidate,
+  });
   const recalc = useMutation({
     mutationFn: () => api(`/hr/payrolls/${id}/recalculate`, { method: 'POST', body: holidays === null ? {} : { holidays: Number(holidays) || 0 } }),
     onSuccess: () => {
@@ -240,6 +244,9 @@ export function PayrollPage() {
                 <Input type="number" min={0} max={10} className="w-20" aria-label="Feriados em dias úteis" value={holidays ?? String(payroll.holidays)} onChange={(e) => setHolidays(e.target.value)} />
                 <Button size="sm" variant="secondary" loading={recalc.isPending} onClick={() => recalc.mutate()}>
                   Recalcular
+                </Button>
+                <Button size="sm" variant="secondary" loading={useCurrentTables.isPending} onClick={() => useCurrentTables.mutate()}>
+                  Usar tabelas atuais
                 </Button>
                 <span className="text-xs text-fg-muted">Recalcular também aplica afastamentos e férias registrados depois de abrir a folha.</span>
               </>

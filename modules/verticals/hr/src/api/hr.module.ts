@@ -484,13 +484,17 @@ export class HrService implements OnModuleInit {
   }
 
   /** Refaz os cálculos da folha mensal aberta (afastamentos, férias e feriados novos), mantendo os lançamentos. */
-  recalculate(id: string, body: { holidays?: number }): Promise<Payroll> {
+  recalculate(id: string, body: { holidays?: number; useCurrentTables?: boolean }): Promise<Payroll> {
     return this.tdb.run(async (tx) => {
       let payroll = await payrollOrFail(tx, id);
       if (payroll.status === 'closed') throw badRequest('PAYROLL_CLOSED', 'Folha fechada não pode ser alterada');
       if (payroll.type !== 'monthly') throw badRequest('NOT_MONTHLY', 'Só a folha mensal é recalculada; no 13º, ajuste avos e médias por colaborador');
       if (body.holidays !== undefined && body.holidays !== payroll.holidays) {
         [payroll] = (await tx.update(hrPayrolls).set({ holidays: body.holidays }).where(eq(hrPayrolls.id, id)).returning()) as [PayrollRow];
+      }
+      if (body.useCurrentTables) {
+        const { tables } = await this.settings.getInTx<HrSettings>(tx, MODULE);
+        [payroll] = (await tx.update(hrPayrolls).set({ tables }).where(eq(hrPayrolls.id, id)).returning()) as [PayrollRow];
       }
       const items = await tx.select({ i: hrPayrollItems, e: hrEmployees }).from(hrPayrollItems).innerJoin(hrEmployees, eq(hrEmployees.id, hrPayrollItems.employeeId)).where(eq(hrPayrollItems.payrollId, id));
       for (const { i, e } of items) {

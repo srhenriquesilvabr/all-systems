@@ -31,7 +31,7 @@ export const orthodonticsManifest = defineModule({
     {
       key: 'orthodontics.reception',
       label: 'Recepção',
-      permissions: [agenda.read, agenda.write, agenda.status, agenda.payments, 'orthodontics.treatments.read', 'core.customers.read', 'core.customers.write'],
+      permissions: [agenda.read, agenda.write, agenda.status, agenda.payments, 'orthodontics.treatments.read', 'core.customers.read', 'core.customers.write', 'core.finance.read', 'core.finance.write'],
     },
   ],
   menu: [{ label: 'Tratamentos', path: '/orto/tratamentos', icon: 'smile', permission: 'orthodontics.treatments.read' }],

@@ -248,7 +248,7 @@ export const manual: ManualGuide = {
             'Descontos maiores que os proventos são recusados (Os descontos passam do salário).',
           ],
         },
-        { text: 'A folha guarda uma cópia das tabelas ao abrir; o rótulo aparece no cabeçalho. Tabelas padrão: INSS 2025, IRRF maio/2025 e redução da Lei 15.270/2025. Não há tela para alterar as tabelas nem o dia de pagamento: só PUT /modules/hr/settings (core.access.settings). Confira se a tabela é a vigente.' },
+        { text: 'A folha guarda uma cópia das tabelas ao abrir; o rótulo aparece no cabeçalho. Tabelas padrão: INSS 2026 (Portaria Interministerial MPS/MF 13/2026), IRRF maio/2025 e redução da Lei 15.270/2025. Em Configurações › Tabelas da folha (core.access.settings) é possível alterar as tabelas e o dia de pagamento. Na folha mensal aberta, Usar tabelas atuais troca a cópia e recalcula. Confira se a tabela é a vigente.' },
         { text: 'Os valores devem ser conferidos pelo contador. A regra de cada cálculo está em contracts/payroll.ts e em docs/arquitetura. O sistema não gera guias, eSocial nem arquivos oficiais.' },
       ],
     },
@@ -371,7 +371,7 @@ export const manual: ManualGuide = {
         { warn: 'Honorário lançado errado não pode ser cancelado nem editado na tela de Lançamentos. Fale com quem administra o sistema antes de dar baixa.' },
       ],
       technical: [
-        { text: 'Dar baixa exige core.finance.write; ver a lista e o quadro Honorários lançados exige core.finance.read. Os papéis padrão do ramo não têm essas permissões: dê um papel com elas a quem cuida do financeiro.' },
+        { text: 'Dar baixa exige core.finance.write; ver a lista e o quadro Honorários lançados exige core.finance.read. O papel Gestor(a) de carteira tem as duas; o Analista de DP, não.' },
         { text: 'Os lançamentos vêm com a origem hrc_fee, marcados para baixa no financeiro. A origem aparece como esse código na segunda linha da descrição. Cancelar é recusado para lançamento de módulo (Este valor é controlado por outro módulo: cancele por lá), e o ramo não tem rota de cancelamento.' },
         { text: 'A descrição traz a folha e a empresa e, por colaborador, a conta (quantidade × valor). O honorário vinculado ao cliente, ao ser baixado, entra na Segmentação de clientes.' },
       ],

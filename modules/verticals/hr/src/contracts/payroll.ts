@@ -9,16 +9,16 @@ import { z } from 'zod';
  * (configuração e cópias nas folhas) continuam válidas e ganham o valor padrão.
  */
 export const taxTables = z.object({
-  label: z.string().max(120).default('INSS 2025 · IRRF maio/2025 + redução da Lei 15.270/2025'),
+  label: z.string().max(120).default('INSS 2026 (Portaria MPS/MF 13/2026) · IRRF maio/2025 + redução da Lei 15.270/2025'),
   /** INSS do empregado, progressivo por faixa; acima da última, teto. */
   inss: z
     .array(z.object({ upTo: z.number().positive(), rate: z.number().min(0).max(1) }))
     .min(1)
     .default([
-      { upTo: 1518.0, rate: 0.075 },
-      { upTo: 2793.88, rate: 0.09 },
-      { upTo: 4190.83, rate: 0.12 },
-      { upTo: 8157.41, rate: 0.14 },
+      { upTo: 1621.0, rate: 0.075 },
+      { upTo: 2902.84, rate: 0.09 },
+      { upTo: 4354.27, rate: 0.12 },
+      { upTo: 8475.55, rate: 0.14 },
     ]),
   /** IRRF mensal: alíquota e parcela a deduzir por faixa da base de cálculo. */
   irrf: z

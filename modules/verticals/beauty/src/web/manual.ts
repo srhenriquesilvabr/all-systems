@@ -29,7 +29,7 @@ export const manual: ManualGuide = {
           list: [
             'Papel Recepção: shared.scheduling.read, write, status e payments, core.customers.read e write.',
             'Papel Profissional: shared.scheduling.read e status, core.customers.read.',
-            'Nenhum desses papéis tem comissões (beauty.commissions.read, Ver comissões de todos os profissionais; beauty.commissions.manage, Definir percentuais de comissão) nem a configuração da agenda (shared.scheduling.manage, Configurar profissionais, serviços, horários e agendamento online). Dê essas permissões em Configurações › Papéis.',
+            'O papel Gerente soma à Recepção as comissões (beauty.commissions.read, Ver comissões de todos os profissionais; beauty.commissions.manage, Definir percentuais de comissão) e a configuração da agenda (shared.scheduling.manage).',
             'O cartão Lembretes e agendamento online exige também core.access.settings. Sem ela, o cartão não aparece.',
             'Vender no caixa usa as permissões shared.sales.*, que os papéis do salão não trazem.',
           ],

@@ -33,5 +33,6 @@ export const hrManifest = defineModule({
   menu: [
     { label: 'Colaboradores', path: '/rh/colaboradores', icon: 'id-card', permission: 'hr.read' },
     { label: 'Folha de pagamento', path: '/rh/folha', icon: 'banknote', permission: 'hr.read' },
+    { label: 'Tabelas da folha', path: '/configuracoes/tabelas-da-folha', icon: 'calculator', permission: 'core.access.settings', group: 'Configurações' },
   ],
 });

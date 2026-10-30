@@ -29,6 +29,8 @@ export interface Entry {
   paidAt: string | null;
   accountId: string | null;
   categoryId: string | null;
+  customerId: string | null;
+  customerName: string | null;
   sourceType: string;
   /** Lançamento de módulo que recebe baixa no financeiro (parcelas, honorários, folha). */
   settleInFinance: boolean;

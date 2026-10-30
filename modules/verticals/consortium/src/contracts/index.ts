@@ -141,6 +141,20 @@ export type AssemblyScheduleInput = z.infer<typeof assemblyScheduleInput>;
 export const assemblyUpdateInput = z.object({ heldOn: isoDate.optional(), notes: z.string().trim().max(500).nullish() });
 
 /** Resultado de uma assembleia já agendada. */
+/**
+ * Lê os lances vencedores digitados como "cota:percentual". A vírgula pode ser decimal ("045:32,5")
+ * ou separar lances ("045:32,5, 210:28"), por isso o par é reconhecido inteiro. O que sobrar vem em
+ * `invalid`: nunca vira lance de 0%, que poderia contemplar a cota errada.
+ */
+export function parseWinningBids(text: string): { bids: { quotaNumber: string; percent: number }[]; invalid: string[] } {
+  const bids: { quotaNumber: string; percent: number }[] = [];
+  const rest = text.replace(/([^\s,;:]+)\s*:\s*(\d+(?:[.,]\d+)?)/g, (_, quotaNumber: string, percent: string) => {
+    bids.push({ quotaNumber, percent: Number(percent.replace(',', '.')) });
+    return ' ';
+  });
+  return { bids, invalid: rest.split(/[\s,;]+/).filter(Boolean) };
+}
+
 export const assemblyResultsInput = assemblyInput.omit({ groupCode: true, heldOn: true });
 export type AssemblyResultsInput = z.infer<typeof assemblyResultsInput>;
 

@@ -27,7 +27,7 @@ export const manual: ManualGuide = {
           list: [
             'Papel Advogado(a): legal.cases.read e write, legal.fees.read, agenda (ver, marcar, situação), clientes (ver e editar).',
             'Papel Secretaria / estagiário(a): o mesmo, sem honorários.',
-            'Nenhum dos dois traz legal.fees.manage (Lançar e cancelar honorários), shared.scheduling.payments, shared.scheduling.manage nem core.finance.write. Dê em Configurações › Papéis.',
+            'Advogado(a) lança e cancela honorários (legal.fees.manage). Os dois registram pagamento na agenda (shared.scheduling.payments), e a Secretaria dá baixa no financeiro (core.finance.read e core.finance.write). Nenhum traz shared.scheduling.manage: dê em Configurações › Papéis.',
             'Usuário do sistema e profissional da agenda são cadastros diferentes: o advogado precisa existir nos dois para ser responsável por processo e aparecer como coluna na agenda.',
           ],
         },
@@ -325,9 +325,9 @@ export const manual: ManualGuide = {
       technical: [
         {
           list: [
-            'Baixar exige core.finance.write. Registrar pagamento na agenda exige shared.scheduling.payments. Os papéis padrão não trazem nenhuma das duas.',
+            'Baixar exige core.finance.write, que a Secretaria tem. Registrar pagamento na agenda exige shared.scheduling.payments, que os dois papéis têm.',
             'Parcelas de honorários só são canceladas pela aba Honorários, não em Lançamentos.',
-            'A tela Lançamentos não mostra o cliente. A parcela é identificada pelo título do processo, que faz parte da descrição.',
+            'A tela Lançamentos mostra o cliente na coluna Cliente, e a busca encontra pelo nome dele. O título do processo também faz parte da descrição.',
             'Pagamento na agenda: data de hoje, sem valor acima do saldo. Ao concluir, o saldo vira "a receber" e só se resolve pela agenda. Faltou ou Cancelado zera o saldo.',
           ],
         },

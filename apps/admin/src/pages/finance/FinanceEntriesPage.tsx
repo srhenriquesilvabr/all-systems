@@ -1,4 +1,4 @@
-import { api, apiDownload, ApiError, formatDate, formatMoney, parseMoney, SpreadsheetImport, today, useCan } from '@all/module-sdk/web';
+import { api, apiDownload, ApiError, CustomerSearch, formatDate, formatMoney, parseMoney, SpreadsheetImport, today, useCan } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th, Textarea } from '@all/ui';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
@@ -65,7 +65,7 @@ export function FinanceEntriesPage() {
       />
 
       <div className="mb-4 flex flex-wrap items-end gap-3">
-        <Input type="search" aria-label="Buscar" placeholder="Buscar descrição" className="max-w-56" value={filters.q} onChange={(e) => set({ q: e.target.value })} />
+        <Input type="search" aria-label="Buscar" placeholder="Buscar descrição ou cliente" className="max-w-64" value={filters.q} onChange={(e) => set({ q: e.target.value })} />
         <Select aria-label="Situação" className="max-w-40" value={filters.status} onChange={(e) => set({ status: e.target.value })}>
           <option value="">Todas as situações</option>
           <option value="pending">Em aberto</option>
@@ -109,6 +109,7 @@ export function FinanceEntriesPage() {
                 <tr>
                   <Th>Vencimento</Th>
                   <Th>Descrição</Th>
+                  <Th>Cliente</Th>
                   <Th>Categoria</Th>
                   <Th className="text-right">Valor</Th>
                   <Th>Situação</Th>
@@ -126,12 +127,13 @@ export function FinanceEntriesPage() {
                         {e.paidAt && ` · pago em ${formatDate(e.paidAt)}${e.accountName ? ` (${e.accountName})` : ''}`}
                       </p>
                     </Td>
+                    <Td>{e.customerName ?? <span className="text-fg-muted">—</span>}</Td>
                     <Td className="text-fg-muted">{e.categoryName ?? '—'}</Td>
                     <Td className={`whitespace-nowrap text-right tabular-nums ${e.status === 'cancelled' ? 'text-fg-subtle line-through' : ''}`}>
                       {e.kind === 'expense' ? '−' : '+'}
                       {formatMoney(e.amount)}
                     </Td>
-                    <Td>
+                    <Td className="whitespace-nowrap">
                       <Badge tone={statusMeta[e.status].tone}>{statusMeta[e.status].label}</Badge>
                     </Td>
                     <Td className="whitespace-nowrap text-right">
@@ -196,6 +198,7 @@ function EntryModal({ onClose }: { onClose: () => void }) {
     accountId: '',
     notes: '',
   });
+  const [customer, setCustomer] = useState<{ id: string; name: string } | null>(null);
   const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
   const activeAccounts = accounts.data?.filter((a) => a.active) ?? [];
 
@@ -209,6 +212,7 @@ function EntryModal({ onClose }: { onClose: () => void }) {
           amount: parseMoney(form.amount),
           dueDate: form.dueDate,
           categoryId: form.categoryId || null,
+          customerId: customer?.id ?? null,
           status: form.status,
           notes: form.notes || null,
           ...(form.status === 'paid' ? { paidAt: form.paidAt, accountId: form.accountId || activeAccounts[0]?.id } : {}),
@@ -255,6 +259,19 @@ function EntryModal({ onClose }: { onClose: () => void }) {
           <Field label="Valor (R$)">{(id) => <Input id={id} required inputMode="decimal" value={form.amount} onChange={(e) => set({ amount: e.target.value })} placeholder="0,00" />}</Field>
         </div>
         <Field label="Descrição">{(id) => <Input id={id} required minLength={2} value={form.description} onChange={(e) => set({ description: e.target.value })} />}</Field>
+        <div>
+          <p className="mb-1.5 text-sm font-medium">Cliente (opcional)</p>
+          {customer ? (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-line px-3 py-2 text-sm">
+              <span className="font-medium">{customer.name}</span>
+              <Button variant="ghost" size="sm" onClick={() => setCustomer(null)}>
+                Trocar
+              </Button>
+            </div>
+          ) : (
+            <CustomerSearch autoFocus={false} onSelect={(c) => setCustomer({ id: c.id, name: c.name })} />
+          )}
+        </div>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Vencimento">{(id) => <Input id={id} type="date" required value={form.dueDate} onChange={(e) => set({ dueDate: e.target.value })} />}</Field>
           <Field label="Categoria">

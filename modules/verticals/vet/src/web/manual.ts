@@ -29,7 +29,7 @@ export const manual: ManualGuide = {
             'Veterinário(a): ver a agenda e mudar status, prontuário (ver e incluir), pets, vacinas (ver e registrar), ver clientes.',
             'Recepção: agenda completa, pagamentos, pets, ver vacinas, clientes. Não vê o prontuário e não registra vacina.',
             'Veterinário(a) não marca horários (shared.scheduling.write) nem registra pagamentos, a menos que receba isso em outro papel.',
-            'shared.scheduling.manage, shared.medical-records.audit e as permissões de vendas não estão nesses papéis. Só o dono da conta as tem de início.',
+            'A Recepção vende no caixa (shared.sales.sell e shared.sales.register). O papel Gerente soma shared.scheduling.manage, shared.medical-records.audit, produtos, estoque, vendas e histórico de caixas.',
           ],
         },
         { text: 'Novo profissional começa com expediente de segunda a sexta, das 9h às 12h e das 13h às 18h, e sábado das 9h às 13h.' },

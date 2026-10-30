@@ -29,7 +29,7 @@ export const manual: ManualGuide = {
             'Atendente: ordens, status, pagamentos, clientes, coletas e entregas (gerenciar e dirigir).',
             'Operador: ver ordens e mover peças (laundry.orders.read, laundry.orders.status, mais leitura e status das ordens de serviço).',
             'Motorista: só laundry.logistics.drive (Fazer coletas e entregas, só as atribuídas a si).',
-            'laundry.catalog.manage (Gerenciar serviços e preços) e laundry.reports.read (Ver relatórios da lavanderia) não fazem parte de nenhum desses papéis: só o dono da conta os tem de início. Para outra pessoa, inclua em um papel próprio.',
+            'O papel Gerente soma ao Atendente laundry.catalog.manage (Gerenciar serviços e preços) e laundry.reports.read (Ver relatórios da lavanderia).',
             'Taxas padrão exigem core.access.settings (Configurar os módulos contratados).',
           ],
         },

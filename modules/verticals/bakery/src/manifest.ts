@@ -17,6 +17,7 @@ export const bakeryManifest = defineModule({
   permissions: [],
   defaultRoles: [
     { key: 'bakery.counter', label: 'Balcão', permissions: [...sales, ...orders, 'core.customers.read', 'core.customers.write'] },
+    { key: 'bakery.manager', label: 'Gerente', permissions: [...sales, ...orders, 'shared.sales.cancel', 'shared.sales.register.history', 'shared.sales.products', 'shared.sales.stock', 'core.customers.read', 'core.customers.write'] },
     { key: 'bakery.production', label: 'Produção', permissions: ['shared.service-orders.read', 'shared.service-orders.status', 'shared.sales.stock', 'shared.sales.products'] },
   ],
   menu: [

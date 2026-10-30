@@ -28,7 +28,7 @@ export const manual: ManualGuide = {
           list: [
             'Papel Ortodontista: agenda (ver e situação), prontuário (ver e incluir), orthodontics.treatments.read e manage, core.customers.read. Não marca na agenda.',
             'Papel Recepção: agenda (ver, marcar, situação e pagamentos), orthodontics.treatments.read, clientes. Não inicia nem encerra tratamento, nem vê prontuário.',
-            'Nenhum dos dois traz core.finance.write, necessária para dar baixa nas mensalidades, nem shared.scheduling.manage. Dê em Configurações › Papéis.',
+            'A Recepção dá baixa nas mensalidades (core.finance.read e core.finance.write). Nenhum dos dois traz shared.scheduling.manage: dê em Configurações › Papéis.',
             'orthodontics.treatments.read é Ver tratamentos e mensalidades. orthodontics.treatments.manage é Iniciar, prorrogar e encerrar tratamentos.',
           ],
         },
@@ -220,13 +220,13 @@ export const manual: ManualGuide = {
           ],
         },
         { text: 'Para ver a situação de um paciente, abra Tratamentos e clique na linha dele. Cada parcela aparece como Em aberto, Paga ou Cancelada.' },
-        { warn: 'A tela Lançamentos não mostra o nome do paciente, e a descrição é igual para todos, como "Ortodontia: mensalidade 3/24". Antes de clicar em Baixar, confira na janela do tratamento o vencimento e o valor. Se dois pacientes tiverem parcela igual no mesmo dia, a tela não os diferencia: combine com a clínica como controlar esse caso.' },
+        { tip: 'Em Lançamentos, a coluna Cliente mostra o paciente. Para achar as parcelas de alguém, busque pelo nome. Antes de clicar em Baixar, confira o vencimento e o valor.' },
       ],
       technical: [
         {
           list: [
             'A busca de Lançamentos procura só na descrição. O lançamento guarda o cliente, mas a tela não o exibe nem filtra por ele.',
-            'Baixar exige core.finance.write. Ver Lançamentos exige core.finance.read. Os papéis padrão do ramo não trazem essas permissões.',
+            'Baixar exige core.finance.write e ver Lançamentos exige core.finance.read. O papel Recepção tem as duas.',
             'Mensalidades e taxa têm o botão Baixar. Atendimentos avulsos, não: são recebidos pela agenda.',
             'Na tela Tratamentos, a coluna Mensalidades conta só as mensalidades não canceladas. Em atraso soma mensalidades e taxa vencidas e em aberto.',
             'O cancelamento de lançamento do tratamento é feito por Concluir ou Cancelar o tratamento, não em Lançamentos.',
