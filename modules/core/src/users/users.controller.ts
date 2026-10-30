@@ -33,10 +33,32 @@ export class UsersController {
     return this.users.team();
   }
 
+  /** Se o sistema consegue enviar e-mail: sem o provedor em produção, os convites não chegam. */
+  @Get('email-status')
+  @RequirePermission('core.users.read')
+  emailStatus() {
+    return this.users.emailStatus();
+  }
+
   @Post('invite')
   @RequirePermission('core.users.manage')
   invite(@Body(new ZodPipe(inviteBody)) body: z.infer<typeof inviteBody>) {
     return this.users.invite(body);
+  }
+
+  @Post(':membershipId/resend-invite')
+  @HttpCode(200)
+  @RequirePermission('core.users.manage')
+  resendInvite(@Param('membershipId', ParseUUIDPipe) membershipId: string) {
+    return this.users.resendInvite(membershipId);
+  }
+
+  /** Link de convite para entregar por outro canal, quando o e-mail não chega. */
+  @Post(':membershipId/invite-link')
+  @HttpCode(200)
+  @RequirePermission('core.users.manage')
+  inviteLink(@Param('membershipId', ParseUUIDPipe) membershipId: string) {
+    return this.users.inviteLink(membershipId);
   }
 
   @Patch(':membershipId')

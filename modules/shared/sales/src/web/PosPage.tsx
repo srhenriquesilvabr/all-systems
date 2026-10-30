@@ -3,7 +3,7 @@ import { Alert, Button, Card, Field, Input, Modal, Select, Spinner } from '@all/
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { formatQuantity, fractionalUnits, salePaymentLabel, salePaymentMethods, type Product, type RegisterSession, type Sale, type SalePaymentMethod } from '../contracts';
-import { brl, registersKey, salesKey, useDeviceRegister, useProducts, useRegisters, useSalesSettings } from './hooks';
+import { brl, registersKey, salesKey, useDeviceRegister, useProducts, useRegisters } from './hooks';
 import { ClosingReport, DifferenceBadge, OpenRegisterForm, SessionDetails, SessionPanel } from './registers';
 
 interface CartLine {
@@ -575,7 +575,8 @@ function DoneModal({ sale, onNext }: { sale: Sale; onNext: () => void }) {
 /** Cupom para impressora térmica (80 mm). Não é documento fiscal. */
 function Receipt({ sale }: { sale: Sale }) {
   const { tenant } = useSession();
-  const settings = useSalesSettings();
+  const registers = useRegisters();
+  const footer = registers.data?.receiptFooter ?? 'Obrigado pela preferência!';
   return (
     <div className="hidden w-[72mm] font-mono text-[11px] leading-snug text-black print:block">
       <div className="text-center font-bold">{tenant.name}</div>
@@ -617,7 +618,7 @@ function Receipt({ sale }: { sale: Sale }) {
       )}
       {sale.customer && <div className="mt-1">Cliente: {sale.customer.name}</div>}
       <div className="my-1 border-t border-dashed border-black" />
-      <div className="text-center">{settings.data?.receiptFooter ?? 'Obrigado pela preferência!'}</div>
+      {footer && <div className="text-center">{footer}</div>}
       <div className="text-center">Não é documento fiscal</div>
     </div>
   );

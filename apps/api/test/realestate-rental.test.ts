@@ -120,15 +120,15 @@ describe('imobiliária: administração de locação', () => {
     // O imóvel acompanha o contrato: alugado, sem segundo contrato e sem voltar a "disponível" pela edição.
     expect((await s.as('get', `/real-estate/properties/${s.prop.id}`).expect(200)).body.status).toBe('rented');
     expect((await s.lease().expect(409)).body.code).toBe('PROPERTY_UNAVAILABLE');
-    const { body: edited } = await s.as('patch', `/real-estate/properties/${s.prop.id}`).send({ ...s.propertyBody, status: 'available' }).expect(200);
-    expect(edited.status).toBe('rented');
+    const refused = await s.as('patch', `/real-estate/properties/${s.prop.id}`).send({ ...s.propertyBody, status: 'available' }).expect(400);
+    expect(refused.body.code).toBe('PROPERTY_RENTED');
 
     const rents = await s.entries(s.renter.id);
     expect(rents).toHaveLength(12);
     expect(rents.every((e) => e.kind === 'income' && e.status === 'pending' && e.amount === 2900 && e.settleInFinance)).toBe(true);
     const payouts = await s.entries(s.owner.id);
     expect(payouts).toHaveLength(12);
-    expect(payouts.every((e) => e.kind === 'expense' && e.status === 'pending' && e.amount === 2650 && e.settleInFinance)).toBe(true);
+    expect(payouts.every((e) => e.kind === 'expense' && e.status === 'pending' && e.amount === 2650 && !e.settleInFinance)).toBe(true);
     expect(payouts[0]!.dueDate).toBe(plusDays(firstDue, 5));
 
     // Baixa do primeiro aluguel no financeiro aparece no contrato e no extrato do proprietário.

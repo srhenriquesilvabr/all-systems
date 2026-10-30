@@ -22,7 +22,7 @@ export const vetManifest = defineModule({
   layer: 'vertical',
   description: 'Consultas, prontuário e controle de vacinas dos pets.',
   icon: 'stethoscope',
-  version: '1.0.0',
+  version: '1.1.0',
   dependsOn: ['core.customers', 'core.finance', 'shared.notifications', 'shared.scheduling', 'shared.pets', 'shared.medical-records', 'shared.sales'],
   optionalDependsOn: ['integration.whatsapp', 'integration.payments'],
   permissions: [

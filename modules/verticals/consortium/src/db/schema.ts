@@ -2,6 +2,7 @@ import { customers, tenants, users } from '@all/core/schema';
 import { id, tenantId, tenantIsolation } from '@all/db';
 import { sql } from 'drizzle-orm';
 import { boolean, date, index, integer, jsonb, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import type { AssemblyResultSnapshot, CorrectionEffects } from '../contracts';
 
 const ts = (name: string) => timestamp(name, { withTimezone: true });
 const money = (name: string) => numeric(name, { precision: 14, scale: 2 });
@@ -52,6 +53,8 @@ export const consQuotas = pgTable(
     dueDay: integer('due_day').notNull(),
     contemplatedOn: date('contemplated_on', { mode: 'string' }),
     contemplationType: text('contemplation_type', { enum: ['draw', 'bid'] }),
+    /** Assembleia que contemplou a cota: é por ela que o resultado é corrigido. */
+    contemplatedAssemblyId: uuid('contemplated_assembly_id').references(() => consAssemblies.id, { onDelete: 'set null' }),
     bidPercent: numeric('bid_percent', { precision: 5, scale: 2 }),
     sellerId: uuid('seller_id').references(() => users.id, { onDelete: 'set null' }),
     /** Quando a administradora aceitou a adesão (base do prazo de estorno da comissão). */
@@ -81,6 +84,9 @@ export const consAssemblies = pgTable(
   {
     id: id(),
     tenantId: tenantId(),
+    /** Administradora do grupo. Vazio = ainda não se sabe (código sem cota nem grupo cadastrado). */
+    connectionId: uuid('connection_id'),
+    /** Como foi digitado; a comparação é por normalizeCode (contratos). */
     groupCode: text('group_code').notNull(),
     heldOn: date('held_on', { mode: 'string' }).notNull(),
     status: text('status', { enum: ['scheduled', 'held'] }).notNull().default('held'),
@@ -89,7 +95,36 @@ export const consAssemblies = pgTable(
     notes: text('notes'),
     createdAt: ts('created_at').notNull().defaultNow(),
   },
-  (t) => [uniqueIndex('cons_assemblies_key').on(t.tenantId, t.groupCode, t.heldOn), index('cons_assemblies_date_idx').on(t.tenantId, t.heldOn), tenantIsolation()],
+  (t) => [
+    uniqueIndex('cons_assemblies_key').on(t.tenantId, t.connectionId, t.groupCode, t.heldOn).where(sql`connection_id is not null`),
+    uniqueIndex('cons_assemblies_no_admin_key').on(t.tenantId, t.groupCode, t.heldOn).where(sql`connection_id is null`),
+    index('cons_assemblies_date_idx').on(t.tenantId, t.heldOn),
+    tenantIsolation(),
+  ],
+);
+
+/**
+ * Correção de um resultado já lançado: o que estava, o que ficou e o que aconteceu com cada cota.
+ * Só de inclusão (sem UPDATE/DELETE para a aplicação), como o histórico que é.
+ */
+export const consAssemblyCorrections = pgTable(
+  'cons_assembly_corrections',
+  {
+    id: id(),
+    tenantId: tenantId().references(() => tenants.id, { onDelete: 'cascade' }),
+    assemblyId: uuid('assembly_id')
+      .notNull()
+      .references(() => consAssemblies.id),
+    /** `correction`: lista corrigida. `contemplation_reverted`: uma cota tirada do resultado. */
+    kind: text('kind', { enum: ['correction', 'contemplation_reverted'] }).notNull(),
+    reason: text('reason').notNull(),
+    before: jsonb('before').$type<AssemblyResultSnapshot>().notNull(),
+    after: jsonb('after').$type<AssemblyResultSnapshot>().notNull(),
+    effects: jsonb('effects').$type<CorrectionEffects>().notNull(),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [index('cons_assembly_corrections_assembly_idx').on(t.assemblyId, t.createdAt), tenantIsolation()],
 );
 
 /** Administradora (conexão da integração bancária) com a comissão combinada com a corretora. */
@@ -259,8 +294,12 @@ export const consLeads = pgTable(
     externalId: text('external_id'),
     channelId: uuid('channel_id'),
     referrerId: uuid('referrer_id').references(() => consReferrers.id, { onDelete: 'set null' }),
-    /** Recompensa da indicação: aguardando a venda → a pagar → paga (ou cancelada). */
-    rewardStatus: text('reward_status', { enum: ['none', 'waiting', 'due', 'paid', 'cancelled'] }).notNull().default('none'),
+    /**
+     * Recompensa da indicação: aguardando a venda → a pagar → paga (ou cancelada). Estornada = já
+     * tinha sido paga e a cota caiu dentro do prazo de estorno. No financeiro: despesa com origem
+     * 'consortium_lead' (source_id = id do lead).
+     */
+    rewardStatus: text('reward_status', { enum: ['none', 'waiting', 'due', 'paid', 'cancelled', 'reversed'] }).notNull().default('none'),
     rewardAmount: money('reward_amount'),
     rewardPaidAt: ts('reward_paid_at'),
     status: text('status', { enum: ['new', 'contacting', 'simulation_sent', 'proposal', 'won', 'lost'] }).notNull().default('new'),

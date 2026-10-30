@@ -216,7 +216,7 @@ export async function applyAppointments(api, plan) {
     if (a) stats.existing++;
     else {
       try {
-        a = await api.post('/scheduling/appointments', {
+        a = await api.post('/scheduling/appointments', { overrideSchedule: true,
           customerId: item.customerId,
           resourceId: item.resourceId,
           startsAt: item.startsAt,

@@ -1,5 +1,5 @@
 import { api, type ImportOption, type ImportRow, type ImportSpec } from '@all/module-sdk/web';
-import { fuelLabel, transmissionLabel, vehicleKindLabel, vehicleStatusLabel } from '../contracts';
+import { fuelLabel, manualVehicleStatuses, transmissionLabel, vehicleKindLabel, vehicleStatusLabel } from '../contracts';
 
 const text = (row: ImportRow, k: string) => (row[k] === null || row[k] === undefined ? undefined : String(row[k]));
 const options = (labels: Record<string, string>): ImportOption[] => Object.entries(labels).map(([value, label]) => ({ value, label }));
@@ -24,7 +24,7 @@ export const vehicleImportSpec: ImportSpec = {
     { key: 'fipePrice', label: 'Valor FIPE (R$)', type: 'money', example: '89.500,00' },
     { key: 'cost', label: 'Custo (R$)', type: 'money', example: '78.000,00' },
     { key: 'price', label: 'Preço de venda (R$)', required: true, type: 'money', example: '92.900,00' },
-    { key: 'status', label: 'Situação', type: 'enum', options: options(vehicleStatusLabel), example: 'Disponível', hint: `Um destes: ${Object.values(vehicleStatusLabel).join(', ')} (vazio = Disponível)` },
+    { key: 'status', label: 'Situação', type: 'enum', options: manualVehicleStatuses.map((s) => ({ value: s, label: vehicleStatusLabel[s] })), example: 'Disponível', hint: `Um destes: ${manualVehicleStatuses.map((s) => vehicleStatusLabel[s]).join(', ')} (vazio = Disponível). Reservado e Vendido vêm da negociação.` },
     { key: 'notes', label: 'Observações (opcionais, itens, revisões)' },
   ],
   create: (row) =>

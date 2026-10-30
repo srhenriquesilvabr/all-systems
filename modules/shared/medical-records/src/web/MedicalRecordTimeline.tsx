@@ -1,7 +1,7 @@
 import { api, apiBlob, ApiError, apiUpload, formatDate, formatDateTime, today, useCan } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, Select, Spinner, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRef, useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { fieldText, type AccessLogEntry, type FormField, type MedicalEntry, type MedicalForm } from '../contracts';
 
 export const medicalRecordsKey = ['medical-records'] as const;
@@ -14,11 +14,30 @@ const actionLabel: Record<AccessLogEntry['action'], string> = {
   download: 'Abriu anexo',
 };
 
+/** Horário da agenda que pode ser ligado a um registro. `suggested` já vem escolhido ao incluir. */
+export interface AppointmentOption {
+  id: string;
+  label: string;
+  suggested?: boolean;
+}
+
 /**
  * Prontuário de um paciente (cliente ou pet): registros só de inclusão, do mais recente ao mais
  * antigo. Corrigir é retificar: o registro original fica visível, marcado como retificado.
  */
-export function MedicalRecordTimeline({ subjectType, subjectId }: { subjectType: string; subjectId: string }) {
+export function MedicalRecordTimeline({
+  subjectType,
+  subjectId,
+  appointments,
+  entryExtra,
+}: {
+  subjectType: string;
+  subjectId: string;
+  /** Horários do paciente, para ligar o registro à agenda. Sem isso, o campo não aparece. */
+  appointments?: AppointmentOption[];
+  /** O que o módulo acrescenta em cada registro (ex.: a veterinária marca o retorno). */
+  entryExtra?: (entry: MedicalEntry) => ReactNode;
+}) {
   const canWrite = useCan('shared.medical-records.write');
   const canAudit = useCan('shared.medical-records.audit');
   const entries = useQuery({
@@ -63,17 +82,39 @@ export function MedicalRecordTimeline({ subjectType, subjectId }: { subjectType:
       ) : (
         <ol className="space-y-3">
           {entries.data.map((e) => (
-            <EntryCard key={e.id} entry={e} form={formOf(e.formKey)} canWrite={canWrite} onAmend={() => setWriting({ form: formOf(e.formKey), amends: e })} />
+            <EntryCard
+              key={e.id}
+              entry={e}
+              form={formOf(e.formKey)}
+              canWrite={canWrite}
+              appointment={appointments?.find((a) => a.id === e.appointmentId)}
+              extra={entryExtra?.(e)}
+              onAmend={() => setWriting({ form: formOf(e.formKey), amends: e })}
+            />
           ))}
         </ol>
       )}
-      {writing && <EntryModal subjectType={subjectType} subjectId={subjectId} form={writing.form} amends={writing.amends} onClose={() => setWriting(null)} />}
+      {writing && <EntryModal subjectType={subjectType} subjectId={subjectId} form={writing.form} amends={writing.amends} appointments={appointments} onClose={() => setWriting(null)} />}
       {showLog && <AccessLogModal subjectType={subjectType} subjectId={subjectId} onClose={() => setShowLog(false)} />}
     </div>
   );
 }
 
-function EntryCard({ entry: e, form, canWrite, onAmend }: { entry: MedicalEntry; form: MedicalForm; canWrite: boolean; onAmend: () => void }) {
+function EntryCard({
+  entry: e,
+  form,
+  canWrite,
+  appointment,
+  extra,
+  onAmend,
+}: {
+  entry: MedicalEntry;
+  form: MedicalForm;
+  canWrite: boolean;
+  appointment?: AppointmentOption;
+  extra?: ReactNode;
+  onAmend: () => void;
+}) {
   const queryClient = useQueryClient();
   const fileInput = useRef<HTMLInputElement>(null);
   const upload = useMutation({
@@ -98,6 +139,7 @@ function EntryCard({ entry: e, form, canWrite, onAmend }: { entry: MedicalEntry;
           </span>
         </div>
         {e.amendReason && <p className="mt-1 text-xs text-fg-muted">Motivo da retificação: {e.amendReason}</p>}
+        {appointment && <p className="mt-1 text-xs text-fg-muted">Horário da agenda: {appointment.label}</p>}
         {filled.length > 0 && (
           <dl className="mt-3 grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
             {filled.map((f) => (
@@ -115,6 +157,7 @@ function EntryCard({ entry: e, form, canWrite, onAmend }: { entry: MedicalEntry;
               <li key={a.id}>
                 <button type="button" className="rounded-full border border-line px-3 py-1 text-xs hover:bg-muted" onClick={() => openAttachment(a.id)}>
                   {a.filename}
+                  {a.inheritedFrom && <span className="text-fg-muted"> · do registro de {formatDate(a.inheritedFrom.occurredOn)}</span>}
                 </button>
               </li>
             ))}
@@ -125,6 +168,7 @@ function EntryCard({ entry: e, form, canWrite, onAmend }: { entry: MedicalEntry;
             <Alert>{upload.error instanceof ApiError ? upload.error.message : 'Erro ao anexar'}</Alert>
           </div>
         )}
+        {!superseded && extra}
         {canWrite && !superseded && (
           <div className="mt-3 flex gap-2 print:hidden">
             <Button size="sm" variant="ghost" loading={upload.isPending} onClick={() => fileInput.current?.click()}>
@@ -166,17 +210,32 @@ export async function openAttachment(fileId: string) {
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-function EntryModal({ subjectType, subjectId, form, amends, onClose }: { subjectType: string; subjectId: string; form: MedicalForm; amends?: MedicalEntry; onClose: () => void }) {
+function EntryModal({
+  subjectType,
+  subjectId,
+  form,
+  amends,
+  appointments,
+  onClose,
+}: {
+  subjectType: string;
+  subjectId: string;
+  form: MedicalForm;
+  amends?: MedicalEntry;
+  appointments?: AppointmentOption[];
+  onClose: () => void;
+}) {
   const queryClient = useQueryClient();
   const [data, setData] = useState<Record<string, unknown>>(amends?.data ?? {});
   const [notes, setNotes] = useState(amends?.notes ?? '');
   const [reason, setReason] = useState('');
   const [occurredOn, setOccurredOn] = useState(amends?.occurredOn ?? today());
+  const [appointmentId, setAppointmentId] = useState(appointments?.find((a) => a.suggested)?.id ?? '');
   const save = useMutation({
     mutationFn: () =>
       amends
         ? api(`/medical-records/${amends.id}/amend`, { method: 'POST', body: { data, notes: notes || null, reason, occurredOn } })
-        : api('/medical-records', { method: 'POST', body: { subjectType, subjectId, formKey: form.key, data, notes: notes || null, occurredOn } }),
+        : api('/medical-records', { method: 'POST', body: { subjectType, subjectId, formKey: form.key, data, notes: notes || null, occurredOn, appointmentId: appointmentId || null } }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: medicalRecordsKey });
       onClose();
@@ -210,6 +269,21 @@ function EntryModal({ subjectType, subjectId, form, amends, onClose }: { subject
         <Field label="Data do atendimento" hint="Para lançar um atendimento antigo, informe a data em que ele aconteceu.">
           {(id) => <Input id={id} type="date" required max={today()} className="sm:w-48" value={occurredOn} onChange={(e) => setOccurredOn(e.target.value)} />}
         </Field>
+        {!amends && appointments && appointments.length > 0 && (
+          <Field label="Horário da agenda" hint="Liga este registro ao atendimento marcado.">
+            {(id) => (
+              <Select id={id} value={appointmentId} onChange={(e) => setAppointmentId(e.target.value)}>
+                <option value="">Sem horário</option>
+                {appointments.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.label}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+        )}
+        {amends && amends.attachments.length > 0 && <p className="text-xs text-fg-muted">Os anexos do registro original continuam valendo e aparecem na nova versão. Não precisa anexar de novo.</p>}
         <div className="grid gap-4 sm:grid-cols-2">
           {form.fields
             .filter((f) => !f.hidden)

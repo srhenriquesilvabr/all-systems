@@ -1,6 +1,6 @@
 import { customers, users } from '@all/core/schema';
 import { id, tenantId, tenantIsolation } from '@all/db';
-import { date, index, integer, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, date, index, integer, numeric, pgTable, text, timestamp, uniqueIndex, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
 
 const ts = (name: string) => timestamp(name, { withTimezone: true });
 const money = (name: string) => numeric(name, { precision: 14, scale: 2 });
@@ -46,6 +46,16 @@ export const legalUpdates = pgTable(
     occurredOn: date('occurred_on', { mode: 'string' }).notNull(),
     description: text('description').notNull(),
     authorId: uuid('author_id').references(() => users.id),
+    /** Gerado pelo sistema (prazo cumprido, situação, êxito): não se edita nem se exclui à mão. */
+    auto: boolean('auto').notNull().default(false),
+    /** Prazo do andamento automático "Prazo cumprido": reabrir o prazo retira este andamento. */
+    deadlineId: uuid('deadline_id').references((): AnyPgColumn => legalDeadlines.id),
+    editedAt: ts('edited_at'),
+    editedBy: uuid('edited_by').references(() => users.id),
+    /** Excluído: some das telas e o registro fica (o texto anterior e o motivo também vão para a auditoria). */
+    deletedAt: ts('deleted_at'),
+    deletedBy: uuid('deleted_by').references(() => users.id),
+    deleteReason: text('delete_reason'),
     createdAt: ts('created_at').notNull().defaultNow(),
   },
   (t) => [index('legal_updates_case_idx').on(t.caseId, t.occurredOn), tenantIsolation()],
@@ -68,6 +78,10 @@ export const legalDeadlines = pgTable(
     doneAt: ts('done_at'),
     alertedAt: ts('alerted_at'),
     notes: text('notes'),
+    /** Excluído: some das telas e dos avisos, e o registro fica. */
+    deletedAt: ts('deleted_at'),
+    deletedBy: uuid('deleted_by').references(() => users.id),
+    deleteReason: text('delete_reason'),
     createdAt: ts('created_at').notNull().defaultNow(),
   },
   (t) => [index('legal_deadlines_due_idx').on(t.tenantId, t.status, t.dueOn), index('legal_deadlines_case_idx').on(t.caseId), tenantIsolation()],

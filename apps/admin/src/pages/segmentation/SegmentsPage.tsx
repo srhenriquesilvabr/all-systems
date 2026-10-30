@@ -1,5 +1,5 @@
 import { api, apiDownload, ApiError, formatDate, formatDateTime, formatMoney, formatPhone, useCan } from '@all/module-sdk/web';
-import { Alert, Badge, Button, Card, cn, EmptyState, PageHeader, Spinner, Table, Td, Th } from '@all/ui';
+import { Alert, Badge, Button, Card, cn, EmptyState, PageHeader, Select, Spinner, Table, Td, Th } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link } from 'react-router';
@@ -27,6 +27,8 @@ interface Summary {
 
 interface Row {
   customer: { id: string; name: string; phone: string | null; email: string | null };
+  marketingEmail: boolean;
+  marketingWhatsapp: boolean;
   segment: Segment;
   r: number;
   f: number;
@@ -52,7 +54,10 @@ export function SegmentsPage() {
     mutationFn: () => api('/segmentation/recompute', { method: 'POST' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['segmentation'] }),
   });
-  const download = useMutation({ mutationFn: (s: Segment) => apiDownload('/segmentation/customers.csv', `clientes-${segmentInfo[s].label.toLowerCase().replace(/\s/g, '-')}.csv`, { query: { segment: s } }) });
+  const [consent, setConsent] = useState<'' | 'marketing_email' | 'marketing_whatsapp'>('');
+  const download = useMutation({
+    mutationFn: (s: Segment) => apiDownload('/segmentation/customers.csv', `clientes-${segmentInfo[s].label.toLowerCase().replace(/\s/g, '-')}.csv`, { query: { segment: s, consent: consent || undefined } }),
+  });
 
   if (summary.isPending) return <Spinner />;
   if (summary.isError) return <Alert>{summary.error.message}</Alert>;
@@ -114,9 +119,17 @@ export function SegmentsPage() {
               <h2 className="font-medium">{segmentInfo[selected].label}</h2>
               <p className="text-sm text-fg-muted">Ação sugerida: {segmentInfo[selected].action}</p>
             </div>
-            <Button variant="secondary" size="sm" loading={download.isPending} onClick={() => download.mutate(selected)}>
-              Exportar planilha
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Select aria-label="Quem entra na planilha" className="max-w-64" value={consent} onChange={(e) => setConsent(e.target.value as typeof consent)}>
+                <option value="">Todos do segmento</option>
+                <option value="marketing_email">Só quem autorizou ofertas por e-mail</option>
+                <option value="marketing_whatsapp">Só quem autorizou ofertas por WhatsApp</option>
+              </Select>
+              <Button variant="secondary" size="sm" loading={download.isPending} onClick={() => download.mutate(selected)}>
+                Exportar planilha
+              </Button>
+            </div>
+            <p className="w-full text-xs text-fg-muted">A planilha só traz o e-mail de quem autorizou ofertas por e-mail e o telefone de quem autorizou ofertas por WhatsApp. Os demais ficam na lista sem o contato. A exportação fica na auditoria.</p>
           </div>
           {rows.isPending ? (
             <Spinner />
@@ -135,6 +148,7 @@ export function SegmentsPage() {
                   <Th className="text-right">Compras (12m)</Th>
                   <Th className="text-right">Valor (12m)</Th>
                   <Th className="text-center">R · F · M</Th>
+                  <Th>Autoriza ofertas</Th>
                 </tr>
               </thead>
               <tbody>
@@ -153,6 +167,9 @@ export function SegmentsPage() {
                     <Td className="text-right tabular-nums">{formatMoney(r.monetary)}</Td>
                     <Td className="text-center tabular-nums text-fg-muted">
                       {r.r} · {r.f} · {r.m}
+                    </Td>
+                    <Td className="whitespace-nowrap text-sm">
+                      {r.marketingEmail || r.marketingWhatsapp ? [r.marketingEmail && 'E-mail', r.marketingWhatsapp && 'WhatsApp'].filter(Boolean).join(' · ') : <span className="text-fg-subtle">Não</span>}
                     </Td>
                   </tr>
                 ))}

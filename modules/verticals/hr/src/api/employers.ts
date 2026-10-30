@@ -21,15 +21,34 @@ export interface ConfirmedEmployerTermination {
   terminationDate: string;
 }
 
+/** Folha de empresa-cliente sendo reaberta. */
+export interface ReopenedEmployerPayroll {
+  payrollId: string;
+  employerCustomerId: string;
+  competence: string;
+  reason: string;
+}
+
+/** Rescisão de empresa-cliente sendo desfeita. */
+export interface UndoneEmployerTermination {
+  terminationId: string;
+  employerCustomerId: string;
+  employeeName: string;
+  reason: string;
+}
+
 /**
  * Ramo que liga, no RH, os colaboradores de empresas-clientes (ex.: Consultoria de RH) e reage ao que
  * acontece com eles (ex.: lançar os honorários). Os ganchos rodam na mesma transação do fechamento.
  * O RH não conhece o ramo (ADR-018): só valem os registros de módulos ativos no tenant.
+ * Nas reversões, o ramo pode recusar lançando uma exceção (ex.: honorário já recebido).
  */
 export interface HrEmployerExtension {
   moduleKey: string;
   onPayrollClosed?(tx: Tx, payroll: ClosedEmployerPayroll): Promise<void>;
   onTerminationConfirmed?(tx: Tx, termination: ConfirmedEmployerTermination): Promise<void>;
+  onPayrollReopened?(tx: Tx, payroll: ReopenedEmployerPayroll): Promise<void>;
+  onTerminationUndone?(tx: Tx, termination: UndoneEmployerTermination): Promise<void>;
 }
 
 @Injectable()

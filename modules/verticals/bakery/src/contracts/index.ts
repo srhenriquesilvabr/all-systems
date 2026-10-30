@@ -1,4 +1,4 @@
-import type { ServiceOrderWorkflow } from '@all/service-orders';
+import type { OrderDetail, ServiceOrderWorkflow } from '@all/service-orders';
 import { z } from 'zod';
 
 export const BAKERY_WORKFLOW = 'bakery';
@@ -9,6 +9,7 @@ export const bakeryWorkflow: ServiceOrderWorkflow = {
   label: 'Encomendas da padaria',
   moduleKey: 'bakery',
   customCreate: true,
+  detailPath: '/padaria/encomendas/:id',
   newPath: '/padaria/encomendas/nova',
   initial: 'received',
   statuses: [
@@ -52,6 +53,8 @@ export const bakeryOrderInput = z.object({
         description: z.string().trim().min(1, 'Descreva o item').max(200),
         quantity: z.coerce.number().positive().max(100_000).multipleOf(0.001),
         unitPrice: z.coerce.number().min(0).max(1_000_000).multipleOf(0.01),
+        /** O que escrever no bolo. */
+        inscription: z.string().trim().max(200).nullish(),
       }),
     )
     .min(1, 'Inclua ao menos um item')
@@ -62,9 +65,39 @@ export const bakeryOrderInput = z.object({
 });
 export type BakeryOrderInput = z.infer<typeof bakeryOrderInput>;
 
+/** Depois de registrada: retirada, observações e escrita de cada item. Itens e valores não mudam por aqui. */
+export const bakeryOrderUpdate = z.object({
+  dueAt: z.coerce.date({ errorMap: () => ({ message: 'Informe a data de retirada' }) }).optional(),
+  notesCustomer: z.string().trim().max(2000).nullish(),
+  notesInternal: z.string().trim().max(2000).nullish(),
+  inscriptions: z.array(z.object({ itemId: z.string().uuid(), inscription: z.string().trim().max(200).nullable() })).max(100).optional(),
+});
+export type BakeryOrderUpdate = z.infer<typeof bakeryOrderUpdate>;
+
+/** Pagamento da encomenda. Com `registerId`, entra na conferência do caixa, sem novo lançamento no financeiro. */
+export const bakeryPaymentInput = z.object({
+  amount: z.coerce.number().positive('Informe o valor').max(1_000_000).multipleOf(0.01),
+  method: z.enum(['cash', 'pix', 'credit_card', 'debit_card', 'transfer', 'other']),
+  /** Sem conta, a conta Caixa. Dinheiro que entra num caixa aberto vai sempre para a conta Caixa. */
+  accountId: z.string().uuid().nullish(),
+  paidAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data inválida'),
+  registerId: z.string().uuid().nullish(),
+});
+export type BakeryPaymentInput = z.infer<typeof bakeryPaymentInput>;
+
+/** Encomenda com o que é próprio da padaria em cada item. */
+export interface BakeryOrder {
+  order: OrderDetail;
+  items: { id: string; inscription: string | null; productId: string | null; stockMovedAt: string | null }[];
+}
+
 /** O que produzir num dia: encomendas a retirar e os itens somados. */
 export interface ProductionPlan {
   date: string;
-  orders: { id: string; number: number; status: string; customer: string; dueAt: string; items: { description: string; quantity: number }[]; notes: string | null }[];
+  orders: { id: string; number: number; status: string; customer: string; dueAt: string; items: { description: string; quantity: number; inscription: string | null }[]; notes: string | null }[];
+  /** Só o que ainda falta fazer: encomendas prontas ficam na lista, mas fora da soma. */
   totals: { description: string; quantity: number }[];
 }
+
+/** Texto comparável: sem acento, sem diferença de maiúsculas e espaços extras. */
+export const foldText = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();

@@ -329,7 +329,7 @@ export class RecruitingService implements OnModuleInit {
   getApplication(id: string) {
     return this.tdb.run(async (tx) => {
       const [row] = await tx
-        .select({ app: recApplications, candidate: recCandidates, job: { id: recJobs.id, title: recJobs.title, stages: recJobs.stages, status: recJobs.status, requirements: recJobs.requirements, niceToHave: recJobs.niceToHave } })
+        .select({ app: recApplications, candidate: recCandidates, job: { id: recJobs.id, title: recJobs.title, stages: recJobs.stages, status: recJobs.status, requirements: recJobs.requirements, niceToHave: recJobs.niceToHave, customerId: recJobs.customerId } })
         .from(recApplications)
         .innerJoin(recCandidates, eq(recCandidates.id, recApplications.candidateId))
         .innerJoin(recJobs, eq(recJobs.id, recApplications.jobId))
@@ -455,7 +455,7 @@ export class RecruitingService implements OnModuleInit {
     const ctx = requestContext.require();
     const result = await this.tdb.run(async (tx) => {
       const { app, job } = await this.appWithJob(tx, id, true);
-      if (app.teamMemberId) return { teamMemberId: app.teamMemberId, created: false, resumeFileId: null };
+      if (app.teamMemberId) return { teamMemberId: app.teamMemberId, created: false, resumeFileId: null, employerCustomerId: job.customerId };
       if (app.status !== 'hired') throw new BadRequestException({ code: 'NOT_HIRED', message: 'Mova o candidato para a etapa de contratação antes' });
       const candidate = await this.candidateOrFail(tx, app.candidateId);
       if (candidate.anonymizedAt) throw new BadRequestException({ code: 'ANONYMIZED', message: 'Os dados deste candidato foram excluídos' });
@@ -472,7 +472,7 @@ export class RecruitingService implements OnModuleInit {
       await tx.update(recApplications).set({ teamMemberId: member.id }).where(eq(recApplications.id, id));
       await tx.insert(recEvents).values({ tenantId: ctx.tenantId, candidateId: app.candidateId, applicationId: id, kind: 'hired', text: 'Cadastrado na equipe', data: { teamMemberId: member.id }, userId: ctx.userId });
       await this.audit.log(tx, { action: 'recruiting.application.hired', entity: 'recruiting_application', entityId: id, data: { teamMemberId: member.id } });
-      return { teamMemberId: member.id, created: true, resumeFileId: app.resumeFileId };
+      return { teamMemberId: member.id, created: true, resumeFileId: app.resumeFileId, employerCustomerId: job.customerId };
     });
     // O currículo vai para o cadastro da pessoa (fora da transação: o core grava o arquivo por conta própria).
     if (result.created && result.resumeFileId) {
@@ -484,7 +484,8 @@ export class RecruitingService implements OnModuleInit {
         this.logger.warn(`Currículo não copiado para a pessoa ${result.teamMemberId}: ${err}`);
       }
     }
-    return { teamMemberId: result.teamMemberId, created: result.created, hrActive: !!ctx.modules?.has('hr') };
+    // Empresa contratante da vaga: é o empregador sugerido na admissão (null = vaga da própria empresa).
+    return { teamMemberId: result.teamMemberId, created: result.created, hrActive: !!ctx.modules?.has('hr'), employerCustomerId: result.employerCustomerId };
   }
 
   /** Download do currículo de uma candidatura, registrado na auditoria. */

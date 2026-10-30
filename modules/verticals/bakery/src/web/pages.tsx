@@ -8,6 +8,7 @@ import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { BAKERY_WORKFLOW, bakeryWorkflow, type ProductionPlan } from '../contracts';
 
+const PAGE = 25;
 const hour = new Intl.DateTimeFormat('pt-BR', { timeStyle: 'short', timeZone: 'America/Sao_Paulo' });
 const tomorrow = () => {
   const d = new Date(`${today()}T12:00:00Z`);
@@ -21,11 +22,13 @@ export function BakeryOrdersPage() {
   const workflows = useWorkflows();
   const [status, setStatus] = useState('');
   const [q, setQ] = useState('');
+  const [page, setPage] = useState(0);
   const orders = useQuery({
-    queryKey: [...ordersKey, 'bakery', { status, q }],
-    queryFn: () => api<{ items: OrderSummary[]; total: number }>('/service-orders', { query: { workflow: BAKERY_WORKFLOW, status: status || undefined, q: q || undefined, limit: 100, offset: 0 } }),
+    queryKey: [...ordersKey, 'bakery', { status, q, page }],
+    queryFn: () => api<{ items: OrderSummary[]; total: number }>('/service-orders', { query: { workflow: BAKERY_WORKFLOW, status: status || undefined, q: q || undefined, limit: PAGE, offset: page * PAGE } }),
     placeholderData: keepPreviousData,
   });
+  const pages = Math.ceil((orders.data?.total ?? 0) / PAGE);
 
   return (
     <>
@@ -35,8 +38,26 @@ export function BakeryOrdersPage() {
         actions={canWrite && <Button onClick={() => navigate('/padaria/encomendas/nova')}>Nova encomenda</Button>}
       />
       <div className="mb-4 flex flex-wrap gap-3">
-        <Input type="search" aria-label="Buscar" placeholder="Número ou cliente" className="max-w-xs" value={q} onChange={(e) => setQ(e.target.value)} />
-        <Select aria-label="Status" className="max-w-56" value={status} onChange={(e) => setStatus(e.target.value)}>
+        <Input
+          type="search"
+          aria-label="Buscar"
+          placeholder="Número ou cliente"
+          className="max-w-xs"
+          value={q}
+          onChange={(e) => {
+            setQ(e.target.value);
+            setPage(0);
+          }}
+        />
+        <Select
+          aria-label="Status"
+          className="max-w-56"
+          value={status}
+          onChange={(e) => {
+            setStatus(e.target.value);
+            setPage(0);
+          }}
+        >
           <option value="">Todas</option>
           {bakeryWorkflow.statuses.map((s) => (
             <option key={s.key} value={s.key}>
@@ -73,6 +94,17 @@ export function BakeryOrdersPage() {
           </Table>
         )}
       </Card>
+      {pages > 1 && (
+        <div className="mt-4 flex items-center justify-end gap-2 text-sm text-fg-muted">
+          <Button variant="secondary" size="sm" disabled={page === 0} onClick={() => setPage(page - 1)}>
+            Anterior
+          </Button>
+          Página {page + 1} de {pages}
+          <Button variant="secondary" size="sm" disabled={page + 1 >= pages} onClick={() => setPage(page + 1)}>
+            Próxima
+          </Button>
+        </div>
+      )}
     </>
   );
 }
@@ -82,6 +114,7 @@ interface Line {
   description: string;
   quantity: string;
   unitPrice: string;
+  inscription: string;
 }
 
 export function NewBakeryOrderPage() {
@@ -109,7 +142,7 @@ export function NewBakeryOrderPage() {
           customerId: customer?.id,
           dueAt: new Date(`${date}T${time}:00-03:00`).toISOString(),
           receivedAt: pastOrder ? receivedAt : undefined,
-          items: lines.map((l) => ({ productId: l.productId, description: l.description, quantity: Number(l.quantity.replace(',', '.')), unitPrice: parseMoney(l.unitPrice) })),
+          items: lines.map((l) => ({ productId: l.productId, description: l.description, quantity: Number(l.quantity.replace(',', '.')), unitPrice: parseMoney(l.unitPrice), inscription: l.inscription || null })),
           discount: parseMoney(discount) || 0,
           notesCustomer: notesCustomer || null,
           notesInternal: notesInternal || null,
@@ -117,7 +150,7 @@ export function NewBakeryOrderPage() {
       }),
     onSuccess: (order) => {
       queryClient.invalidateQueries({ queryKey: ordersKey });
-      navigate(`/ordens/${order.id}`);
+      navigate(`/padaria/encomendas/${order.id}`);
     },
   });
   const setLine = (i: number, patch: Partial<Line>) => setLines(lines.map((l, j) => (j === i ? { ...l, ...patch } : l)));
@@ -129,7 +162,7 @@ export function NewBakeryOrderPage() {
 
   return (
     <>
-      <PageHeader title="Nova encomenda" />
+      <PageHeader title="Nova encomenda" description="Item do catálogo baixa o estoque quando a encomenda é retirada." />
       <form onSubmit={submit} className="grid gap-6 lg:grid-cols-[1fr_20rem]">
         <div className="space-y-6">
           <Card className="space-y-3 p-5">
@@ -157,7 +190,7 @@ export function NewBakeryOrderPage() {
                         type="button"
                         className="flex w-full justify-between px-3 py-2 text-left hover:bg-muted"
                         onClick={() => {
-                          setLines([...lines, { productId: p.id, description: p.name, quantity: '1', unitPrice: p.price.toFixed(2).replace('.', ',') }]);
+                          setLines([...lines, { productId: p.id, description: p.name, quantity: '1', unitPrice: p.price.toFixed(2).replace('.', ','), inscription: '' }]);
                           setQ('');
                         }}
                       >
@@ -172,21 +205,24 @@ export function NewBakeryOrderPage() {
               )}
             </div>
             {lines.map((l, i) => (
-              <div key={i} className="grid grid-cols-[1fr_5rem_7rem_auto] items-end gap-2">
-                <Field label={i === 0 ? 'Descrição' : ''}>{(id) => <Input id={id} required value={l.description} onChange={(e) => setLine(i, { description: e.target.value })} />}</Field>
-                <Field label={i === 0 ? 'Qtd.' : ''}>{(id) => <Input id={id} inputMode="decimal" required className="text-right" value={l.quantity} onChange={(e) => setLine(i, { quantity: e.target.value })} />}</Field>
-                <Field label={i === 0 ? 'Preço (R$)' : ''}>{(id) => <Input id={id} inputMode="decimal" required className="text-right" value={l.unitPrice} onChange={(e) => setLine(i, { unitPrice: e.target.value })} />}</Field>
-                <Button type="button" variant="ghost" size="sm" aria-label="Remover item" onClick={() => setLines(lines.filter((_, j) => j !== i))}>
-                  ✕
-                </Button>
+              <div key={i} className="space-y-2">
+                <div className="grid grid-cols-[1fr_5rem_7rem_auto] items-end gap-2">
+                  <Field label={i === 0 ? 'Descrição' : ''}>{(id) => <Input id={id} required value={l.description} onChange={(e) => setLine(i, { description: e.target.value })} />}</Field>
+                  <Field label={i === 0 ? 'Qtd.' : ''}>{(id) => <Input id={id} inputMode="decimal" required className="text-right" value={l.quantity} onChange={(e) => setLine(i, { quantity: e.target.value })} />}</Field>
+                  <Field label={i === 0 ? 'Preço (R$)' : ''}>{(id) => <Input id={id} inputMode="decimal" required className="text-right" value={l.unitPrice} onChange={(e) => setLine(i, { unitPrice: e.target.value })} />}</Field>
+                  <Button type="button" variant="ghost" size="sm" aria-label="Remover item" onClick={() => setLines(lines.filter((_, j) => j !== i))}>
+                    ✕
+                  </Button>
+                </div>
+                <Input aria-label={`Escrita do item ${i + 1}`} maxLength={200} placeholder="Escrita no bolo (opcional). Ex.: Parabéns, Ana!" value={l.inscription} onChange={(e) => setLine(i, { inscription: e.target.value })} />
               </div>
             ))}
-            <Button type="button" variant="secondary" size="sm" onClick={() => setLines([...lines, { productId: null, description: '', quantity: '1', unitPrice: '' }])}>
+            <Button type="button" variant="secondary" size="sm" onClick={() => setLines([...lines, { productId: null, description: '', quantity: '1', unitPrice: '', inscription: '' }])}>
               + Item sob medida
             </Button>
           </Card>
           <Card className="grid gap-4 p-5 sm:grid-cols-2">
-            <Field label="Observações para o cliente" hint="Ex.: escrita no bolo, sabor do recheio.">
+            <Field label="Observações para o cliente" hint="Ex.: sabor do recheio, ponto de retirada. A escrita do bolo tem campo próprio em cada item.">
               {(id) => <Textarea id={id} rows={3} value={notesCustomer} onChange={(e) => setNotesCustomer(e.target.value)} />}
             </Field>
             <Field label="Observações internas (produção)">{(id) => <Textarea id={id} rows={3} value={notesInternal} onChange={(e) => setNotesInternal(e.target.value)} />}</Field>
@@ -214,7 +250,7 @@ export function NewBakeryOrderPage() {
             <span className="font-medium">Total</span>
             <span className="font-display text-2xl font-semibold tabular-nums">{brl(Math.max(total, 0) / 100)}</span>
           </div>
-          <p className="text-xs text-fg-muted">O sinal, se houver, é lançado na encomenda depois de salvar (Registrar pagamento).</p>
+          <p className="text-xs text-fg-muted">O sinal, se houver, é lançado na encomenda depois de salvar (Registrar pagamento). Em dinheiro, ele pode entrar no caixa aberto.</p>
           <Button type="submit" className="w-full" loading={save.isPending} disabled={!customer || !lines.length}>
             Registrar encomenda
           </Button>
@@ -267,6 +303,7 @@ export function ProductionPage() {
         <div className="grid gap-6 lg:grid-cols-[20rem_1fr]">
           <Card className="h-fit p-5">
             <h2 className="mb-3 font-medium">Total a produzir</h2>
+            {plan.data.totals.length === 0 && <p className="text-sm text-fg-muted">Tudo pronto: nada a produzir nesta data.</p>}
             <ul className="divide-y divide-line text-sm">
               {plan.data.totals.map((t) => (
                 <li key={t.description} className="flex justify-between gap-3 py-1.5">
@@ -281,7 +318,7 @@ export function ProductionPage() {
               <Card key={o.id} className="p-4 text-sm">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
-                    <Link to={`/ordens/${o.id}`} className="font-medium text-brand-700 hover:underline">
+                    <Link to={`/padaria/encomendas/${o.id}`} className="font-medium text-brand-700 hover:underline">
                       nº {o.number}
                     </Link>
                     <span>{o.customer}</span>
@@ -293,6 +330,7 @@ export function ProductionPage() {
                   {o.items.map((i, k) => (
                     <li key={k}>
                       {i.quantity.toLocaleString('pt-BR')} × {i.description}
+                      {i.inscription && <div className="ml-5 font-medium">Escrever: “{i.inscription}”</div>}
                     </li>
                   ))}
                 </ul>

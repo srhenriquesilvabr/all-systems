@@ -1,4 +1,4 @@
-import { api, apiUpload, ApiError, AuthImage, formatDate, formatDateTime, formatMoney, parseMoney, today } from '@all/module-sdk/web';
+import { api, apiUpload, ApiError, AuthImage, formatDate, formatDateTime, formatMoney, parseMoney, today, useCan } from '@all/module-sdk/web';
 import { CustomerSearch, ordersKey, type CustomerOption } from '@all/service-orders/web';
 import { Alert, Badge, Button, Card, Checkbox, Field, Input, Modal, Select, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -40,8 +40,9 @@ export const useMyRoute = (date: string) =>
     refetchInterval: 60_000,
   });
 
-export const useTeam = () =>
-  useQuery({ queryKey: [...logisticsKey, 'team'], queryFn: () => api<{ id: string; name: string }[]>('/users/team'), staleTime: 5 * 60_000 });
+/** Quem tem a permissão de fazer coletas e entregas (o dono da empresa também). */
+export const useDrivers = () =>
+  useQuery({ queryKey: [...logisticsKey, 'drivers'], queryFn: () => api<{ id: string; name: string }[]>('/laundry/logistics/drivers'), staleTime: 5 * 60_000 });
 
 export const useLogisticsDefaults = () =>
   useQuery({
@@ -68,6 +69,12 @@ export function addDays(day: string, n: number) {
 
 export const windowText = (j: Pick<LogisticsJob, 'period' | 'windowStart' | 'windowEnd'>) =>
   `${j.period ? `${periodLabel[j.period]} · ` : ''}${j.windowStart}–${j.windowEnd}`;
+
+/** A tarefa pode estar com alguém que perdeu a permissão depois: continua na lista até ser trocado. */
+export function withCurrent(list: { id: string; name: string }[] | undefined, current: { id: string; name: string } | null | undefined) {
+  const all = list ?? [];
+  return current && !all.some((m) => m.id === current.id) ? [...all, current] : all;
+}
 
 export const errorText = (e: unknown) => (e instanceof ApiError ? e.message : e ? 'Erro inesperado' : '');
 
@@ -295,6 +302,14 @@ function CompleteModal({ job, onClose, onDone }: { job: LogisticsJob; onClose: (
   const [feeMethod, setFeeMethod] = useState<FeeMethod>('cash');
   const [photos, setPhotos] = useState<{ id: string; filename: string }[]>(job.photos);
   const [occurredAt, setOccurredAt] = useState<string | null>(pastSuggestion(job, 20));
+  // Saldo da ordem: quem tem a permissão registra aqui o que recebeu do cliente.
+  const canReceive = useCan('laundry.logistics.receive');
+  const canPayOrders = useCan('shared.service-orders.payments');
+  const balance = job.kind === 'delivery' && job.order ? Math.round((job.order.total - job.order.paidAmount) * 100) / 100 : 0;
+  const showBalance = balance > 0 && (canReceive || canPayOrders);
+  const [balanceReceived, setBalanceReceived] = useState(false);
+  const [balanceAmount, setBalanceAmount] = useState(balance.toFixed(2).replace('.', ','));
+  const [balanceMethod, setBalanceMethod] = useState<FeeMethod>('cash');
   const upload = useMutation({
     mutationFn: (file: File) => apiUpload<{ id: string; filename: string }>(`/laundry/logistics/jobs/${job.id}/photos`, 'photo', file),
     onSuccess: (photo) => setPhotos([...photos, photo]),
@@ -308,6 +323,7 @@ function CompleteModal({ job, onClose, onDone }: { job: LogisticsJob; onClose: (
           itemsCount: job.kind === 'pickup' ? Number(itemsCount) || null : null,
           notes: notes || null,
           feeMethod: feeReceived ? feeMethod : null,
+          balancePayment: balanceReceived ? { amount: parseMoney(balanceAmount), method: balanceMethod } : null,
           occurredAt: whenBody(occurredAt),
         },
       }),
@@ -379,6 +395,27 @@ function CompleteModal({ job, onClose, onDone }: { job: LogisticsJob; onClose: (
                   </option>
                 ))}
               </Select>
+            )}
+          </div>
+        )}
+        {showBalance && (
+          <div className="space-y-2 rounded-lg bg-muted/60 p-3">
+            <Checkbox label={`Recebi o saldo da ordem (${formatMoney(balance)})`} checked={balanceReceived} onChange={(e) => setBalanceReceived(e.target.checked)} />
+            {balanceReceived && (
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Valor recebido">{(id) => <Input id={id} inputMode="decimal" value={balanceAmount} onChange={(e) => setBalanceAmount(e.target.value)} />}</Field>
+                <Field label="Forma de pagamento">
+                  {(id) => (
+                    <Select id={id} value={balanceMethod} onChange={(e) => setBalanceMethod(e.target.value as FeeMethod)}>
+                      {feeMethods.map((m) => (
+                        <option key={m} value={m}>
+                          {feeMethodLabel[m]}
+                        </option>
+                      ))}
+                    </Select>
+                  )}
+                </Field>
+              </div>
             )}
           </div>
         )}
@@ -454,7 +491,7 @@ export function ScheduleModal({
   onSaved: (job: LogisticsJob) => void;
 }) {
   const defaults = useLogisticsDefaults();
-  const team = useTeam();
+  const drivers = useDrivers();
   const [customer, setCustomer] = useState<{ id: string; name: string } | null>(job?.customer ?? fixedCustomer ?? null);
   const [address, setAddress] = useState<JobAddress>(job?.address ?? emptyAddress);
   const [date, setDate] = useState(job?.status === 'failed' ? today() : (job?.date ?? today()));
@@ -577,11 +614,11 @@ export function ScheduleModal({
           <Field label={`Taxa de ${kind === 'pickup' ? 'coleta' : 'entrega'}`} hint={!job && defaultFee !== undefined ? `Vazio = padrão (${formatMoney(defaultFee)})` : undefined}>
             {(id) => <Input id={id} inputMode="decimal" placeholder={defaultFee !== undefined ? String(defaultFee).replace('.', ',') : ''} value={fee} onChange={(e) => setFee(e.target.value)} />}
           </Field>
-          <Field label="Motorista">
+          <Field label="Motorista" hint="Só quem tem a permissão de fazer coletas e entregas. Para incluir alguém, ajuste o papel em Configurações, Usuários.">
             {(id) => (
               <Select id={id} value={driverUserId} onChange={(e) => setDriverUserId(e.target.value)}>
                 <option value="">Sem motorista</option>
-                {team.data?.map((m) => (
+                {withCurrent(drivers.data, job?.driver).map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}
                   </option>

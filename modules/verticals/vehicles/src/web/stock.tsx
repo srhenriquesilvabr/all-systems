@@ -1,9 +1,9 @@
 import { api, ApiError, apiUpload, AuthImage, formatMoney, parseMoney, SpreadsheetImport, useCan } from '@all/module-sdk/web';
-import { Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Textarea } from '@all/ui';
+import { Alert, Badge, Button, Card, EmptyState, Field, Input, PageHeader, Select, Spinner, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { dealStatusLabel, fuelLabel, transmissionLabel, vehicleKindLabel, vehicleKinds, vehicleStatuses, vehicleStatusLabel, vehicleTitle, type Deal, type FipePrice, type Vehicle } from '../contracts';
+import { dealStatusLabel, fuelLabel, manualVehicleStatuses, transmissionLabel, vehicleKindLabel, vehicleKinds, vehicleStatuses, vehicleStatusLabel, vehicleTitle, type Deal, type FipePrice, type Vehicle } from '../contracts';
 import { DealModal, dealTone } from './deals';
 import { vehicleImportSpec } from './vehicleImport';
 
@@ -19,6 +19,7 @@ export function StockPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const list = useQuery({ queryKey: [...vehiclesKey, 'stock', { q, status }], queryFn: () => api<Vehicle[]>('/vehicles/stock', { query: { q: q || undefined, status: status || undefined } }) });
+  if (creating) return <VehicleForm vehicle={null} onClose={() => setCreating(false)} onSaved={(v) => navigate(`/veiculos/estoque/${v.id}`)} />;
 
   return (
     <>
@@ -79,7 +80,6 @@ export function StockPage() {
           ))}
         </div>
       )}
-      {creating && <VehicleModal vehicle={null} onClose={() => setCreating(false)} onSaved={(v) => navigate(`/veiculos/estoque/${v.id}`)} />}
     </>
   );
 }
@@ -108,6 +108,7 @@ export function VehiclePage() {
   if (v.isError) return <Alert>{v.error.message}</Alert>;
   const veh = v.data;
   const margin = veh.cost != null ? veh.price - veh.cost : null;
+  if (editing) return <VehicleForm vehicle={veh} onClose={() => setEditing(false)} />;
 
   return (
     <>
@@ -205,7 +206,6 @@ export function VehiclePage() {
           {veh.notes && <p className="whitespace-pre-line pt-2">{veh.notes}</p>}
         </Card>
       </div>
-      {editing && <VehicleModal vehicle={veh} onClose={() => setEditing(false)} />}
       {dealing && <DealModal vehicle={veh} onClose={() => setDealing(false)} onSaved={(d) => navigate(`/veiculos/negociacoes/${d.id}`)} />}
     </>
   );
@@ -222,8 +222,12 @@ function Item({ label, children }: { label: string; children: ReactNode }) {
 
 const money = (n: number | null | undefined) => (n == null ? '' : n.toFixed(2).replace('.', ','));
 
-function VehicleModal({ vehicle, onClose, onSaved }: { vehicle: Vehicle | null; onClose: () => void; onSaved?: (v: Vehicle) => void }) {
+/** Cadastro e edição do veículo, na própria página. */
+function VehicleForm({ vehicle, onClose, onSaved }: { vehicle: Vehicle | null; onClose: () => void; onSaved?: (v: Vehicle) => void }) {
   const queryClient = useQueryClient();
+  const canSeeCost = useCan('vehicles.costs.read');
+  // Reservado e Vendido vêm da negociação: aqui, só quando o veículo já está assim (sem poder escolher).
+  const statusLocked = !!vehicle && !(manualVehicleStatuses as readonly string[]).includes(vehicle.status);
   const year = new Date().getFullYear();
   const [form, setForm] = useState({
     kind: vehicle?.kind ?? 'car',
@@ -264,7 +268,8 @@ function VehicleModal({ vehicle, onClose, onSaved }: { vehicle: Vehicle | null; 
           version: form.version || null,
           color: form.color || null,
           fipePrice: form.fipePrice ? parseMoney(form.fipePrice) : null,
-          cost: form.cost ? parseMoney(form.cost) : null,
+          // Sem acesso ao custo, o campo nem aparece e o servidor mantém o valor gravado.
+          ...(canSeeCost || !vehicle ? { cost: form.cost ? parseMoney(form.cost) : null } : {}),
           price: parseMoney(form.price),
           notes: form.notes || null,
         },
@@ -280,96 +285,93 @@ function VehicleModal({ vehicle, onClose, onSaved }: { vehicle: Vehicle | null; 
     save.mutate();
   }
   return (
-    <Modal
-      open
-      title={vehicle ? 'Editar veículo' : 'Novo veículo'}
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose}>
-            Cancelar
-          </Button>
-          <Button type="submit" form="veh-form" loading={save.isPending}>
-            Salvar
-          </Button>
-        </>
-      }
-    >
-      <form id="veh-form" onSubmit={submit} className="space-y-4">
-        {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao salvar'}</Alert>}
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Field label="Tipo">
-            {(id) => (
-              <Select id={id} value={form.kind} onChange={(e) => set({ kind: e.target.value as typeof form.kind })}>
-                {vehicleKinds.map((k) => (
-                  <option key={k} value={k}>
-                    {vehicleKindLabel[k]}
-                  </option>
-                ))}
-              </Select>
-            )}
-          </Field>
-          <Field label="Marca">{(id) => <Input id={id} required value={form.brand} onChange={(e) => set({ brand: e.target.value })} />}</Field>
-          <Field label="Modelo">{(id) => <Input id={id} required value={form.model} onChange={(e) => set({ model: e.target.value })} />}</Field>
-          <div className="sm:col-span-3">
-            <Field label="Versão">{(id) => <Input id={id} value={form.version} onChange={(e) => set({ version: e.target.value })} placeholder="Ex.: 1.0 Turbo Highline" />}</Field>
+    <>
+      <PageHeader title={vehicle ? 'Editar veículo' : 'Novo veículo'} />
+      <Card className="p-5">
+        <form id="veh-form" onSubmit={submit} className="space-y-4">
+          {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao salvar'}</Alert>}
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Field label="Tipo">
+              {(id) => (
+                <Select id={id} value={form.kind} onChange={(e) => set({ kind: e.target.value as typeof form.kind })}>
+                  {vehicleKinds.map((k) => (
+                    <option key={k} value={k}>
+                      {vehicleKindLabel[k]}
+                    </option>
+                  ))}
+                </Select>
+              )}
+            </Field>
+            <Field label="Marca">{(id) => <Input id={id} required value={form.brand} onChange={(e) => set({ brand: e.target.value })} />}</Field>
+            <Field label="Modelo">{(id) => <Input id={id} required value={form.model} onChange={(e) => set({ model: e.target.value })} />}</Field>
+            <div className="sm:col-span-3">
+              <Field label="Versão">{(id) => <Input id={id} value={form.version} onChange={(e) => set({ version: e.target.value })} placeholder="Ex.: 1.0 Turbo Highline" />}</Field>
+            </div>
+            <Field label="Ano fabricação">{(id) => <Input id={id} type="number" required value={form.yearManufacture} onChange={(e) => set({ yearManufacture: e.target.value })} />}</Field>
+            <Field label="Ano modelo">{(id) => <Input id={id} type="number" required value={form.yearModel} onChange={(e) => set({ yearModel: e.target.value })} />}</Field>
+            <Field label="Placa">{(id) => <Input id={id} value={form.plate} onChange={(e) => set({ plate: e.target.value.toUpperCase() })} placeholder="ABC1D23" />}</Field>
+            <Field label="Cor">{(id) => <Input id={id} value={form.color} onChange={(e) => set({ color: e.target.value })} />}</Field>
+            <Field label="Quilometragem">{(id) => <Input id={id} inputMode="numeric" value={form.km} onChange={(e) => set({ km: e.target.value })} />}</Field>
+            <Field label="Combustível">
+              {(id) => (
+                <Select id={id} value={form.fuel} onChange={(e) => set({ fuel: e.target.value as typeof form.fuel })}>
+                  {Object.entries(fuelLabel).map(([k, l]) => (
+                    <option key={k} value={k}>
+                      {l}
+                    </option>
+                  ))}
+                </Select>
+              )}
+            </Field>
+            <Field label="Câmbio">
+              {(id) => (
+                <Select id={id} value={form.transmission} onChange={(e) => set({ transmission: e.target.value as typeof form.transmission })}>
+                  {Object.entries(transmissionLabel).map(([k, l]) => (
+                    <option key={k} value={k}>
+                      {l}
+                    </option>
+                  ))}
+                </Select>
+              )}
+            </Field>
+            <Field label="Código FIPE">
+              {(id) => (
+                <div className="flex gap-2">
+                  <Input id={id} value={form.fipeCode} onChange={(e) => set({ fipeCode: e.target.value })} placeholder="000000-0" />
+                  <Button type="button" size="sm" variant="secondary" disabled={!/^\d{6}-\d$/.test(form.fipeCode)} loading={fipe.isPending} onClick={() => fipe.mutate()}>
+                    Consultar
+                  </Button>
+                </div>
+              )}
+            </Field>
+            <Field label="Valor FIPE (R$)">{(id) => <Input id={id} inputMode="decimal" value={form.fipePrice} onChange={(e) => set({ fipePrice: e.target.value })} />}</Field>
+            {(canSeeCost || !vehicle) && <Field label="Custo (R$)">{(id) => <Input id={id} inputMode="decimal" value={form.cost} onChange={(e) => set({ cost: e.target.value })} />}</Field>}
+            <Field label="Preço de venda (R$)">{(id) => <Input id={id} inputMode="decimal" required value={form.price} onChange={(e) => set({ price: e.target.value })} />}</Field>
+            <Field label="Situação" hint={statusLocked ? 'Vem da negociação: para mudar, marque a negociação como perdida ou feche a venda.' : 'Reservado e Vendido vêm da negociação.'}>
+              {(id) => (
+                <Select id={id} disabled={statusLocked} value={form.status} onChange={(e) => set({ status: e.target.value as typeof form.status })}>
+                  {(statusLocked ? [vehicle!.status] : manualVehicleStatuses).map((s) => (
+                    <option key={s} value={s}>
+                      {vehicleStatusLabel[s]}
+                    </option>
+                  ))}
+                </Select>
+              )}
+            </Field>
           </div>
-          <Field label="Ano fabricação">{(id) => <Input id={id} type="number" required value={form.yearManufacture} onChange={(e) => set({ yearManufacture: e.target.value })} />}</Field>
-          <Field label="Ano modelo">{(id) => <Input id={id} type="number" required value={form.yearModel} onChange={(e) => set({ yearModel: e.target.value })} />}</Field>
-          <Field label="Placa">{(id) => <Input id={id} value={form.plate} onChange={(e) => set({ plate: e.target.value.toUpperCase() })} placeholder="ABC1D23" />}</Field>
-          <Field label="Cor">{(id) => <Input id={id} value={form.color} onChange={(e) => set({ color: e.target.value })} />}</Field>
-          <Field label="Quilometragem">{(id) => <Input id={id} inputMode="numeric" value={form.km} onChange={(e) => set({ km: e.target.value })} />}</Field>
-          <Field label="Combustível">
-            {(id) => (
-              <Select id={id} value={form.fuel} onChange={(e) => set({ fuel: e.target.value as typeof form.fuel })}>
-                {Object.entries(fuelLabel).map(([k, l]) => (
-                  <option key={k} value={k}>
-                    {l}
-                  </option>
-                ))}
-              </Select>
-            )}
-          </Field>
-          <Field label="Câmbio">
-            {(id) => (
-              <Select id={id} value={form.transmission} onChange={(e) => set({ transmission: e.target.value as typeof form.transmission })}>
-                {Object.entries(transmissionLabel).map(([k, l]) => (
-                  <option key={k} value={k}>
-                    {l}
-                  </option>
-                ))}
-              </Select>
-            )}
-          </Field>
-          <Field label="Código FIPE">
-            {(id) => (
-              <div className="flex gap-2">
-                <Input id={id} value={form.fipeCode} onChange={(e) => set({ fipeCode: e.target.value })} placeholder="000000-0" />
-                <Button type="button" size="sm" variant="secondary" disabled={!/^\d{6}-\d$/.test(form.fipeCode)} loading={fipe.isPending} onClick={() => fipe.mutate()}>
-                  Consultar
-                </Button>
-              </div>
-            )}
-          </Field>
-          <Field label="Valor FIPE (R$)">{(id) => <Input id={id} inputMode="decimal" value={form.fipePrice} onChange={(e) => set({ fipePrice: e.target.value })} />}</Field>
-          <Field label="Custo (R$)">{(id) => <Input id={id} inputMode="decimal" value={form.cost} onChange={(e) => set({ cost: e.target.value })} />}</Field>
-          <Field label="Preço de venda (R$)">{(id) => <Input id={id} inputMode="decimal" required value={form.price} onChange={(e) => set({ price: e.target.value })} />}</Field>
-          <Field label="Situação">
-            {(id) => (
-              <Select id={id} value={form.status} onChange={(e) => set({ status: e.target.value as typeof form.status })}>
-                {vehicleStatuses.map((s) => (
-                  <option key={s} value={s}>
-                    {vehicleStatusLabel[s]}
-                  </option>
-                ))}
-              </Select>
-            )}
-          </Field>
-        </div>
-        {fipe.error && <Alert>{fipe.error instanceof ApiError ? fipe.error.message : 'FIPE indisponível'}</Alert>}
-        {fipe.data && fipe.data.length === 0 && <Alert tone="info">Código não encontrado na tabela FIPE.</Alert>}
-        <Field label="Observações (opcionais, itens, revisões)">{(id) => <Textarea id={id} rows={3} value={form.notes} onChange={(e) => set({ notes: e.target.value })} />}</Field>
-      </form>
-    </Modal>
+          {fipe.error && <Alert>{fipe.error instanceof ApiError ? fipe.error.message : 'FIPE indisponível'}</Alert>}
+          {fipe.data && fipe.data.length === 0 && <Alert tone="info">Código não encontrado na tabela FIPE.</Alert>}
+          <Field label="Observações (opcionais, itens, revisões)">{(id) => <Textarea id={id} rows={3} value={form.notes} onChange={(e) => set({ notes: e.target.value })} />}</Field>
+          <div className="flex gap-2">
+            <Button type="submit" loading={save.isPending}>
+              Salvar
+            </Button>
+            <Button type="button" variant="secondary" onClick={onClose}>
+              Cancelar
+            </Button>
+          </div>
+        </form>
+      </Card>
+    </>
   );
 }

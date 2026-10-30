@@ -2,9 +2,9 @@ import { employeeStatusLabel, hrKey, payrollTypeLabel, useEmployers, type Employ
 import { api, ApiError, formatDate, formatDocument, formatMoney, formatPhone, parseMoney, useCan } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { FEE_SOURCE, feeFor, feeModeLabel, feeModes, feeSummary, type ClientFee, type FeeMode } from '../contracts';
+import { feeFor, feeModeLabel, feeModes, feeSummary, type ClientFee, type FeeEntry, type FeeMode } from '../contracts';
 
 const hrcKey = ['hr_consulting'] as const;
 const competenceLabel = (c: string) => new Date(`${c}-15T12:00:00Z`).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
@@ -12,15 +12,6 @@ const payrollTitle = (p: Pick<Payroll, 'type' | 'competence'>) =>
   p.type === 'monthly' ? competenceLabel(p.competence) : p.type === 'termination' ? `Rescisões de ${competenceLabel(p.competence)}` : `${payrollTypeLabel[p.type]} de ${p.competence.slice(0, 4)}`;
 
 type PayrollSummary = Pick<Payroll, 'id' | 'competence' | 'type' | 'status' | 'closedAt' | 'totals'>;
-interface FinanceEntry {
-  id: string;
-  description: string;
-  amount: number;
-  dueDate: string;
-  status: 'pending' | 'paid' | 'cancelled';
-  paidAt: string | null;
-  sourceType: string | null;
-}
 interface CustomerDetail {
   id: string;
   type: 'person' | 'company';
@@ -43,11 +34,20 @@ export function ClientsPage() {
   const employers = useEmployers();
   const fees = useFees();
   const [q, setQ] = useState('');
+  const [view, setView] = useState<'served' | 'others'>('served');
   const feeOf = (id: string) => fees.data?.find((f) => f.customerId === id) ?? null;
   const all = [...(employers.data?.items ?? [])].sort((a, b) => b.activeEmployees - a.activeEmployees || a.name.localeCompare(b.name, 'pt-BR'));
+  // Atendida: tem quadro ativo, folha ou honorário combinado. Os demais clientes empresa ficam a um clique, para começar a atender.
+  const isServed = (c: Employer) => c.activeEmployees > 0 || !!c.lastPayroll || (feeOf(c.id)?.feeMode ?? 'none') !== 'none';
+  const servedAll = all.filter(isServed);
+  const othersAll = all.filter((c) => !isServed(c));
   const term = q.trim().toLowerCase();
   const digits = q.replace(/\D/g, '');
-  const items = term ? all.filter((c) => c.name.toLowerCase().includes(term) || (digits.length >= 3 && c.document?.includes(digits))) : all;
+  const matches = (c: Employer) => !term || c.name.toLowerCase().includes(term) || (digits.length >= 3 && !!c.document?.includes(digits));
+  // Quem nunca atendeu ninguém cai direto na lista completa: a tela vazia esconderia os clientes.
+  const showOthers = view === 'others' || servedAll.length === 0;
+  // A busca procura em todos os clientes empresa, atendidos ou não.
+  const items = term ? all.filter(matches) : showOthers ? othersAll : servedAll;
   const served = all.filter((c) => c.activeEmployees > 0);
   const monthly = served.reduce((s, c) => s + feeOfMonth(feeOf(c.id), c.activeEmployees), 0);
   return (
@@ -61,15 +61,21 @@ export function ClientsPage() {
         }
         actions={
           canCreate && (
-            <Button onClick={() => navigate('/clientes/novo')} variant="secondary">
+            <Button onClick={() => navigate(`/clientes/novo?tipo=empresa&volta=${encodeURIComponent('/consultoria-rh/empresas/{id}')}`)} variant="secondary">
               Cadastrar empresa
             </Button>
           )
         }
       />
-      <div className="mb-4">
+      <div className="mb-4 flex flex-wrap items-center gap-3">
         <Input aria-label="Buscar empresa" placeholder="Buscar por nome ou CNPJ" className="max-w-80" value={q} onChange={(e) => setQ(e.target.value)} />
+        {servedAll.length > 0 && othersAll.length > 0 && (
+          <Button size="sm" variant="ghost" onClick={() => setView(view === 'served' ? 'others' : 'served')}>
+            {view === 'served' ? `Outros clientes empresa (${othersAll.length})` : `Voltar às atendidas (${servedAll.length})`}
+          </Button>
+        )}
       </div>
+      {showOthers && othersAll.length > 0 && <p className="mb-3 text-sm text-fg-muted">Clientes do tipo empresa que ainda não têm colaboradores, folha nem honorário. Abra um deles para começar a atender.</p>}
       <Card>
         {employers.isPending ? (
           <Spinner />
@@ -131,7 +137,13 @@ export function ClientPage() {
   const navigate = useNavigate();
   const employers = useEmployers();
   const employer = employers.data?.items.find((e) => e.id === id);
-  if (employers.isPending) return <Spinner />;
+  // Empresa recém-cadastrada ainda não está na lista guardada no navegador.
+  const stale = !!employers.data && !employer;
+  const { refetch } = employers;
+  useEffect(() => {
+    if (stale) void refetch();
+  }, [stale, refetch]);
+  if (employers.isPending || (stale && employers.isFetching)) return <Spinner />;
   if (employers.isError) return <Alert>{employers.error.message}</Alert>;
   if (!employer) return <Alert>Empresa não encontrada entre os clientes do tipo empresa.</Alert>;
   return (
@@ -164,22 +176,23 @@ function ClientPanel({ employer }: { employer: Employer }) {
   const canManage = useCan('hr.manage');
   const canRun = useCan('hr.payroll');
   const canFees = useCan('hr_consulting.fees.manage');
-  const canFinance = useCan('core.finance.read');
+  const canFeeEntries = useCan('hr.read');
   const canCustomers = useCan('core.customers.read');
   const id = employer.id;
   const [editingFee, setEditingFee] = useState(false);
   const [showAll, setShowAll] = useState(false);
+  const [showCancelled, setShowCancelled] = useState(false);
+  const [feeAction, setFeeAction] = useState<{ entry: FeeEntry; mode: 'correct' | 'cancel' } | null>(null);
   const employees = useQuery({ queryKey: [...hrKey, 'employees', '', id], queryFn: () => api<Employee[]>('/hr/employees', { query: { employer: id } }) });
   const payrolls = useQuery({ queryKey: [...hrKey, 'payrolls', id], queryFn: () => api<PayrollSummary[]>('/hr/payrolls', { query: { employer: id } }) });
   const customer = useQuery({ queryKey: ['customers', id], queryFn: () => api<CustomerDetail>(`/customers/${id}`), enabled: canCustomers });
   const fees = useFees();
   const fee = fees.data?.find((f) => f.customerId === id) ?? null;
-  const entries = useQuery({
-    queryKey: [...hrcKey, 'entries', id],
-    queryFn: () => api<{ items: FinanceEntry[] }>('/finance/entries', { query: { customerId: id, kind: 'income', limit: 100 } }),
-    enabled: canFinance,
-  });
-  const feeEntries = (entries.data?.items ?? []).filter((e) => e.sourceType === FEE_SOURCE && e.status !== 'cancelled');
+  // Rota própria, com hr.read: o Analista de DP acompanha os honorários sem ter acesso ao financeiro.
+  const entries = useQuery({ queryKey: [...hrcKey, 'entries', id], queryFn: () => api<FeeEntry[]>(`/hr-consulting/clients/${id}/fee-entries`), enabled: canFeeEntries });
+  const allFeeEntries = entries.data ?? [];
+  const cancelledCount = allFeeEntries.filter((e) => e.status === 'cancelled').length;
+  const feeEntries = allFeeEntries.filter((e) => showCancelled || e.status !== 'cancelled');
   const list = employees.data ?? [];
   const active = list.filter((e) => e.status !== 'terminated');
   const shown = showAll ? list : active;
@@ -317,11 +330,23 @@ function ClientPanel({ employer }: { employer: Employer }) {
           )}
         </Card>
 
-        {canFinance && (
+        {canFeeEntries && (
           <Card>
-            <h2 className="border-b border-line px-4 py-3 font-medium">Honorários lançados</h2>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
+              <h2 className="font-medium">Honorários lançados</h2>
+              {cancelledCount > 0 && (
+                <Button size="sm" variant="ghost" onClick={() => setShowCancelled(!showCancelled)}>
+                  {showCancelled ? 'Ocultar cancelados' : `Ver cancelados (${cancelledCount})`}
+                </Button>
+              )}
+            </div>
+            {feeAction && <FeeActionPanel key={`${feeAction.entry.id}-${feeAction.mode}`} entry={feeAction.entry} mode={feeAction.mode} onClose={() => setFeeAction(null)} />}
             {entries.isPending ? (
               <Spinner />
+            ) : entries.isError ? (
+              <div className="p-4">
+                <Alert>{entries.error.message}</Alert>
+              </div>
             ) : !feeEntries.length ? (
               <p className="px-4 py-6 text-sm text-fg-muted">Nenhum honorário lançado. Eles entram no financeiro ao fechar as folhas desta empresa.</p>
             ) : (
@@ -329,18 +354,29 @@ function ClientPanel({ employer }: { employer: Employer }) {
                 {feeEntries.map((e) => (
                   <li key={e.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
                     <div className="flex-1">
-                      <div>{e.description}</div>
+                      <div className={e.status === 'cancelled' ? 'text-fg-subtle line-through' : undefined}>{e.description}</div>
                       <div className="text-xs text-fg-muted">
                         vence {formatDate(e.dueDate)}
                         {e.paidAt && ` · recebido em ${formatDate(e.paidAt)}`}
                       </div>
                     </div>
                     <span className="tabular-nums">{formatMoney(e.amount)}</span>
-                    {e.status === 'paid' ? <Badge tone="success">Recebido</Badge> : <Badge tone="warning">A receber</Badge>}
+                    {e.status === 'paid' ? <Badge tone="success">Recebido</Badge> : e.status === 'cancelled' ? <Badge tone="neutral">Cancelado</Badge> : <Badge tone="warning">A receber</Badge>}
+                    {canFees && e.status === 'pending' && (
+                      <span className="flex gap-1">
+                        <Button size="sm" variant="ghost" onClick={() => setFeeAction({ entry: e, mode: 'correct' })}>
+                          Corrigir
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setFeeAction({ entry: e, mode: 'cancel' })}>
+                          Cancelar
+                        </Button>
+                      </span>
+                    )}
                   </li>
                 ))}
               </ul>
             )}
+            {canFees && feeEntries.some((e) => e.status === 'paid') && <p className="border-t border-line px-4 py-2 text-xs text-fg-muted">Honorário já recebido: estorne a baixa em Lançamentos antes de corrigir ou cancelar.</p>}
           </Card>
         )}
       </div>
@@ -359,6 +395,54 @@ function Info({ label, children }: { label: string; children: ReactNode }) {
 }
 
 const moneyText = (v: number | undefined) => (v ? v.toFixed(2).replace('.', ',') : '');
+
+/** Corrigir ou cancelar um honorário em aberto, na própria ficha. O motivo fica na auditoria. */
+function FeeActionPanel({ entry, mode, onClose }: { entry: FeeEntry; mode: 'correct' | 'cancel'; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [amount, setAmount] = useState(moneyText(entry.amount));
+  const [dueDate, setDueDate] = useState(entry.dueDate);
+  const [reason, setReason] = useState('');
+  const correcting = mode === 'correct';
+  const run = useMutation({
+    mutationFn: () =>
+      correcting
+        ? api(`/hr-consulting/fee-entries/${entry.id}`, { method: 'PATCH', body: { amount: parseMoney(amount), dueDate, reason } })
+        : api(`/hr-consulting/fee-entries/${entry.id}/cancel`, { method: 'POST', body: { reason } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: hrcKey });
+      queryClient.invalidateQueries({ queryKey: ['finance'] });
+      onClose();
+    },
+  });
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    run.mutate();
+  }
+  return (
+    <form onSubmit={submit} className="space-y-3 border-b border-line bg-muted/50 p-4 text-sm">
+      <p className="font-medium">
+        {correcting ? 'Corrigir honorário' : 'Cancelar honorário'} · {entry.description}
+      </p>
+      {run.error && <Alert>{run.error instanceof ApiError ? run.error.message : 'Não foi possível concluir'}</Alert>}
+      {correcting && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Valor (R$)">{(fid) => <Input id={fid} inputMode="decimal" required value={amount} onChange={(e) => setAmount(e.target.value)} />}</Field>
+          <Field label="Vencimento">{(fid) => <Input id={fid} type="date" required value={dueDate} onChange={(e) => setDueDate(e.target.value)} />}</Field>
+        </div>
+      )}
+      <Field label="Motivo">{(fid) => <Textarea id={fid} rows={2} required value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />}</Field>
+      {!correcting && <p className="text-xs text-fg-muted">O lançamento continua no financeiro como cancelado. Fechar a mesma folha de novo só lança outro honorário se ela for reaberta.</p>}
+      <div className="flex justify-end gap-2">
+        <Button variant="secondary" onClick={onClose}>
+          Voltar
+        </Button>
+        <Button type="submit" variant={correcting ? 'primary' : 'danger'} loading={run.isPending} disabled={reason.trim().length < 3}>
+          {correcting ? 'Salvar correção' : 'Cancelar honorário'}
+        </Button>
+      </div>
+    </form>
+  );
+}
 
 function FeeModal({ customerId, name, fee, onClose }: { customerId: string; name: string; fee: ClientFee | null; onClose: () => void }) {
   const queryClient = useQueryClient();

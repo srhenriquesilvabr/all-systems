@@ -1,11 +1,12 @@
-import { api, ApiError, formatDateTime, formatMoney, formatPhone, parseMoney, PixCharge, today, useCan } from '@all/module-sdk/web';
-import { Alert, Badge, Button, Field, Input, Modal, Select, Spinner, Textarea } from '@all/ui';
+import { api, ApiError, formatDateTime, formatMoney, formatPhone, parseMoney, PixCharge, today, useCan, useSession } from '@all/module-sdk/web';
+import { Alert, Badge, Button, Checkbox, Field, Input, Modal, Select, Spinner, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link } from 'react-router';
-import { appointmentStatusLabel, paymentMethods, type Appointment, type AppointmentStatus } from '../contracts';
+import { appointmentStatusLabel, paymentMethods, statusTransitions, type Appointment, type AppointmentStatus } from '../contracts';
+import { OutsideScheduleAlert } from './AppointmentForm';
 import { RescheduleRoomSelect, rescheduleRoomBody, RoomForm } from './AppointmentRoom';
-import { localDate, localTime, localToUtc, schedulingKey, useAvailability, useResources } from './hooks';
+import { localDate, localTime, localToUtc, schedulingKey, useAvailability, useResources, useServices } from './hooks';
 
 const methodLabel: Record<(typeof paymentMethods)[number], string> = {
   cash: 'Dinheiro',
@@ -65,7 +66,7 @@ export function AppointmentDetails({ id, onClose }: { id: string; onClose: () =>
     queryFn: () => api<Message[]>('/notifications', { query: { relatedEntity: 'appointment', relatedId: id, limit: 20 } }),
     retry: false,
   });
-  const [mode, setMode] = useState<'view' | 'cancel' | 'cancel-series' | 'reschedule' | 'pay' | 'room'>('view');
+  const [mode, setMode] = useState<'view' | 'cancel' | 'cancel-series' | 'reschedule' | 'edit' | 'pay' | 'room'>('view');
   const hasRooms = useResources().data?.some((r) => r.kind === 'room' && r.active) ?? false;
 
   const refresh = () => {
@@ -90,6 +91,8 @@ export function AppointmentDetails({ id, onClose }: { id: string; onClose: () =>
   const a = detail.data;
   const balance = a ? Math.round((a.total - a.paidAmount) * 100) / 100 : 0;
   const open = a && !['done', 'no_show', 'cancelled'].includes(a.status);
+  // Em atendimento já não cancela: só conclui (mesma regra do servidor).
+  const canCancel = a && statusTransitions[a.status].includes('cancelled');
 
   return (
     <Modal open title={a ? `${localTime(a.startsAt)} · ${a.customer.name}` : 'Atendimento'} onClose={onClose}>
@@ -141,7 +144,10 @@ export function AppointmentDetails({ id, onClose }: { id: string; onClose: () =>
               {a.services.map((s) => (
                 <div key={s.name} className="flex justify-between gap-2">
                   <span>{s.name}</span>
-                  <span className="tabular-nums">{formatMoney(s.price)}</span>
+                  <span className="tabular-nums">
+                    {s.discount > 0 && <span className="mr-1 text-xs text-fg-muted">desconto {formatMoney(s.discount)}</span>}
+                    {formatMoney(s.price)}
+                  </span>
                 </div>
               ))}
             </dd>
@@ -182,17 +188,22 @@ export function AppointmentDetails({ id, onClose }: { id: string; onClose: () =>
                   Remarcar
                 </Button>
               )}
+              {canWrite && open && (
+                <Button size="sm" variant="ghost" onClick={() => setMode('edit')}>
+                  Alterar
+                </Button>
+              )}
               {canWrite && open && (hasRooms || a.roomId) && (
                 <Button size="sm" variant="ghost" onClick={() => setMode('room')}>
                   {a.roomId ? 'Trocar sala' : 'Definir sala'}
                 </Button>
               )}
-              {canWrite && open && (
+              {canWrite && canCancel && (
                 <Button size="sm" variant="ghost" onClick={() => setMode('cancel')}>
                   Cancelar horário
                 </Button>
               )}
-              {canWrite && open && a.seriesId && (
+              {canWrite && canCancel && a.seriesId && (
                 <Button size="sm" variant="ghost" onClick={() => setMode('cancel-series')}>
                   Cancelar esta e as próximas
                 </Button>
@@ -211,6 +222,7 @@ export function AppointmentDetails({ id, onClose }: { id: string; onClose: () =>
             />
           )}
           {mode === 'reschedule' && <RescheduleForm appointment={a} onDone={() => { setMode('view'); refresh(); }} onBack={() => setMode('view')} />}
+          {mode === 'edit' && <EditForm appointment={a} onDone={() => { setMode('view'); refresh(); }} onBack={() => setMode('view')} />}
           {mode === 'room' && <RoomForm appointment={a} onDone={() => { setMode('view'); refresh(); }} onBack={() => setMode('view')} />}
           {mode === 'pay' && <PaymentForm appointment={a} balance={balance} onDone={() => { setMode('view'); refresh(); }} onBack={() => setMode('view')} />}
 
@@ -278,6 +290,114 @@ function CancelForm({
   );
 }
 
+/**
+ * Alterar um horário já marcado: profissional, serviços, preço e desconto, no mesmo início. A linha
+ * coberta por pacote ou tratamento não muda de valor. Mudar valores pede permissão de pagamentos.
+ */
+function EditForm({ appointment, onDone, onBack }: { appointment: Appointment; onDone: () => void; onBack: () => void }) {
+  const resources = useResources();
+  const services = useServices();
+  const canPay = useCan('shared.scheduling.payments');
+  const canOverride = useCan('shared.scheduling.manage');
+  const money = (n: number) => n.toFixed(2).replace('.', ',');
+  const [resourceId, setResourceId] = useState(appointment.resourceId);
+  const [lines, setLines] = useState(
+    appointment.services
+      .filter((s) => s.serviceId)
+      .map((s) => ({ serviceId: s.serviceId!, name: s.name, covered: s.covered, price: money(s.price + s.discount), discount: s.discount ? money(s.discount) : '', original: s.price + s.discount, originalDiscount: s.discount })),
+  );
+  const [notes, setNotes] = useState(appointment.notes ?? '');
+  const professionals = (resources.data ?? []).filter((r) => r.kind === 'professional' && (r.active || r.id === appointment.resourceId));
+  const chosen = (services.data ?? []).filter((s) => lines.some((l) => l.serviceId === s.id));
+  const eligible = professionals.filter((p) =>
+    chosen.every((s) => {
+      const linked = professionals.filter((r) => s.resourceIds.includes(r.id));
+      return !linked.length || linked.some((r) => r.id === p.id);
+    }),
+  );
+  const toggle = (id: string, on: boolean) => {
+    if (!on) return setLines(lines.filter((l) => l.serviceId !== id));
+    const s = services.data?.find((x) => x.id === id);
+    if (s) setLines([...lines, { serviceId: s.id, name: s.name, covered: false, price: money(s.price), discount: '', original: s.price, originalDiscount: 0 }]);
+  };
+  const set = (id: string, patch: { price?: string; discount?: string }) => setLines(lines.map((l) => (l.serviceId === id ? { ...l, ...patch } : l)));
+  const num = (v: string) => (v.trim() ? parseMoney(v) : 0);
+  const total = lines.reduce((sum, l) => sum + num(l.price) - num(l.discount), 0) + appointment.services.filter((s) => !s.serviceId).reduce((sum, s) => sum + s.price, 0);
+  const save = useMutation({
+    mutationFn: (override: boolean) =>
+      api(`/scheduling/appointments/${appointment.id}`, {
+        method: 'PATCH',
+        body: {
+          ...(resourceId !== appointment.resourceId ? { resourceId } : {}),
+          services: lines.map((l) => ({
+            serviceId: l.serviceId,
+            ...(!l.covered && num(l.price) !== l.original ? { price: num(l.price) } : {}),
+            ...(!l.covered && num(l.discount) !== l.originalDiscount ? { discount: num(l.discount) } : {}),
+          })),
+          notes: notes || null,
+          overrideSchedule: override || undefined,
+        },
+      }),
+    onSuccess: onDone,
+  });
+  const outside = save.error instanceof ApiError && save.error.code === 'OUTSIDE_SCHEDULE';
+  return (
+    <div className="space-y-3 border-t border-line pt-4">
+      {outside && <OutsideScheduleAlert message={(save.error as ApiError).message} canOverride={canOverride} busy={save.isPending} onConfirm={() => save.mutate(true)} />}
+      {save.error && !outside && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao alterar'}</Alert>}
+      <Field label="Profissional">
+        {(id) => (
+          <Select id={id} value={resourceId} onChange={(e) => setResourceId(e.target.value)}>
+            {eligible.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name}
+              </option>
+            ))}
+            {!eligible.some((r) => r.id === resourceId) && <option value={resourceId}>{appointment.resourceName} (não faz estes serviços)</option>}
+          </Select>
+        )}
+      </Field>
+      <fieldset>
+        <legend className="mb-1.5 font-medium">Serviços</legend>
+        <div className="grid max-h-40 gap-1.5 overflow-y-auto rounded-lg border border-line p-2 sm:grid-cols-2">
+          {services.data
+            ?.filter((s) => s.active || lines.some((l) => l.serviceId === s.id))
+            .map((s) => (
+              <Checkbox key={s.id} label={s.name} checked={lines.some((l) => l.serviceId === s.id)} onChange={(e) => toggle(s.id, e.target.checked)} />
+            ))}
+        </div>
+      </fieldset>
+      {lines.map((l) => (
+        <div key={l.serviceId} className="grid items-end gap-2 sm:grid-cols-[1fr_7rem_7rem]">
+          <span className="self-center">{l.name}</span>
+          {l.covered ? (
+            <span className="text-xs text-fg-muted sm:col-span-2">Valor do pacote ou tratamento</span>
+          ) : (
+            <>
+              <Field label="Preço (R$)">{(id) => <Input id={id} inputMode="decimal" disabled={!canPay} value={l.price} onChange={(e) => set(l.serviceId, { price: e.target.value })} />}</Field>
+              <Field label="Desconto (R$)">{(id) => <Input id={id} inputMode="decimal" disabled={!canPay} placeholder="0,00" value={l.discount} onChange={(e) => set(l.serviceId, { discount: e.target.value })} />}</Field>
+            </>
+          )}
+        </div>
+      ))}
+      <p className="tabular-nums">
+        Novo total: <strong>{formatMoney(total)}</strong>
+        {appointment.paidAmount > 0 && <span className="ml-1 text-fg-muted">(já pago {formatMoney(appointment.paidAmount)})</span>}
+      </p>
+      <Field label="Observações">{(id) => <Textarea id={id} rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />}</Field>
+      <p className="text-xs text-fg-muted">O início continua o mesmo; o fim acompanha a duração dos serviços. Se trocar profissional ou serviço, o cliente recebe um aviso.</p>
+      <div className="flex gap-2">
+        <Button size="sm" loading={save.isPending} disabled={!lines.length && !appointment.services.some((s) => !s.serviceId)} onClick={() => save.mutate(false)}>
+          Salvar alteração
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onBack}>
+          Voltar
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function RescheduleForm({ appointment, onDone, onBack }: { appointment: Appointment; onDone: () => void; onBack: () => void }) {
   const [date, setDate] = useState(localDate(appointment.startsAt));
   const [time, setTime] = useState('');
@@ -286,15 +406,18 @@ function RescheduleForm({ appointment, onDone, onBack }: { appointment: Appointm
   const slots = availability.data?.[0]?.slots ?? [];
   // Sala no novo horário: '' = automática (mantém a atual se livre), 'none' = sem sala, ou o id.
   const [room, setRoom] = useState('');
+  const canOverride = useCan('shared.scheduling.manage');
   const startsAt = time ? localToUtc(date, time) : null;
   const save = useMutation({
-    mutationFn: () =>
-      api(`/scheduling/appointments/${appointment.id}/reschedule`, { method: 'POST', body: { startsAt: localToUtc(date, time).toISOString(), ...rescheduleRoomBody(room) } }),
+    mutationFn: (override: boolean) =>
+      api(`/scheduling/appointments/${appointment.id}/reschedule`, { method: 'POST', body: { startsAt: localToUtc(date, time).toISOString(), ...rescheduleRoomBody(room), overrideSchedule: override || undefined } }),
     onSuccess: onDone,
   });
+  const outside = save.error instanceof ApiError && save.error.code === 'OUTSIDE_SCHEDULE';
   return (
     <div className="space-y-3 border-t border-line pt-4">
-      {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao remarcar'}</Alert>}
+      {outside && <OutsideScheduleAlert message={(save.error as ApiError).message} canOverride={canOverride} busy={save.isPending} onConfirm={() => save.mutate(true)} />}
+      {save.error && !outside && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao remarcar'}</Alert>}
       <Field label="Novo dia">{(id) => <Input id={id} type="date" value={date} onChange={(e) => setDate(e.target.value)} />}</Field>
       {availability.isPending ? (
         <Spinner />
@@ -308,9 +431,13 @@ function RescheduleForm({ appointment, onDone, onBack }: { appointment: Appointm
           {!slots.length && <p className="text-fg-muted">Sem horário livre neste dia.</p>}
         </div>
       )}
+      <div className="flex items-center gap-2">
+        <span className="text-fg-muted">Outro horário:</span>
+        <Input type="time" aria-label="Outro horário" className="w-28" step={300} value={time} onChange={(e) => setTime(e.target.value)} />
+      </div>
       <RescheduleRoomSelect appointment={appointment} startsAt={startsAt} value={room} onChange={setRoom} />
       <div className="flex gap-2">
-        <Button size="sm" loading={save.isPending} disabled={!time} onClick={() => save.mutate()}>
+        <Button size="sm" loading={save.isPending} disabled={!time} onClick={() => save.mutate(false)}>
           Remarcar para {time || '…'}
         </Button>
         <Button size="sm" variant="ghost" onClick={onBack}>
@@ -321,16 +448,34 @@ function RescheduleForm({ appointment, onDone, onBack }: { appointment: Appointm
   );
 }
 
+/** O caixa deste navegador, o mesmo que o PDV escolheu (guardado por empresa). */
+function deviceRegister(tenantId: string) {
+  try {
+    return window.localStorage.getItem(`all.sales.register.${tenantId}`);
+  } catch {
+    return null;
+  }
+}
+
 function PaymentForm({ appointment, balance, onDone, onBack }: { appointment: Appointment; balance: number; onDone: () => void; onBack: () => void }) {
+  const { tenant } = useSession();
   const accounts = useQuery({ queryKey: [...schedulingKey, 'payment-accounts'], queryFn: () => api<{ id: string; name: string }[]>('/scheduling/payment-accounts') });
+  const registers = useQuery({ queryKey: [...schedulingKey, 'payment-registers'], queryFn: () => api<{ id: string; name: string }[]>('/scheduling/payment-registers'), retry: false });
   const [amount, setAmount] = useState(balance.toFixed(2).replace('.', ','));
   const [method, setMethod] = useState<(typeof paymentMethods)[number]>('pix');
   const [accountId, setAccountId] = useState('');
+  const [paidAt, setPaidAt] = useState(today());
+  // undefined = ainda não mexeu: vale o caixa deste navegador, se estiver aberto.
+  const [picked, setPicked] = useState<string | undefined>(undefined);
+  const isToday = paidAt === today();
+  const preferred = deviceRegister(tenant.id);
+  const registerId = !isToday ? '' : (picked ?? (registers.data?.some((r) => r.id === preferred) ? preferred! : ''));
+  const toDrawer = !!registerId && method === 'cash';
   const save = useMutation({
     mutationFn: () =>
       api(`/scheduling/appointments/${appointment.id}/payments`, {
         method: 'POST',
-        body: { amount: parseMoney(amount), method, accountId: accountId || accounts.data?.[0]?.id, paidAt: today() },
+        body: { amount: parseMoney(amount), method, accountId: toDrawer ? null : accountId || accounts.data?.[0]?.id, paidAt, registerId: registerId || null },
       }),
     onSuccess: onDone,
   });
@@ -339,6 +484,7 @@ function PaymentForm({ appointment, balance, onDone, onBack }: { appointment: Ap
       {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao registrar'}</Alert>}
       <div className="grid gap-3 sm:grid-cols-3">
         <Field label="Valor (R$)">{(id) => <Input id={id} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />}</Field>
+        <Field label="Data">{(id) => <Input id={id} type="date" required max={today()} value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />}</Field>
         <Field label="Forma">
           {(id) => (
             <Select id={id} value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
@@ -350,18 +496,36 @@ function PaymentForm({ appointment, balance, onDone, onBack }: { appointment: Ap
             </Select>
           )}
         </Field>
-        <Field label="Conta">
-          {(id) => (
-            <Select id={id} value={accountId || accounts.data?.[0]?.id || ''} onChange={(e) => setAccountId(e.target.value)}>
-              {accounts.data?.map((acc) => (
-                <option key={acc.id} value={acc.id}>
-                  {acc.name}
-                </option>
-              ))}
-            </Select>
-          )}
-        </Field>
+        {!toDrawer && (
+          <Field label="Conta">
+            {(id) => (
+              <Select id={id} value={accountId || accounts.data?.[0]?.id || ''} onChange={(e) => setAccountId(e.target.value)}>
+                {accounts.data?.map((acc) => (
+                  <option key={acc.id} value={acc.id}>
+                    {acc.name}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+        )}
+        {isToday && !!registers.data?.length && (
+          <Field label="Caixa">
+            {(id) => (
+              <Select id={id} value={registerId} onChange={(e) => setPicked(e.target.value)}>
+                <option value="">Não entra no caixa</option>
+                {registers.data.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+        )}
       </div>
+      {!!registerId && <p className="text-xs text-fg-muted">Entra na conferência do fechamento deste caixa{toDrawer ? ', e o dinheiro fica na conta Caixa' : ''}. No financeiro é um lançamento só.</p>}
+      {!isToday && <p className="text-xs text-fg-muted">Com data passada, o recebimento não entra no caixa de hoje.</p>}
       {method === 'pix' && <PixCharge amount={parseMoney(amount)} reference={`AG${appointment.id.slice(-8)}`} />}
       <div className="flex gap-2">
         <Button size="sm" loading={save.isPending} onClick={() => save.mutate()}>

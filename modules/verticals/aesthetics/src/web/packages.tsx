@@ -23,7 +23,7 @@ export function PackagesPage() {
     <>
       <PageHeader
         title="Pacotes de sessões"
-        description="Sessões marcadas na agenda saem do pacote automaticamente, com valor zerado."
+        description="Sessões marcadas na agenda saem do pacote automaticamente, com valor zerado. Se a falta consome a sessão é definido em Especialidades da clínica."
         actions={
           <>
             <Select aria-label="Situação" value={status} onChange={(e) => setStatus(e.target.value)}>
@@ -82,7 +82,10 @@ function PackagesTable({ packages, showCustomer }: { packages: SessionPackage[];
                   </Link>
                 </Td>
               )}
-              <Td>{p.service.name}</Td>
+              <Td>
+                {p.service.name}
+                {p.case && <div className="text-xs text-fg-muted">Do tratamento: {p.case.title}</div>}
+              </Td>
               <Td className="whitespace-nowrap tabular-nums">{formatDate(p.soldOn)}</Td>
               <Td className="whitespace-nowrap">
                 <SessionMeter pkg={p} />
@@ -132,7 +135,7 @@ function SessionMeter({ pkg }: { pkg: SessionPackage }) {
 }
 
 /** Venda de pacote. `serviceName` já deixa o procedimento escolhido (ex.: drenagem no pós-operatório). */
-export function SellModal({ customer: fixed, serviceName, onClose }: { customer?: { id: string }; serviceName?: string; onClose: () => void }) {
+export function SellModal({ customer: fixed, serviceName, caseId, onClose }: { customer?: { id: string }; serviceName?: string; caseId?: string; onClose: () => void }) {
   const queryClient = useQueryClient();
   const services = useServices();
   const [customer, setCustomer] = useState<CustomerOption | { id: string; name?: string } | null>(fixed ?? null);
@@ -144,10 +147,11 @@ export function SellModal({ customer: fixed, serviceName, onClose }: { customer?
     mutationFn: () =>
       api('/aesthetics/packages', {
         method: 'POST',
-        body: { ...form, serviceId, customerId: customer?.id, price: parseMoney(form.price), notes: form.notes || null },
+        body: { ...form, serviceId, customerId: customer?.id, price: parseMoney(form.price), notes: form.notes || null, caseId: caseId ?? null },
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: key });
+      // Também o cartão do tratamento de origem, que lista o pacote.
+      queryClient.invalidateQueries({ queryKey: ['aesthetics'] });
       onClose();
     },
   });
@@ -183,6 +187,7 @@ export function SellModal({ customer: fixed, serviceName, onClose }: { customer?
               Cliente: <span className="font-medium">{customer.name}</span>
             </p>
           )}
+          {caseId && <p className="text-xs text-fg-muted">O pacote fica ligado a este tratamento.</p>}
           <Field label="Procedimento">
             {(id) => (
               <Select id={id} required value={serviceId} onChange={(e) => set({ serviceId: e.target.value })}>

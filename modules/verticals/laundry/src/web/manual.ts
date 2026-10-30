@@ -31,9 +31,10 @@ export const manual: ManualGuide = {
             'Motorista: só laundry.logistics.drive (Fazer coletas e entregas, só as atribuídas a si).',
             'O papel Gerente soma ao Atendente laundry.catalog.manage (Gerenciar serviços e preços) e laundry.reports.read (Ver relatórios da lavanderia).',
             'Taxas padrão exigem core.access.settings (Configurar os módulos contratados).',
+            'laundry.logistics.receive (Receber o saldo da ordem na entrega): vem no Motorista, e também no Atendente e no Gerente por meio de shared.service-orders.payments. Para um motorista que não recebe, crie um papel só com laundry.logistics.drive.',
           ],
         },
-        { text: 'Não há tela para as configurações de modo de cobrança e de foto obrigatória no recebimento. A foto da peça não é exigida ao abrir a ordem.' },
+        { text: 'Em Serviços e preços, a aba Regras (core.access.settings) liga a foto obrigatória: a peça sem foto não sai de Recebida, nem pelo quadro nem pelo leitor. A ordem abre sem foto, porque a peça só existe depois de aberta. Vem desligada. A mesma aba traz o prazo padrão em horas. O modo de cobrança é o de cada serviço (por peça, kg ou m²).' },
       ],
     },
     {
@@ -77,7 +78,7 @@ export const manual: ManualGuide = {
           ],
         },
         { tip: 'Anotar as avarias protege a lavanderia: elas saem no comprovante que o cliente leva.' },
-        { warn: 'Confira antes de abrir. Depois de aberta, esta tela não permite trocar peças, preços ou desconto. Para corrigir, cancele e abra outra ordem.' },
+        { tip: 'Errou algo depois de abrir? Use Editar ordem, na tela da ordem, para mudar previsão, desconto, observações e peças.' },
       ],
       technical: [
         { list: ['Permissão: laundry.orders.write.', 'Até 100 linhas por ordem e até 200 peças por linha.', 'Por peça: cada unidade vira um item e uma etiqueta, com o preço por tipo de peça ou, sem ele, o preço do serviço.', 'Por kg ou m²: a linha inteira vira um item e uma etiqueta. A quantidade de peças é só informativa. Sem medida, a recusa é “Informe o peso para...” ou “Informe a área para...”.', 'Etiqueta: número da ordem e sequência com dois dígitos, por exemplo 123-01.'] },
@@ -119,10 +120,10 @@ export const manual: ManualGuide = {
           ],
         },
         { tip: 'Você não precisa mudar a situação da ordem. Quando a primeira peça começa, a ordem fica Em produção. Quando todas ficam prontas, a ordem fica Pronta e o cliente é avisado.' },
-        { warn: 'Ao ficar Pronta, a ordem sai do quadro. Se uma peça precisar voltar, use Ler etiqueta e mover para: ela volta à etapa escolhida e a ordem volta para produção.' },
+        { tip: 'Ao ficar Pronta, a ordem sai do quadro. Se uma peça precisar voltar, marque Mostrar também as ordens prontas e use Voltar para retrabalho no cartão, escolha a etapa na tela da ordem, ou use Ler etiqueta e mover para. A ordem volta para produção.' },
       ],
       technical: [
-        { list: ['Permissão da tela: laundry.orders.status. O quadro atualiza sozinho a cada 30 segundos.', 'Mostra só peças de ordens Recebida ou Em produção, por previsão e número da ordem.', 'Até 200 peças por movimento. Em ordem já fora da produção, a recusa é “A ordem nº X já saiu da produção”.', 'Etiqueta inexistente: “Nenhuma peça com a etiqueta X”.'] },
+        { list: ['Permissão da tela: laundry.orders.status. O quadro atualiza sozinho a cada 30 segundos.', 'Mostra as peças de ordens Recebida ou Em produção, por previsão e número da ordem. Com a opção ligada, também as de ordens Pronta.', 'Até 200 peças por movimento. Em ordem já fora da produção, a recusa é “A ordem nº X já saiu da produção”.', 'Etiqueta inexistente: “Nenhuma peça com a etiqueta X”.'] },
         { text: 'Voltar para uma etapa anterior conta como retrabalho: soma 1 no contador da peça e aparece o selo Retrabalho. Depois de pronta, voltar leva a ordem para Em produção sem novo aviso; quando todas ficarem prontas outra vez, o aviso Peças prontas é enviado de novo.' },
         { text: 'Pronta só acontece com todas as peças prontas. O botão correspondente não aparece na ordem, e a API recusa com “Ainda há X peça(s) em produção”.' },
       ],
@@ -144,8 +145,8 @@ export const manual: ManualGuide = {
         { warn: 'O aviso sai na hora. Escreva pensando que o cliente vai ler o texto como está.' },
       ],
       technical: [
-        { list: ['Permissão: laundry.orders.status.', 'Descrição de 5 a 500 caracteres. Mais curta, a recusa é “Descreva o ocorrido”.', 'Foto em JPEG, PNG ou WebP, até 8 MB.', 'Registrar ocorrência só aparece com a ordem Recebida ou Em produção. Foto pode ser anexada também depois.'] },
-        { text: 'A tela mostra só a última ocorrência de cada peça, mas todas ficam guardadas nos eventos da peça e na linha do tempo do cliente, e contam no relatório. O aviso usa o modelo Ocorrência com uma peça. O texto da janela cita e-mail, mas com o WhatsApp ativo o aviso também vai por lá.' },
+        { list: ['Permissão: laundry.orders.status.', 'Descrição de 5 a 500 caracteres. Mais curta, a recusa é “Descreva o ocorrido”.', 'Foto em JPEG, PNG ou WebP, até 8 MB.', 'Registrar ocorrência aparece com a ordem Recebida, Em produção ou Pronta. Foto pode ser anexada também depois.'] },
+        { text: 'A tela mostra só a última ocorrência de cada peça, mas todas ficam guardadas nos eventos da peça e na linha do tempo do cliente, e contam no relatório. O aviso usa o modelo Ocorrência com uma peça e sai por e-mail e, com o módulo de WhatsApp ativo, também por WhatsApp. A janela mostra os canais.' },
       ],
     },
     {
@@ -186,12 +187,33 @@ export const manual: ManualGuide = {
         },
         { text: 'Para cancelar, clique em Cancelar ordem, escreva o Motivo e confirme.' },
         { warn: 'O sistema permite entregar com valor em aberto. A cobrança continua no financeiro, então confira antes.' },
-        { warn: 'Se a ordem já estiver Pronta, não aparece Cancelar ordem. Ela só pode ser cancelada enquanto está Recebida ou Em produção.' },
+        { tip: 'A ordem pode ser cancelada enquanto está Recebida, Em produção ou Pronta. A entrega agendada é cancelada junto. Marcou Saiu para entrega por engano? Clique em Voltar para “Pronta”.' },
       ],
       technical: [
-        { text: 'Situações: Recebida, Em produção, Pronta, Saiu para entrega, Entregue e Cancelada. De Pronta vai para Entregue ou Saiu para entrega. De Saiu para entrega vai para Entregue ou, quando a entrega agendada falha ou é cancelada, volta para Pronta. Entregue e Cancelada são finais.' },
+        { text: 'Situações: Recebida, Em produção, Pronta, Saiu para entrega, Entregue e Cancelada. De Recebida, Em produção ou Pronta pode ser cancelada. De Pronta vai para Entregue ou Saiu para entrega. De Saiu para entrega vai para Entregue ou volta para Pronta, sem novo aviso: pela entrega que falhou ou foi cancelada, ou pelo botão Voltar para “Pronta”, recusado com um motorista em rota (“Há uma entrega em rota para esta ordem”). Entregue e Cancelada são finais.' },
         { list: ['Permissão: shared.service-orders.status.', 'Cancelar exige motivo: “Informe o motivo do cancelamento”.', 'Cancelar zera o valor a receber. Pagamentos já feitos continuam registrados; devolução é lançada à mão no financeiro.', 'Avisos: Peças prontas, Saiu para entrega e Peças entregues, por e-mail e, com o módulo de WhatsApp ativo, também por WhatsApp. Sem contato cadastrado, ou se o cliente pediu para não receber, o aviso é pulado. Textos em Configurações, Notificações.'] },
-        { text: 'Cancelar a ordem não cancela uma entrega já agendada para ela. Cancele também em Coletas e entregas.' },
+        { text: 'Cancelar a ordem cancela a entrega em aberto na mesma hora, e a taxa ainda não recebida sai do valor a receber. Taxa já recebida continua registrada: devolução é lançada à mão no financeiro.' },
+      ],
+    },
+    {
+      id: 'editar-ordem',
+      title: 'Editar uma ordem aberta',
+      path: '/ordens',
+      simple: [
+        { text: 'Dá para corrigir a ordem depois de aberta. O que pode mudar depende da situação dela.' },
+        {
+          steps: [
+            'Abra a ordem e clique em Editar ordem.',
+            'Ajuste Previsão de entrega, Desconto, Observações para o cliente e Observação interna. Clique em Salvar.',
+            'Em Peças, corrija cor, marca e avarias e clique em Salvar peça.',
+            'Com a ordem Recebida ou Em produção, use Incluir peças ou Tirar da ordem.',
+          ],
+        },
+        { tip: 'A Observação interna só a equipe vê. Ela não sai no comprovante nem nos avisos.' },
+      ],
+      technical: [
+        { list: ['Permissão: laundry.orders.write.', 'Recebida ou Em produção: tudo. Pronta: previsão, desconto, observações e dados da peça; as peças não entram nem saem. Saiu para entrega: só observações (“A ordem saiu para entrega: só as observações podem mudar”). Entregue ou Cancelada: nada.', 'Só sai da ordem a peça em Recebida, sem retrabalho nem ocorrência: “A peça X já foi trabalhada e não pode sair da ordem”. A ordem precisa ficar com ao menos uma peça.', 'Peça incluída ganha a próxima etiqueta. A etiqueta de uma peça retirada não volta a ser usada.', 'Previsão antes da entrada: “A previsão de entrega não pode ser antes da data de entrada”. Total abaixo do que já foi pago: “O novo total é menor do que o valor já pago”.'] },
+        { text: 'Total e valor a receber acompanham na hora, e o vencimento segue a previsão. Mudar a previsão não avisa o cliente. As alterações ficam na auditoria.' },
       ],
     },
     {
@@ -236,8 +258,8 @@ export const manual: ManualGuide = {
         { warn: 'Dá para agendar antes de a ordem ficar pronta, mas o motorista só consegue sair quando ela estiver Pronta.' },
       ],
       technical: [
-        { list: ['Permissão: laundry.logistics.manage. O quadro atualiza a cada minuto.', 'Só uma entrega em aberto por ordem: “A ordem nº X já tem uma entrega em aberto”.', 'Agendamento só antes de a ordem sair: Recebida, Em produção ou Pronta.', 'Editar só em tarefas Agendada ou Não realizada: “Só dá para alterar coletas/entregas agendadas ou não realizadas”.', 'Taxa já recebida não muda: “A taxa já foi recebida e não pode mais ser alterada”.'] },
-        { text: 'A lista de motoristas traz todos os usuários ativos da empresa, não só quem tem o papel Motorista. Não há roteirização: a ordem da rota segue dia e janela de horário.' },
+        { list: ['Permissão: laundry.logistics.manage. O quadro atualiza a cada minuto.', 'Só uma entrega em aberto por ordem: “A ordem nº X já tem uma entrega em aberto”.', 'Agendamento só antes de a ordem sair: Recebida, Em produção ou Pronta.', 'Editar só em tarefas Agendada ou Não realizada: “Só dá para alterar coletas/entregas agendadas ou não realizadas”.', 'Motorista: só quem tem laundry.logistics.drive (ou o dono da empresa). Outra pessoa é recusada: “Esta pessoa não tem a permissão de fazer coletas e entregas”. Para incluir, ajuste o papel em Configurações, Usuários. Quem já estava na tarefa continua aparecendo até ser trocado.', 'Taxa já recebida não muda: “A taxa já foi recebida e não pode mais ser alterada”.'] },
+        { text: 'Não há roteirização: a ordem da rota segue dia e janela de horário.' },
         { text: 'Situações: Agendada, Em rota, Concluída, Não realizada e Cancelada. Reagendar uma Não realizada a devolve para Agendada, mantém o selo da tentativa que falhou e reenvia o aviso de agendamento. Cancelar apaga a taxa ainda não recebida e, se a ordem tinha saído, ela volta para Pronta sem novo aviso. Avisos: Entrega agendada, Saiu para entrega e Peças entregues.' },
       ],
     },
@@ -253,27 +275,28 @@ export const manual: ManualGuide = {
             'Antes de sair, clique em Sair para a coleta ou Sair para a entrega. O cliente é avisado.',
             'Na chegada, clique em Concluir.',
             'Na entrega, escreva Quem recebeu. Na coleta, informe as Peças coletadas.',
-            'Se quiser, use Tirar foto. Se recebeu a taxa, marque a opção e escolha a forma.',
+            'Se quiser, use Tirar foto. Se recebeu a taxa, marque a opção e escolha a forma. Se recebeu o saldo da ordem, marque Recebi o saldo, confira o valor e escolha a forma.',
             'Clique em Concluir.',
             'Se não deu, clique em Não realizada, escolha ou escreva o motivo e clique em Registrar.',
           ],
         },
-        { warn: 'O cartão mostra A receber com o saldo da ordem e a taxa. Nesta tela só dá para registrar a taxa. O pagamento da ordem precisa ser lançado por alguém do escritório, na ordem.' },
+        { warn: 'O cartão mostra A receber com o saldo da ordem e a taxa. Registre os dois ao concluir: depois de concluída, o pagamento da ordem só pode ser lançado por alguém do escritório, na ordem.' },
         { tip: 'Esqueceu de registrar na hora? Use Aconteceu em outro horário na janela de conclusão.' },
       ],
       technical: [
         { list: ['Permissão: laundry.logistics.drive. Cada um vê só o que está atribuído a si, mais o que ficou Em rota de outros dias. Atualiza a cada minuto.', 'Saída de entrega com a ordem fora de Pronta: “A ordem nº X ainda não está pronta para entrega”.', 'Sem nome de quem recebeu: “Informe o nome de quem recebeu”. Sem peças: “Informe quantas peças foram coletadas”. Motivo de falha: no mínimo 3 caracteres.', 'Foto em JPEG, PNG ou WebP, até 8 MB.'] },
         { text: 'Concluir entrega marca a ordem como Entregue, mesmo com saldo em aberto. Não realizada devolve a ordem para Pronta, sem avisar o cliente, e a taxa continua a receber.' },
         { text: 'Taxa recebida: dá baixa no financeiro na data da conclusão, na conta de caixa padrão. Sem conta: “Cadastre uma conta (caixa) no financeiro para registrar a taxa recebida”.' },
+        { text: 'Saldo recebido: vira um pagamento da ordem, na data da conclusão e na conta de caixa padrão, e o valor a receber diminui. Pode ser parte do saldo. Exige laundry.logistics.receive ou shared.service-orders.payments; sem elas, a opção não aparece e a API recusa. Valor acima do saldo: “O valor passa do saldo em aberto”, e a entrega não conclui. Não entra em fechamento de caixa do PDV.' },
         { text: 'Registro posterior: o horário não pode ser futuro, nem antes do dia da tarefa, da saída ou da tentativa anterior. Se o evento tiver mais de 30 minutos, o cliente não é avisado.' },
       ],
     },
     {
       id: 'relatorios',
-      title: 'Ver prazos, retrabalho e receita',
+      title: 'Ver prazos, retrabalho e valor contratado',
       path: '/lavanderia/relatorios',
       simple: [
-        { text: 'O relatório mostra se a lavanderia está cumprindo os prazos, quantas peças precisaram voltar e quais serviços trazem mais receita.' },
+        { text: 'O relatório mostra se a lavanderia está cumprindo os prazos, quantas peças precisaram voltar e quanto foi contratado em cada serviço.' },
         {
           steps: [
             'Abra Relatórios da lavanderia.',
@@ -285,7 +308,7 @@ export const manual: ManualGuide = {
       ],
       technical: [
         { list: ['Permissão: laundry.reports.read.', 'Entregues no prazo: ordens entregues no período cuja data de entrega não passou da previsão.', 'Ordens atrasadas agora: previsão vencida e ordem não entregue nem cancelada, até 20 ordens. Não depende do período.', 'Peças prontas, Retrabalhos e Ocorrências contam eventos no período.'] },
-        { text: 'Receita por serviço é o valor contratado nas ordens recebidas no período, exceto canceladas, e não o valor recebido. A coluna Qtd. soma peças com quilos e metros, conforme o serviço. Para caixa e recebimentos, use o Financeiro.' },
+        { text: 'Valor contratado por serviço soma os itens das ordens recebidas no período, exceto canceladas, antes do desconto da ordem. Não é o valor recebido: para caixa e recebimentos, use o Financeiro. A quantidade está na unidade de cobrança de cada serviço: peças, kg ou m².' },
       ],
     },
   ],

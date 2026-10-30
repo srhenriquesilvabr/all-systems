@@ -22,6 +22,7 @@ import {
   type Quota,
   type QuotaInstallments,
 } from '../contracts';
+import { RevertForm } from './assemblies';
 import { bidTone, creditTone, errorText, installmentTone, key, parsePercent, pct, quotaTone } from './common';
 
 const money = (s: string) => (s.trim() ? parseMoney(s) : null);
@@ -45,6 +46,7 @@ export function QuotaPage() {
   const canManage = useCan('consortium.manage');
   const [tab, setTab] = useState('installments');
   const [cancelling, setCancelling] = useState(false);
+  const [reverting, setReverting] = useState(false);
   const quota = useQuery({ queryKey: [...key, 'quota', id], queryFn: () => api<Quota>(`/consortium/quotas/${id}`) });
   if (quota.isPending) return <Spinner />;
   if (quota.isError) return <Alert>{quota.error.message}</Alert>;
@@ -55,14 +57,27 @@ export function QuotaPage() {
         title={`Cota nº ${q.number} — ${q.customer.name}`}
         description={`${q.plan.name} · ${q.plan.institution} · crédito ${formatMoney(q.plan.creditValue)} em ${q.plan.termMonths}x de ${formatMoney(q.plan.installment)}`}
         actions={
-          canManage &&
-          (q.status === 'proposal' || q.status === 'active') && (
-            <Button variant="secondary" onClick={() => setCancelling(true)}>
-              Cancelar cota
-            </Button>
+          canManage && (
+            <>
+              {(q.status === 'proposal' || q.status === 'active') && (
+                <Button variant="secondary" onClick={() => setCancelling(true)}>
+                  Cancelar cota
+                </Button>
+              )}
+              {q.status === 'contemplated' && (
+                <Button variant="secondary" onClick={() => setReverting(true)}>
+                  Desfazer contemplação
+                </Button>
+              )}
+            </>
           )
         }
       />
+      {reverting && (
+        <Card className="mb-4 p-4">
+          <RevertForm quotaId={q.id} quotaNumber={q.quotaNumber} onClose={() => setReverting(false)} />
+        </Card>
+      )}
       <div className="mb-4 grid gap-4 lg:grid-cols-2">
         <Card className="p-4 text-sm">
           <dl className="grid grid-cols-2 gap-x-4 gap-y-2">
@@ -431,9 +446,10 @@ function BidsTab({ quota }: { quota: Quota }) {
 function BidModal({ quota, onClose }: { quota: Quota; onClose: () => void }) {
   const queryClient = useQueryClient();
   const assemblies = useQuery({
-    queryKey: [...key, 'assemblies', 'scheduled', quota.groupCode],
-    queryFn: () => api<Assembly[]>('/consortium/assemblies', { query: { status: 'scheduled', groupCode: quota.groupCode ?? undefined } }),
+    queryKey: [...key, 'assemblies', 'scheduled', quota.groupCode, quota.plan.connectionId],
+    queryFn: () => api<Assembly[]>('/consortium/assemblies', { query: { status: 'scheduled', groupCode: quota.groupCode ?? undefined, connectionId: quota.plan.connectionId } }),
   });
+  const installments = useQuery({ queryKey: [...key, 'quota', quota.id, 'installments'], queryFn: () => api<QuotaInstallments>(`/consortium/quotas/${quota.id}/installments`) });
   const [form, setForm] = useState({ assemblyId: '', type: 'free' as BidType, mode: 'percent' as 'percent' | 'amount', value: '', notes: '' });
   const value = form.mode === 'percent' ? parsePercent(form.value) : money(form.value);
   const preview = value ? (form.mode === 'percent' ? `${formatMoney((quota.plan.creditValue * value) / 100)}` : pct((value / quota.plan.creditValue) * 100)) : null;
@@ -472,6 +488,9 @@ function BidModal({ quota, onClose }: { quota: Quota; onClose: () => void }) {
       <form id="cons-bid-form" onSubmit={submit} className="space-y-4">
         {save.error && <Alert>{errorText(save.error, 'Erro ao registrar')}</Alert>}
         {assemblies.isSuccess && !options.length && <Alert tone="info">Nenhuma assembleia agendada para o grupo {quota.groupCode}. Agende em Assembleias.</Alert>}
+        {!!installments.data?.lateCount && (
+          <Alert tone="info">Esta cota tem {installments.data.lateCount} parcela(s) em atraso no acompanhamento. Quem decide se ela concorre é a administradora, pelas regras do grupo: confirme antes de enviar o lance.</Alert>
+        )}
         <Field label="Assembleia">
           {(id) => (
             <Select id={id} required value={form.assemblyId} onChange={(e) => setForm({ ...form, assemblyId: e.target.value })}>

@@ -487,7 +487,7 @@ function createPlanner(resources, services, busyList) {
 async function book(api, planner, { pet, serviceIds, n, fromMin, rot, notes }) {
   const slot = planner.find(n, fromMin, serviceIds, rot) ?? planner.find(n, 480, serviceIds, rot);
   if (!slot) return null;
-  return api.post('/scheduling/appointments', {
+  return api.post('/scheduling/appointments', { overrideSchedule: true,
     customerId: pet.customerId,
     resourceId: slot.resourceId,
     startsAt: slot.startsAt,

@@ -96,6 +96,15 @@ export interface ServiceOrderWorkflow {
    * `tx` é a transação do Drizzle em andamento.
    */
   beforeTransition?: (ctx: { tx: unknown; orderId: string; from: string; to: string }) => Promise<void>;
+  /**
+   * Só no servidor: roda na mesma transação, depois da mudança de status (ex.: a lavanderia cancela a
+   * entrega agendada, a padaria baixa o estoque na retirada).
+   */
+  afterTransition?: (ctx: { tx: unknown; orderId: string; number: number; customerId: string; from: string; to: string; reason?: string | null; at: Date }) => Promise<void>;
+  /** Só no servidor: a vertical pode recusar uma edição da ordem (itens, desconto, previsão) lançando um erro. */
+  beforeUpdate?: (ctx: { tx: unknown; orderId: string; status: string; input: UpdateOrderInput }) => Promise<void> | void;
+  /** Voltas de status que não avisam o cliente (de → para): é correção, não novidade. */
+  silentTransitions?: Record<string, string[]>;
 }
 
 export interface OrderSummary {

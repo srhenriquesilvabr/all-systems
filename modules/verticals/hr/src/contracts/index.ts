@@ -88,8 +88,45 @@ export interface Employee extends EmployeeInput {
   periods: AcquisitionPeriod[];
   vacationBalance: number;
   overdueVacation: boolean;
-  /** Rescisão registrada (termo de rescisão). */
+  /** Rescisão em vigor (termo de rescisão). */
   termination: { id: string; type: TerminationType; terminationDate: string } | null;
+  /** Rescisões desfeitas: o termo fica guardado, com o motivo (só na ficha do colaborador). */
+  cancelledTerminations: { id: string; terminationDate: string; cancelledAt: string; reason: string | null }[];
+  /** Afastamento registrado que cobre hoje: é o que faz a Situação ser Afastado, sem rotina. */
+  currentLeave: { type: LeaveType; startOn: string; endOn: string } | null;
+  /** Afastado marcado à mão, sem período em Afastamentos (outros motivos). */
+  manualLeave: boolean;
+  /** Desligado pela edição antiga, sem termo: precisa rescindir de verdade ou voltar a ativo. */
+  terminatedWithoutTerm: boolean;
+}
+
+/** Motivo obrigatório das reversões (reabrir folha, desfazer rescisão, reativar): fica na auditoria. */
+export const reversalInput = z.object({ reason: z.string().trim().min(3, 'Informe o motivo').max(500) });
+export type ReversalInput = z.infer<typeof reversalInput>;
+
+/** O que mudou na ficha depois de abrir a folha: GET /hr/payrolls/:id/pending. */
+export interface PayrollPending {
+  changes: { itemId: string; employeeId: string; name: string; salary: { from: number; to: number }; dependents: { from: number; to: number } }[];
+  /** Colaboradores que pertencem à folha e não estão nela (admitidos depois de abrir ou removidos). */
+  missing: { employeeId: string; name: string; position: string; admissionDate: string }[];
+}
+
+export const payrollApplyChanges = z.object({
+  /** Só estes colaboradores; vazio ou ausente = todos com mudança. */
+  itemIds: z.array(z.string().uuid()).max(2000).optional(),
+});
+export type PayrollApplyChanges = z.infer<typeof payrollApplyChanges>;
+
+export const payrollAddItem = z.object({ employeeId: z.string().uuid() });
+export type PayrollAddItem = z.infer<typeof payrollAddItem>;
+
+/** Entrada do histórico de uma folha (vem da auditoria). */
+export interface PayrollHistoryEntry {
+  id: string;
+  action: string;
+  data: unknown;
+  createdAt: string;
+  user: { id: string; name: string } | null;
 }
 
 export const payrollItemUpdate = z.object({

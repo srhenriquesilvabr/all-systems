@@ -15,8 +15,30 @@ export const clientInput = z.object({
   responsibleUserId: z.string().uuid().nullish(),
   active: z.boolean().default(true),
   notes: z.string().trim().max(2000).nullish(),
+  /**
+   * Na mudança de regime ou de funcionários: as obrigações em aberto que deixam de valer e devem ser
+   * dispensadas. Sem a lista, vale a regra padrão: as que ainda não venceram são dispensadas e as
+   * vencidas ficam, com uma observação, porque eram devidas no regime antigo.
+   */
+  waiveObligationIds: z.array(z.string().uuid()).max(500).optional(),
 });
 export type ClientInput = z.infer<typeof clientInput>;
+
+/** Obrigação em aberto que deixa de valer com o novo regime ou sem funcionários. */
+export interface RegimeImpactItem {
+  id: string;
+  name: string;
+  competence: string;
+  dueOn: string;
+  /** Já venceu: era devida no regime antigo, então a sugestão é manter. */
+  overdue: boolean;
+}
+
+export interface SaveClientResult {
+  id: string;
+  /** Só quando o regime ou os funcionários mudaram e havia obrigação em aberto que deixou de valer. */
+  regimeChange?: { waived: number; kept: number };
+}
 
 export interface AccountingClient extends Omit<ClientInput, 'customerId' | 'responsibleUserId'> {
   id: string;
@@ -31,9 +53,9 @@ export type Frequency = (typeof frequencies)[number];
 export const frequencyLabel: Record<Frequency, string> = { monthly: 'Mensal', quarterly: 'Trimestral', annual: 'Anual' };
 
 export const obligationTypeInput = z.object({
-  code: z.string().trim().min(2).max(30),
-  name: z.string().trim().min(2).max(120),
-  regimes: z.array(z.enum(taxRegimes)).min(1),
+  code: z.string().trim().min(2, 'Informe o código').max(30),
+  name: z.string().trim().min(2, 'Informe o nome').max(120),
+  regimes: z.array(z.enum(taxRegimes)).min(1, 'Escolha ao menos um regime'),
   requiresEmployees: z.boolean().default(false),
   frequency: z.enum(frequencies),
   dueDay: z.coerce.number().int().min(1).max(31),
@@ -61,7 +83,10 @@ export interface Obligation {
   doneBy: string | null;
   notes: string | null;
   responsible: string | null;
+  attachments: { id: string; filename: string; mime: string; size: number }[];
 }
+
+export const obligationNotesInput = z.object({ notes: z.string().trim().max(2000).nullable() });
 
 /**
  * Calendário padrão de obrigações. Os prazos mudam com a legislação e alguns são municipais
@@ -109,6 +134,18 @@ export function competencesFor(type: Pick<ObligationTypeInput, 'frequency' | 'du
     return [{ competence: `${prevQ.y}-T${prevQ.q}`, dueOn: due }];
   }
   return [{ competence: String(y - 1), dueOn: iso(y, type.dueMonth ?? 12, type.dueDay) }];
+}
+
+/**
+ * Vencimento do honorário do mês. Se o dia já passou (empresa nova ou reativada depois do vencimento),
+ * o honorário não nasce vencido: fica para o mesmo dia do mês seguinte, com aviso. `day` vai até 28.
+ */
+export function feeDueDate(today: string, day: number): { competence: string; dueOn: string; moved: boolean } {
+  const [y, m] = today.split('-').map(Number) as [number, number];
+  const competence = today.slice(0, 7);
+  const dueOn = iso(y, m, day);
+  if (dueOn >= today) return { competence, dueOn, moved: false };
+  return { competence, dueOn: m === 12 ? iso(y + 1, 1, day) : iso(y, m + 1, day), moved: true };
 }
 
 /** Regime e funcionários da empresa → a obrigação se aplica? */

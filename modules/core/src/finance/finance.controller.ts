@@ -40,6 +40,11 @@ const entryUpdate = z.object({
 
 const payBody = z.object({ paidAt: isoDate, accountId: z.string().uuid(), paymentMethod: z.string().max(30).nullish() });
 
+const reason = z.string().trim().min(3, 'Informe o motivo').max(500);
+const reverseBody = z.object({ reason });
+const cancelBody = z.object({ reason: reason.nullish() }).optional();
+const initialBalanceBody = z.object({ initialBalance: z.coerce.number().min(-100_000_000).max(100_000_000).multipleOf(0.01), reason });
+
 const filters = z.object({
   from: isoDate.optional(),
   to: isoDate.optional(),
@@ -107,11 +112,25 @@ export class FinanceController {
     return this.finance.pay(id, body);
   }
 
+  /** Estorno da baixa: volta para em aberto, com motivo na auditoria. */
+  @Post('entries/:id/reverse')
+  @HttpCode(200)
+  @RequirePermission('core.finance.write')
+  reverse(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(reverseBody)) body: z.infer<typeof reverseBody>) {
+    return this.finance.reversePayment(id, body);
+  }
+
   @Post('entries/:id/cancel')
   @HttpCode(204)
   @RequirePermission('core.finance.write')
-  cancel(@Param('id', ParseUUIDPipe) id: string) {
-    return this.finance.cancel(id);
+  cancel(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(cancelBody)) body: z.infer<typeof cancelBody>) {
+    return this.finance.cancel(id, body ?? {});
+  }
+
+  @Get('entries/:id/history')
+  @RequirePermission('core.finance.read')
+  entryHistory(@Param('id', ParseUUIDPipe) id: string) {
+    return this.finance.entryHistory(id);
   }
 
   /** Contas e categorias são lidas por quem lança; só quem administra cria/edita. */
@@ -131,6 +150,19 @@ export class FinanceController {
   @RequirePermission('core.finance.manage')
   updateAccount(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(accountUpdate)) body: z.infer<typeof accountUpdate>) {
     return this.finance.updateAccount(id, body);
+  }
+
+  @Post('accounts/:id/initial-balance')
+  @HttpCode(200)
+  @RequirePermission('core.finance.manage')
+  correctInitialBalance(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(initialBalanceBody)) body: z.infer<typeof initialBalanceBody>) {
+    return this.finance.correctInitialBalance(id, body);
+  }
+
+  @Get('accounts/:id/history')
+  @RequirePermission('core.finance.manage')
+  accountHistory(@Param('id', ParseUUIDPipe) id: string) {
+    return this.finance.accountHistory(id);
   }
 
   @Get('categories')

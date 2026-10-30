@@ -105,7 +105,9 @@ export function PublicBookingPage() {
   // "Sem preferência": junta os horários de todos e guarda quem atende em cada um.
   const slots = new Map<string, string>();
   for (const r of availability.data ?? []) for (const t of r.slots) if (!slots.has(t)) slots.set(t, r.resourceId);
-  const days = Array.from({ length: Math.min(maxDays, 14) }, (_, i) => shiftDate(todayLocal(), i));
+  // De hoje até o limite configurado (mesma conta do servidor).
+  const days = Array.from({ length: maxDays + 1 }, (_, i) => shiftDate(todayLocal(), i));
+  const lastDay = days.at(-1)!;
   const chosen = services.filter((s) => serviceIds.includes(s.id));
 
   function submit(e: FormEvent) {
@@ -116,6 +118,7 @@ export function PublicBookingPage() {
   return (
     <Shell company={company}>
       <Step n={1} title="Serviço">
+        {services.length === 0 && <p className="text-sm text-fg-muted">Esta empresa ainda não liberou serviços para marcar por aqui. Entre em contato diretamente.</p>}
         <div className="grid gap-2 sm:grid-cols-2">
           {services.map((s) => {
             const on = serviceIds.includes(s.id);
@@ -163,6 +166,28 @@ export function PublicBookingPage() {
               </Chip>
             ))}
           </div>
+          {/* Com muitos dias, ir direto à data é mais rápido que rolar a lista. */}
+          {days.length > 14 && (
+            <div className="mb-3 max-w-48">
+              <Field label="Ou escolha a data">
+                {(id) => (
+                  <Input
+                    id={id}
+                    type="date"
+                    min={days[0]}
+                    max={lastDay}
+                    value={date}
+                    onChange={(e) => {
+                      if (e.target.value >= days[0]! && e.target.value <= lastDay) {
+                        setDate(e.target.value);
+                        setSlot(null);
+                      }
+                    }}
+                  />
+                )}
+              </Field>
+            </div>
+          )}
           {availability.isPending ? (
             <Spinner label="Buscando horários…" />
           ) : slots.size === 0 ? (

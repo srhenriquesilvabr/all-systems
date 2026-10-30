@@ -390,6 +390,8 @@ function RewardCard({ lead: l, canManage, onChange }: { lead: LeadDetail; canMan
         Recompensa: <Badge tone={rewardTone[l.rewardStatus]}>{rewardStatusLabel[l.rewardStatus]}</Badge>
         {l.rewardAmount != null && ` ${formatMoney(l.rewardAmount)}`}
       </p>
+      {l.rewardStatus === 'due' && <p className="text-xs text-fg-muted">Está no financeiro como despesa a pagar. "Marcar paga" dá baixa nela hoje, na conta padrão; para outra conta ou data, dê baixa em Financeiro.</p>}
+      {l.rewardStatus === 'reversed' && <p className="text-xs text-fg-muted">A recompensa já paga virou um valor a receber de quem indicou, no financeiro.</p>}
       {canManage && (l.rewardStatus === 'due' || l.rewardStatus === 'waiting') && (
         <div className="flex flex-wrap items-end gap-2">
           <Field label="Valor (R$)">{(fid) => <Input id={fid} inputMode="decimal" className="max-w-32" value={amount} onChange={(e) => setAmount(e.target.value)} />}</Field>

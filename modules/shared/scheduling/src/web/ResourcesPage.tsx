@@ -80,7 +80,7 @@ export function ResourcesPage() {
                     </span>
                   </Td>
                   <Td className="text-fg-muted">{summarizeHours(r.hours)}</Td>
-                  <Td className="text-fg-muted">{r.serviceIds.length ? `${r.serviceIds.length} serviço(s)` : 'Todos'}</Td>
+                  <Td className="text-fg-muted">{r.serviceIds.length ? `${r.serviceIds.length} serviço(s)` : 'Os abertos a todos'}</Td>
                   <Td className="whitespace-nowrap text-right">
                     <Button variant="ghost" size="sm" onClick={() => setHoursOf(r)}>
                       Horários
@@ -229,7 +229,11 @@ function ResourceModal({ resource, onClose }: { resource: Resource | null; onClo
         </fieldset>
         <fieldset>
           <legend className="mb-1.5 text-sm font-medium">{kind === 'room' ? 'Serviços feitos nesta sala/equipamento' : 'Serviços que faz'}</legend>
-          <p className="mb-2 text-xs text-fg-muted">{kind === 'room' ? 'Nenhum marcado = serve para todos.' : 'Nenhum marcado = faz todos.'}</p>
+          <p className="mb-2 text-xs text-fg-muted">
+            {kind === 'room'
+              ? 'Vale o que está em cada serviço: serviço com sala ligada só usa essas salas. Sem nada marcado aqui, esta sala atende só os serviços que não têm sala ligada.'
+              : 'Vale o "Quem faz" de cada serviço: serviço com alguém marcado só pode ser feito por essas pessoas. Sem nada marcado aqui, esta pessoa faz só os serviços que não têm ninguém em "Quem faz".'}
+          </p>
           <div className="grid max-h-48 gap-1.5 overflow-y-auto sm:grid-cols-2">
             {services.data?.map((s) => (
               <Checkbox

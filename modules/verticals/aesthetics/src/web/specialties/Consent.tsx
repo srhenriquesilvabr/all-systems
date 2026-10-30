@@ -32,11 +32,13 @@ export function ConsentForm({
   const [templateId, setTemplateId] = useState('');
   const [procedure, setProcedure] = useState('');
   const [professionalId, setProfessionalId] = useState('');
-  const [caseId, setCaseId] = useState(initialCase ?? '');
+  const openCases = cases.filter((c) => c.specialty === specialty && c.status === 'active');
+  const surgery = specialty === 'plastic_surgery';
+  // Na cirurgia, o termo só libera a marcação ligado ao tratamento: com um só, já vem escolhido.
+  const [caseId, setCaseId] = useState(initialCase ?? (surgery && openCases.length === 1 ? openCases[0]!.id : ''));
   const [signedBy, setSignedBy] = useState(customerName);
   const [occurredOn, setOccurredOn] = useState(today());
   const [signature, setSignature] = useState<string | null>(null);
-  const openCases = cases.filter((c) => c.specialty === specialty && c.status === 'active');
   const template = active.find((t) => t.id === templateId) ?? active.find((t) => t.specialty === specialty) ?? active[0];
   const pro = credentials.data?.find((p) => p.resourceId === professionalId);
   const caseTitle = openCases.find((c) => c.id === caseId)?.title;
@@ -73,7 +75,7 @@ export function ConsentForm({
           <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button loading={save.isPending} disabled={!template || !professionalId || signedBy.trim().length < 3} onClick={() => save.mutate()}>
+          <Button loading={save.isPending} disabled={!template || !professionalId || signedBy.trim().length < 3 || (surgery && openCases.length > 1 && !caseId)} onClick={() => save.mutate()}>
             Registrar aceite
           </Button>
         </>
@@ -81,6 +83,7 @@ export function ConsentForm({
     >
       <div className="space-y-4">
         {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao registrar o termo'}</Alert>}
+        {surgery && !openCases.length && <Alert tone="info">Este paciente não tem tratamento de cirurgia aberto. O termo fica no prontuário, mas não conta para marcar a cirurgia: abra o tratamento antes.</Alert>}
         {templates.isSuccess && !active.length && <Alert tone="info">Nenhum modelo de termo ativo. Cadastre em Configurações › Especialidades da clínica.</Alert>}
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Modelo">
@@ -111,10 +114,10 @@ export function ConsentForm({
             )}
           </Field>
           {openCases.length > 0 && (
-            <Field label="Tratamento">
+            <Field label="Tratamento" hint={surgery ? 'O termo só libera a marcação da cirurgia ligado ao tratamento.' : undefined}>
               {(id) => (
-                <Select id={id} value={caseId} onChange={(e) => setCaseId(e.target.value)}>
-                  <option value="">—</option>
+                <Select id={id} required={surgery} value={caseId} onChange={(e) => setCaseId(e.target.value)}>
+                  {(!surgery || openCases.length > 1) && <option value="">{surgery ? 'Escolha' : '—'}</option>}
                   {openCases.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.title}

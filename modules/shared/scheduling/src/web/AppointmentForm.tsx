@@ -1,4 +1,4 @@
-import { api, ApiError, CustomerSearch, formatMoney, formatPhone, type CustomerOption } from '@all/module-sdk/web';
+import { api, ApiError, CustomerSearch, formatMoney, formatPhone, useCan, type CustomerOption } from '@all/module-sdk/web';
 import { Alert, Button, Checkbox, Field, Input, Modal, Select, Spinner, Textarea } from '@all/ui';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, type ComponentType, type FormEvent } from 'react';
@@ -22,6 +22,25 @@ export interface SubjectValue {
 const subjectPickers: SubjectPicker[] = [];
 export function registerSubjectPicker(picker: SubjectPicker) {
   if (!subjectPickers.some((p) => p.moduleKey === picker.moduleKey)) subjectPickers.push(picker);
+}
+
+/** Recusa por expediente ou folga. A exceção é consciente: só quem configura a agenda confirma. */
+export function OutsideScheduleAlert({ message, canOverride, busy, onConfirm }: { message: string; canOverride: boolean; busy?: boolean; onConfirm: () => void }) {
+  return (
+    <Alert tone="info">
+      <p>{message}.</p>
+      {canOverride ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="secondary" loading={busy} onClick={onConfirm}>
+            Marcar mesmo assim
+          </Button>
+          <span className="text-xs">Fica registrado na auditoria, com o motivo.</span>
+        </div>
+      ) : (
+        <p className="mt-1 text-xs">Escolha outro horário ou peça a quem configura a agenda para marcar esta exceção.</p>
+      )}
+    </Alert>
+  );
 }
 
 export function AppointmentForm({
@@ -55,10 +74,20 @@ export function AppointmentForm({
   });
   const [result, setResult] = useState<SeriesResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Horário fora do expediente ou em folga: o servidor recusa, e quem configura a agenda pode confirmar.
+  const [outside, setOutside] = useState<string | null>(null);
+  const canOverride = useCan('shared.scheduling.manage');
 
-  const professionals = (resources.data ?? []).filter((r) => r.active && r.kind === 'professional');
+  const allProfessionals = (resources.data ?? []).filter((r) => r.active && r.kind === 'professional');
   const allRooms = (resources.data ?? []).filter((r) => r.active && r.kind === 'room');
   const chosen = (services.data ?? []).filter((s) => serviceIds.includes(s.id));
+  // "Quem faz" de cada serviço: com alguém marcado, só essas pessoas (mesma regra do servidor).
+  const professionals = allProfessionals.filter((p) =>
+    chosen.every((s) => {
+      const linked = allProfessionals.filter((r) => s.resourceIds.includes(r.id));
+      return !linked.length || linked.some((r) => r.id === p.id);
+    }),
+  );
   // Salas que servem para todos os serviços (serviço sem sala ligada = qualquer sala).
   const rooms = allRooms.filter((room) =>
     chosen.every((s) => {
@@ -75,7 +104,12 @@ export function AppointmentForm({
 
   useEffect(() => {
     if (!resourceId && professionals.length === 1) setResourceId(professionals[0]!.id);
-  }, [professionals, resourceId]);
+    // O escolhido deixou de fazer os serviços marcados: limpa.
+    if (resourceId && resources.data && !professionals.some((p) => p.id === resourceId)) setResourceId('');
+  }, [professionals, resourceId, resources.data]);
+
+  // Mudou algo: a confirmação de "marcar mesmo assim" vale só para o que foi mostrado.
+  useEffect(() => setOutside(null), [date, time, resourceId, serviceIds]);
 
   // A sala escolhida deixou de servir para os serviços marcados: limpa.
   useEffect(() => {
@@ -83,8 +117,8 @@ export function AppointmentForm({
   }, [rooms, roomId, resources.data]);
 
   const save = useMutation({
-    mutationFn: async (): Promise<{ appointment: Appointment; series?: SeriesResult }> => {
-      const body = { customerId: customer?.id, resourceId, roomId: roomId || null, serviceIds, startsAt: localToUtc(date, time).toISOString(), notes: notes || null, subject };
+    mutationFn: async (override: boolean): Promise<{ appointment: Appointment; series?: SeriesResult }> => {
+      const body = { customerId: customer?.id, resourceId, roomId: roomId || null, serviceIds, startsAt: localToUtc(date, time).toISOString(), notes: notes || null, subject, overrideSchedule: override || undefined };
       if (!repeat.on) return { appointment: await api<Appointment>('/scheduling/appointments', { method: 'POST', body }) };
       const recurrence = { frequency: repeat.frequency, ...(repeat.end === 'count' ? { count: Number(repeat.count) } : { until: repeat.until }) };
       const series = await api<SeriesResult>('/scheduling/appointments/series', { method: 'POST', body: { ...body, recurrence } });
@@ -96,7 +130,12 @@ export function AppointmentForm({
       if (series?.skipped.length) setResult(series);
       else onSaved(appointment);
     },
-    onError: (err) => setError(err instanceof ApiError ? err.message : 'Erro ao marcar'),
+    onError: (err) => {
+      if (err instanceof ApiError && err.code === 'OUTSIDE_SCHEDULE') {
+        setError(null);
+        setOutside(err.message);
+      } else setError(err instanceof ApiError ? err.message : 'Erro ao marcar');
+    },
   });
 
   function submit(e: FormEvent) {
@@ -108,7 +147,8 @@ export function AppointmentForm({
     if (repeat.on && repeat.end === 'count' && !(Number(repeat.count) >= 2 && Number(repeat.count) <= MAX_OCCURRENCES)) return setError(`Repetir de 2 a ${MAX_OCCURRENCES} vezes`);
     if (repeat.on && repeat.end === 'until' && !(repeat.until > date)) return setError('A data final precisa ser depois do primeiro dia');
     setError(null);
-    save.mutate();
+    setOutside(null);
+    save.mutate(false);
   }
 
   if (result) {
@@ -165,6 +205,9 @@ export function AppointmentForm({
     >
       <form id="appointment-form" onSubmit={submit} className="space-y-4">
         {error && <Alert>{error}</Alert>}
+        {outside && (
+          <OutsideScheduleAlert message={outside} canOverride={canOverride} busy={save.isPending} onConfirm={() => save.mutate(true)} />
+        )}
 
         <div>
           <p className="mb-1.5 text-sm font-medium">Cliente</p>
@@ -273,7 +316,7 @@ export function AppointmentForm({
                 <span className="text-fg-muted">Outro horário:</span>
                 <Input type="time" aria-label="Outro horário" className="w-28" step={300} value={time} onChange={(e) => setTime(e.target.value)} />
               </div>
-              {freeLater && <p className="mt-1 text-xs text-warning-700">Fora da lista de livres: confira se não passa do expediente.</p>}
+              {freeLater && <p className="mt-1 text-xs text-warning-700">Fora da lista de livres: o sistema confere expediente e folga ao marcar.</p>}
             </>
           )}
         </div>

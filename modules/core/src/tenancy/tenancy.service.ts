@@ -203,21 +203,51 @@ export class TenancyService implements OnApplicationBootstrap {
 
   async disableModule(tenantId: string, key: string) {
     const manifest = this.registry.get(key);
-    if (!manifest) throw new BadRequestException(`Módulo desconhecido: ${key}`);
-    if (manifest.layer === 'core') throw new BadRequestException('Módulos do core não podem ser desativados');
+    if (!manifest) throw new BadRequestException({ code: 'UNKNOWN_MODULE', message: `Módulo desconhecido: ${key}` });
+    if (manifest.layer === 'core') throw new BadRequestException({ code: 'CORE_MODULE', message: 'Módulos do core não podem ser desativados' });
 
     return this.tdb.withScope({ tenantId }, async (tx) => {
-      const active = await this.activeKeys(tx, tenantId);
-      const dependents = this.registry.dependentsOf(key, active);
+      // Suspensos contam: quando voltassem, ficariam sem a dependência.
+      const usable = await this.usableKeys(tx, tenantId);
+      if (!(await this.activeKeys(tx, tenantId)).includes(key)) throw new BadRequestException({ code: 'NOT_ACTIVE', message: `${manifest.name} não está ativo nesta empresa` });
+      const dependents = this.registry.dependentsOf(key, usable);
       if (dependents.length) {
-        throw new BadRequestException(`${key} é usado por ${dependents.join(', ')}; desative-os antes`);
+        const names = dependents.map((d) => this.registry.get(d)?.name ?? d).join(', ');
+        throw new BadRequestException({ code: 'MODULE_IN_USE', message: `${manifest.name} é usado por ${names}. Desative antes o que depende dele.`, dependents });
       }
       // Os dados do módulo são mantidos: só o acesso é bloqueado (ver ciclo de vida em 02-sistema-de-modulos).
       await tx
         .update(tenantModules)
         .set({ status: 'inactive', disabledAt: new Date() })
         .where(and(eq(tenantModules.tenantId, tenantId), eq(tenantModules.moduleKey, key)));
-      await this.audit.log(tx, { tenantId, action: 'module.disabled', entity: 'tenant', entityId: tenantId, data: { key } });
+      await this.audit.log(tx, { tenantId, action: 'module.disabled', entity: 'tenant', entityId: tenantId, data: { key, name: manifest.name } });
+    });
+  }
+
+  /** Ramos e módulos contratados (sem o core), com quem depende de cada um e os já desativados. */
+  contractedModules(tenantId: string) {
+    return this.tdb.withScope({ tenantId }, async (tx) => {
+      const rows = await tx.select().from(tenantModules).where(eq(tenantModules.tenantId, tenantId));
+      const usable = rows.filter((r) => r.status !== 'inactive').map((r) => r.moduleKey);
+      return rows.flatMap((r) => {
+        const m = this.registry.get(r.moduleKey);
+        if (!m || m.layer === 'core') return [];
+        const dependents = r.status === 'inactive' ? [] : this.registry.dependentsOf(r.moduleKey, usable);
+        return [
+          {
+            key: m.key,
+            name: m.name,
+            layer: m.layer,
+            description: m.description,
+            icon: m.icon,
+            status: r.status,
+            source: r.source,
+            enabledAt: r.enabledAt,
+            disabledAt: r.disabledAt,
+            dependents: dependents.map((key) => ({ key, name: this.registry.get(key)?.name ?? key })),
+          },
+        ];
+      });
     });
   }
 

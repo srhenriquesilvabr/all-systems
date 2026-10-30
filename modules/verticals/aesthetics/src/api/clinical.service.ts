@@ -1,15 +1,16 @@
 import { AuditService, CustomersService, FinanceService, TenantDb, addMonths, centsToNumber, splitCents, toCents, type UploadedFile } from '@all/core';
 import { customers } from '@all/core/schema';
 import type { Tx } from '@all/db';
-import { MedicalRecordsService, type MedicalEntry, type MedicalForm } from '@all/medical-records';
+import { MedicalRecordsService, type AmendHook, type MedicalEntry, type MedicalForm } from '@all/medical-records';
 import { requestContext } from '@all/module-sdk';
 import { SalesService } from '@all/sales';
 import { SchedulingService, schedulingSchema } from '@all/scheduling';
 import { ConflictException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
-import { and, desc, eq, inArray, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import {
   fillConsent,
   localToday,
+  lotAmountRequiredForms,
   sessionForms,
   specialtyForms,
   specialtyLabel,
@@ -29,10 +30,10 @@ import {
   type SurgeryScheduleInput,
   type SurgeryStage,
 } from '../contracts';
-import { aesCases, aesLotUsages } from '../db/schema';
+import { aesCases, aesLotUsages, aesPackages, aesPackageSessions, aesProducts } from '../db/schema';
 import { MODULE, SpecialtySetupService, badRequest } from './setup.service';
 
-const { schAppointments, schResources } = schedulingSchema;
+const { schAppointments, schResources, schServices } = schedulingSchema;
 /** Origem dos lançamentos do orçamento aprovado no financeiro. */
 const SOURCE = 'aes_case';
 const brDate = (iso: string) => iso.split('-').reverse().join('/');
@@ -42,6 +43,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type CaseRow = typeof aesCases.$inferSelect;
 type EntryRow = Awaited<ReturnType<MedicalRecordsService['entriesByFormInTx']>>[number];
+type LotUse = { lot: { id: string; lot: string }; product: { id: string; name: string; unit: string; salesProductId: string | null; unitsPerPackage: string | null }; amount: number };
+/** Quantidades em milésimos (a coluna tem 3 casas), para somar e comparar sem erro de arredondamento. */
+const milli = (n: number) => Math.round(n * 1000);
 
 /** Registros vigentes: sem os que já foram retificados (a retificação vale no lugar deles). */
 function current(rows: EntryRow[]): EntryRow[] {
@@ -68,6 +72,8 @@ export class SpecialtyClinicalService implements OnModuleInit {
 
   onModuleInit() {
     for (const form of allForms) this.records.registerForm(form);
+    // Retificar uma ficha, por qualquer tela, corrige também o uso do lote e o estoque.
+    this.records.registerAmendHook(MODULE, (tx, ctx) => this.prepareAmend(tx, ctx));
   }
 
   /** Fichas das especialidades e casos do paciente. Abrir conta como acesso ao prontuário. */
@@ -102,7 +108,12 @@ export class SpecialtyClinicalService implements OnModuleInit {
       }
       if (group === 'common') data.specialty = specialtyLabel[input.specialty];
 
-      const caseRow = input.caseId ? await this.caseForRecord(tx, input.caseId, input.customerId, group === 'common' ? null : input.specialty) : null;
+      // Cirurgia: termo e pré-operatório só contam ligados ao caso. Com um caso aberto, liga sozinho.
+      const caseRow = input.caseId
+        ? await this.caseForRecord(tx, input.caseId, input.customerId, group === 'common' ? null : input.specialty)
+        : group === 'plastic_surgery'
+          ? await this.onlyOpenSurgery(tx, input.customerId)
+          : null;
       if (caseRow) data.caseId = caseRow.id;
 
       const { data: filled, usages } = await this.applyLots(tx, form, data, occurredOn);
@@ -126,13 +137,14 @@ export class SpecialtyClinicalService implements OnModuleInit {
    * vira um uso do lote. Lote vencido no dia do atendimento é recusado.
    */
   private async applyLots(tx: Tx, form: MedicalForm, data: Record<string, unknown>, usedOn: string) {
-    const usages: { lot: { id: string; lot: string }; product: { id: string; name: string; unit: string; salesProductId: string | null; unitsPerPackage: string | null }; amount: number }[] = [];
+    const usages: LotUse[] = [];
     const fill = async (obj: Record<string, unknown>) => {
       const lotId = typeof obj.lotId === 'string' ? obj.lotId : '';
       if (!lotId) return obj;
       if (!UUID.test(lotId)) throw badRequest('LOT_NOT_FOUND', 'Lote não encontrado');
       const { lot, product } = await this.setup.lotForUseInTx(tx, lotId, usedOn);
       const amount = Number(String(obj.amount ?? '').replace(',', '.'));
+      if (lotAmountRequiredForms.includes(form.key) && !(amount > 0)) throw badRequest('LOT_AMOUNT_REQUIRED', `Informe a quantidade usada de ${product.name}: sem ela, o lote não entra no rastreio nem baixa o estoque`);
       usages.push({ lot, product, amount: Number.isFinite(amount) && amount > 0 ? amount : 0 });
       return { ...obj, product: product.brand ? `${product.name} (${product.brand})` : product.name, lot: lot.lot, expiresOn: lot.expiresOn, ...(obj.unit === undefined ? {} : { unit: obj.unit || product.unit }) };
     };
@@ -179,6 +191,74 @@ export class SpecialtyClinicalService implements OnModuleInit {
     }
   }
 
+  /**
+   * Retificação: produto, lote e validade voltam a sair do cadastro e, gravado o registro novo, o uso
+   * é corrigido pela diferença. O uso antigo não muda: o estorno é uma linha nova (só inclusão).
+   */
+  private async prepareAmend(tx: Tx, ctx: Parameters<AmendHook>[1]) {
+    const form = formByKey.get(ctx.original.formKey);
+    if (!form) return { data: ctx.data, after: async () => undefined };
+    const data = { ...ctx.data };
+    // Trocou o profissional: confere o registro e refaz o nome que vai na ficha.
+    if (typeof data.professionalId === 'string' && data.professionalId !== ctx.original.data.professionalId) {
+      const group = specialtyOfForm(form.key);
+      const pro = await this.setup.professionalInTx(tx, data.professionalId);
+      const requirement = group && group !== 'common' ? specialtyRequirement[group] : undefined;
+      if (requirement) checkCredential(pro, requirement, requirement.rqeForms?.includes(form.key) ?? false);
+      data.professional = pro.label;
+    }
+    const { data: filled, usages } = await this.applyLots(tx, form, data, ctx.occurredOn);
+    return { data: filled, after: (entry: MedicalEntry) => this.reconcileUsages(tx, entry, ctx.original, form, usages) };
+  }
+
+  /** Diferença por lote entre o que o histórico da ficha já lançou e o que a retificação diz. */
+  private async reconcileUsages(tx: Tx, entry: MedicalEntry, original: { id: string; customerId: string; formKey: string; amendsId: string | null }, form: MedicalForm, usages: LotUse[]) {
+    const { tenantId } = requestContext.requireTenant();
+    const history = await this.records.entriesByFormInTx(tx, [original.customerId], [original.formKey]);
+    const chain = [original.id];
+    for (let up = original.amendsId; up; up = history.find((h) => h.id === up)?.amendsId ?? null) chain.push(up);
+    const lines = await tx.select().from(aesLotUsages).where(inArray(aesLotUsages.entryId, chain));
+    if (!lines.length && !usages.length) return;
+
+    const wanted = new Map<string, number>();
+    for (const u of usages) wanted.set(u.lot.id, (wanted.get(u.lot.id) ?? 0) + milli(u.amount));
+    const lotIds = new Set([...wanted.keys(), ...lines.map((l) => l.lotId)]);
+    const group = specialtyOfForm(form.key);
+    const specialty = lines[0]?.specialty ?? (group && group !== 'common' ? group : '');
+    const byProduct = new Map<string, number>();
+    const rows: (typeof aesLotUsages.$inferInsert)[] = [];
+    for (const lotId of lotIds) {
+      const mine = lines.filter((l) => l.lotId === lotId);
+      const use = usages.find((u) => u.lot.id === lotId);
+      const before = mine.reduce((sum, l) => sum + milli(Number(l.amount)), 0);
+      const after = wanted.get(lotId) ?? 0;
+      const delta = after - before;
+      const first = mine.find((l) => !l.reversalOf);
+      const productId = use?.product.id ?? first!.productId;
+      const unit = use?.product.unit ?? first!.unit;
+      const base = { tenantId, lotId, productId, customerId: entry.subjectId, entryId: entry.id, specialty, unit, usedOn: entry.occurredOn };
+      // Lote trocado sem quantidade (0 → 0): a linha nova ou o estorno zerado mantêm o rastreio certo.
+      const removedZero = delta === 0 && !use && before === 0 && !mine.some((l) => l.reversalOf);
+      if (delta > 0 || (use && !mine.length)) rows.push({ ...base, amount: String(delta / 1000) });
+      else if (delta < 0 || removedZero) rows.push({ ...base, amount: String(delta / 1000), reversalOf: first?.id ?? null });
+      if (delta !== 0) byProduct.set(productId, (byProduct.get(productId) ?? 0) + delta);
+    }
+    if (!rows.length) return;
+    await tx.insert(aesLotUsages).values(rows);
+
+    const products = byProduct.size ? await tx.select().from(aesProducts).where(inArray(aesProducts.id, [...byProduct.keys()])) : [];
+    const occurredAt = new Date();
+    for (const p of products) {
+      const delta = byProduct.get(p.id)!;
+      if (!p.salesProductId || !delta) continue;
+      const packages = Math.abs(delta) / 1000 / (p.unitsPerPackage ? Number(p.unitsPerPackage) : 1);
+      const reason = `Retificação de ${form.label}: ${p.name}`;
+      if (delta > 0) await this.sales.consumeInTx(tx, p.salesProductId, packages, { reason, occurredAt });
+      else await this.sales.returnConsumedInTx(tx, p.salesProductId, packages, { reason: `Estorno: ${reason}`, occurredAt });
+    }
+    await this.audit.log(tx, { action: 'aesthetics.lot_usage.amended', entity: 'mr_entry', entityId: entry.id, data: { amends: original.id, lines: rows.map((r) => ({ lotId: r.lotId, amount: r.amount })) } });
+  }
+
   // ---- Fotos padronizadas --------------------------------------------------------------------
 
   /** Foto clínica: registro no prontuário com a imagem anexada, na mesma transação. */
@@ -207,7 +287,12 @@ export class SpecialtyClinicalService implements OnModuleInit {
       const template = await this.setup.templateInTx(tx, input.templateId);
       if (!template.active) throw badRequest('TEMPLATE_INACTIVE', 'Este modelo de termo está desativado');
       const enabled = await this.setup.enabledInTx(tx);
-      const caseRow = input.caseId ? await this.caseForRecord(tx, input.caseId, input.customerId, (template.specialty as SpecialtyKey | null) ?? input.specialty ?? null) : null;
+      // Termo próprio da cirurgia sem tratamento escolhido: com um caso aberto, liga sozinho (é o que libera a marcação).
+      const caseRow = input.caseId
+        ? await this.caseForRecord(tx, input.caseId, input.customerId, (template.specialty as SpecialtyKey | null) ?? input.specialty ?? null)
+        : template.specialty === 'plastic_surgery'
+          ? await this.onlyOpenSurgery(tx, input.customerId)
+          : null;
       // Modelo geral (ex.: uso de imagem): vale a especialidade de onde o termo foi aceito.
       const specialty = ((template.specialty as SpecialtyKey | null) ?? input.specialty ?? (caseRow?.specialty as SpecialtyKey | undefined) ?? null) as SpecialtyKey | null;
       if (specialty ? !enabled.includes(specialty) : !enabled.length) {
@@ -294,6 +379,9 @@ export class SpecialtyClinicalService implements OnModuleInit {
       const row = await this.caseOrFail(tx, id, true);
       if (row.status !== 'active') throw badRequest('CASE_CLOSED', 'Este tratamento já foi encerrado');
       if (input.professionalId) await this.setup.professionalInTx(tx, input.professionalId);
+      if (input.title !== undefined && input.title !== row.title) {
+        await this.audit.log(tx, { action: 'aesthetics.case.renamed', entity: 'aes_case', entityId: id, data: { from: row.title, to: input.title } });
+      }
       const [updated] = await tx
         .update(aesCases)
         .set({
@@ -431,14 +519,19 @@ export class SpecialtyClinicalService implements OnModuleInit {
       }
       const surgeon = await this.setup.professionalInTx(tx, input.resourceId);
       checkCredential(surgeon, specialtyRequirement.plastic_surgery!, true);
-      const appointment = await this.scheduling.createInTx(tx, {
-        customerId: row.customerId,
-        resourceId: input.resourceId,
-        serviceIds: [input.serviceId],
-        startsAt: input.startsAt,
-        roomId: input.roomId ?? null,
-        notes: `Cirurgia: ${row.title}. Local: ${input.location}`.slice(0, 1000),
-      });
+      const appointment = await this.scheduling.createInTx(
+        tx,
+        {
+          customerId: row.customerId,
+          resourceId: input.resourceId,
+          serviceIds: [input.serviceId],
+          startsAt: input.startsAt,
+          roomId: input.roomId ?? null,
+          notes: `Cirurgia: ${row.title}. Local: ${input.location}`.slice(0, 1000),
+          overrideSchedule: input.overrideSchedule,
+        },
+        { checkSchedule: true },
+      );
       const team = input.team.map((m) => ({ role: m.role, name: m.name, teamMemberId: m.teamMemberId ?? null }));
       const [updated] = await tx
         .update(aesCases)
@@ -477,6 +570,20 @@ export class SpecialtyClinicalService implements OnModuleInit {
     return row;
   }
 
+  /**
+   * O caso de cirurgia a que a ficha pertence, quando não foi escolhido: o único em andamento do
+   * paciente. Com mais de um, é preciso dizer qual; sem nenhum, a ficha fica sem caso.
+   */
+  private async onlyOpenSurgery(tx: Tx, customerId: string) {
+    const open = await tx
+      .select()
+      .from(aesCases)
+      .where(and(eq(aesCases.customerId, customerId), eq(aesCases.specialty, 'plastic_surgery'), eq(aesCases.status, 'active')))
+      .limit(2);
+    if (open.length > 1) throw badRequest('CASE_REQUIRED', 'Este paciente tem mais de uma cirurgia em andamento: escolha o tratamento');
+    return open[0] ?? null;
+  }
+
   private async caseOrFail(tx: Tx, id: string, lock = false) {
     const q = tx.select().from(aesCases).where(eq(aesCases.id, id));
     const [row] = lock ? await q.for('update') : await q;
@@ -496,6 +603,20 @@ export class SpecialtyClinicalService implements OnModuleInit {
     const customerIds = [...new Set(rows.map((r) => r.customerId))];
     const proIds = [...new Set(rows.map((r) => r.professionalId).filter((v): v is string => !!v))];
     const apptIds = rows.map((r) => r.surgery?.appointmentId).filter((v): v is string => !!v);
+    const caseIds = rows.map((r) => r.id);
+    const [packages, usedCounts] = await Promise.all([
+      tx
+        .select({ id: aesPackages.id, caseId: aesPackages.caseId, service: schServices.name, totalSessions: aesPackages.totalSessions, status: aesPackages.status })
+        .from(aesPackages)
+        .innerJoin(schServices, eq(schServices.id, aesPackages.serviceId))
+        .where(inArray(aesPackages.caseId, caseIds)),
+      tx
+        .select({ packageId: aesPackageSessions.packageId, n: sql<number>`count(*)::int` })
+        .from(aesPackageSessions)
+        .innerJoin(aesPackages, eq(aesPackages.id, aesPackageSessions.packageId))
+        .where(and(inArray(aesPackages.caseId, caseIds), eq(aesPackageSessions.status, 'used')))
+        .groupBy(aesPackageSessions.packageId),
+    ]);
     const [names, pros, appts, entries] = await Promise.all([
       tx.select({ id: customers.id, name: customers.name }).from(customers).where(inArray(customers.id, customerIds)),
       proIds.length ? tx.select({ id: schResources.id, name: schResources.name }).from(schResources).where(inArray(schResources.id, proIds)) : Promise.resolve([]),
@@ -527,6 +648,9 @@ export class SpecialtyClinicalService implements OnModuleInit {
           ? { appointmentId: r.surgery.appointmentId, startsAt: appt?.startsAt.toISOString() ?? r.surgery.startsAt, status: appt?.status ?? 'cancelled', location: r.surgery.location, team: r.surgery.team }
           : null,
         consentAccepted: mine.some((e) => e.formKey === 'aesthetics.consent'),
+        packages: packages
+          .filter((p) => p.caseId === r.id)
+          .map((p) => ({ id: p.id, service: p.service, totalSessions: p.totalSessions, usedSessions: usedCounts.find((u) => u.packageId === p.id)?.n ?? 0, status: p.status })),
         createdAt: r.createdAt.toISOString(),
       };
     });

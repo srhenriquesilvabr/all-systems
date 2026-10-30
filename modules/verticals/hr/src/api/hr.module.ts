@@ -3,7 +3,7 @@ import { customers, teamMemberName, teamMembers } from '@all/core/schema';
 import type { Tx } from '@all/db';
 import { ModuleRoute, RequirePermission, requestContext } from '@all/module-sdk';
 import { Body, ConflictException, Controller, Delete, Get, HttpCode, Injectable, Module, NotFoundException, OnModuleInit, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
-import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lte, ne } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, gte, inArray, isNotNull, isNull, lte, ne } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   acquisitionPeriods,
@@ -16,11 +16,18 @@ import {
   leaveDaysBetween,
   leaveInput,
   monthCalendar,
+  payrollAddItem,
+  payrollApplyChanges,
   payrollCreate,
   payrollItemUpdate,
   payrollRecalculate,
+  reversalInput,
   round2,
   terminationInput,
+  type PayrollAddItem,
+  type PayrollApplyChanges,
+  type PayrollPending,
+  type ReversalInput,
   thirteenthAvos,
   thirteenthCreate,
   thirteenthItemUpdate,
@@ -165,22 +172,56 @@ export class HrService implements OnModuleInit {
     return employerOrFail(tx, customerId);
   }
 
+  /**
+   * A Situação vem das datas: Afastado é quem tem afastamento cobrindo hoje (ou foi marcado à mão),
+   * sem rotina para virar o status, como as férias "gozadas". O filtro usa a mesma regra da ficha.
+   */
   listEmployees(opts: { status?: string; employer?: EmployerFilter }): Promise<Employee[]> {
     return this.tdb.run(async (tx) => {
-      const rows = await employeesQuery(tx)
-        .where(and(opts.status ? eq(hrEmployees.status, opts.status as EmployeeRow['status']) : undefined, employerWhere(hrEmployees.employerCustomerId, opts.employer)))
-        .orderBy(asc(teamMemberName));
+      const today = localToday();
+      const rows = await employeesQuery(tx).where(employerWhere(hrEmployees.employerCustomerId, opts.employer)).orderBy(asc(teamMemberName));
       const vacations = await tx.select().from(hrVacations).where(eq(hrVacations.status, 'scheduled'));
-      return rows.map((r) => toEmployee(r, vacations, null));
+      const leaves = await tx.select().from(hrLeaves).where(and(lte(hrLeaves.startOn, today), gte(hrLeaves.endOn, today)));
+      const terms = await tx.select({ id: hrTerminations.id, employeeId: hrTerminations.employeeId, type: hrTerminations.type, terminationDate: hrTerminations.terminationDate }).from(hrTerminations).where(isNull(hrTerminations.cancelledAt));
+      const list = rows.map((r) => {
+        const term = terms.find((t) => t.employeeId === r.id);
+        return toEmployee(r, vacations, term ? { id: term.id, type: term.type, terminationDate: term.terminationDate } : null, leaves.find((l) => l.employeeId === r.id) ?? null);
+      });
+      return opts.status ? list.filter((e) => e.status === opts.status) : list;
     });
   }
 
   getEmployee(id: string): Promise<Employee> {
     return this.tdb.run(async (tx) => {
       const row = await employeeOrFail(tx, id);
+      const today = localToday();
       const vacations = await tx.select().from(hrVacations).where(and(eq(hrVacations.employeeId, id), eq(hrVacations.status, 'scheduled')));
-      const [term] = await tx.select({ id: hrTerminations.id, type: hrTerminations.type, terminationDate: hrTerminations.terminationDate }).from(hrTerminations).where(eq(hrTerminations.employeeId, id));
-      return toEmployee(row, vacations, term ?? null);
+      const [leave] = await tx.select().from(hrLeaves).where(and(eq(hrLeaves.employeeId, id), lte(hrLeaves.startOn, today), gte(hrLeaves.endOn, today)));
+      const terms = await tx.select().from(hrTerminations).where(eq(hrTerminations.employeeId, id)).orderBy(desc(hrTerminations.createdAt));
+      const term = terms.find((t) => !t.cancelledAt);
+      return {
+        ...toEmployee(row, vacations, term ? { id: term.id, type: term.type, terminationDate: term.terminationDate } : null, leave ?? null),
+        cancelledTerminations: terms.flatMap((t) => (t.cancelledAt ? [{ id: t.id, terminationDate: t.terminationDate, cancelledAt: t.cancelledAt.toISOString(), reason: t.cancelReason }] : [])),
+      };
+    });
+  }
+
+  /**
+   * Quem ficou como Desligado pela edição antiga, sem termo, volta a ativo por aqui (ou passa por
+   * Rescindir, que gera o termo). Com termo, o caminho é desfazer a rescisão.
+   */
+  reactivateWithoutTerm(id: string, input: ReversalInput) {
+    return this.tdb.run(async (tx) => {
+      const emp = await employeeOrFail(tx, id);
+      if (emp.status !== 'terminated') throw badRequest('NOT_TERMINATED', 'Este colaborador não está desligado');
+      const [term] = await tx.select({ id: hrTerminations.id }).from(hrTerminations).where(and(eq(hrTerminations.employeeId, id), isNull(hrTerminations.cancelledAt)));
+      if (term) throw badRequest('TERMINATION_EXISTS', 'Este colaborador tem termo de rescisão: use Desfazer rescisão');
+      await tx.update(hrEmployees).set({ status: 'active', terminationDate: null }).where(eq(hrEmployees.id, id));
+      if (!emp.employerCustomerId && emp.terminationDate) {
+        const person = await this.team.findOrFailInTx(tx, emp.teamMemberId);
+        if (person.endedOn === emp.terminationDate) await this.team.saveInTx(tx, emp.teamMemberId, { endedOn: null });
+      }
+      await this.audit.log(tx, { action: 'hr.employee.reactivated', entity: 'hr_employee', entityId: id, data: { reason: input.reason, previousTerminationDate: emp.terminationDate } });
     });
   }
 
@@ -201,6 +242,7 @@ export class HrService implements OnModuleInit {
       if (input.experienceEnd && input.experienceEnd < input.admissionDate) throw badRequest('EXPERIENCE_END', 'O fim da experiência deve ser depois da admissão');
       const { name, cpf, birthDate, email, phone, teamMemberId, employerCustomerId, ...contract } = input;
       const current = id ? await employeeOrFail(tx, id) : null;
+      if (current) await this.assertTerminationUntouched(tx, current, input);
 
       // Ausente na edição: mantém o empregador. Trocar só antes da primeira folha (as folhas são por empregador).
       const employerId = employerCustomerId === undefined ? (current?.employerCustomerId ?? null) : employerCustomerId;
@@ -272,6 +314,24 @@ export class HrService implements OnModuleInit {
         throw err;
       }
     });
+  }
+
+  /**
+   * Desligar é com Rescindir, que gera o termo e os lançamentos. A edição não liga nem desliga a
+   * situação de Desligado nem muda a data: quem já está assim só mantém o que tem. A saída pelos
+   * botões é Desfazer rescisão (com termo) ou Reativar (sem termo).
+   */
+  private async assertTerminationUntouched(tx: Tx, current: EmployeeRow, input: EmployeeInput) {
+    const nextDate = input.terminationDate ?? null;
+    if (current.status !== 'terminated') {
+      if (input.status === 'terminated' || nextDate) throw badRequest('USE_TERMINATION', 'Para desligar, use o botão Rescindir: ele gera o termo e os lançamentos');
+      return;
+    }
+    if (input.status === 'terminated' && nextDate === current.terminationDate) return;
+    const [term] = await tx.select({ id: hrTerminations.id }).from(hrTerminations).where(and(eq(hrTerminations.employeeId, current.id), isNull(hrTerminations.cancelledAt)));
+    throw term
+      ? badRequest('TERMINATION_LOCKED', 'Este colaborador tem termo de rescisão. Para voltar atrás, use Desfazer rescisão')
+      : badRequest('USE_TERMINATION', 'Desligado sem termo: use Rescindir para gerar o termo ou Reativar para voltar a ativo');
   }
 
   // ---- Férias ---------------------------------------------------------------------------------
@@ -353,17 +413,26 @@ export class HrService implements OnModuleInit {
       const existing = await tx.select().from(hrLeaves).where(eq(hrLeaves.employeeId, emp.id));
       if (existing.some((l) => l.startOn <= endOn && l.endOn >= input.startOn)) throw badRequest('LEAVE_OVERLAP', 'Já há afastamento nestas datas');
       const [row] = await tx.insert(hrLeaves).values({ tenantId, employeeId: emp.id, type: input.type, startOn: input.startOn, endOn, notes: input.notes ?? null }).returning();
-      await this.audit.log(tx, { action: 'hr.leave.created', entity: 'hr_leave', entityId: row!.id, data: { type: input.type } });
+      await this.audit.log(tx, { action: 'hr.leave.created', entity: 'hr_leave', entityId: row!.id, data: { employeeId: emp.id, type: input.type, startOn: input.startOn, endOn } });
       const { tables } = await this.settings.getInTx<HrSettings>(tx, MODULE);
       return toLeave(row!, tables.sickLeaveCompanyDays);
     });
   }
 
+  /** Afastamento que já entrou numa folha fechada não some: reabra a folha antes, se houver erro. */
   deleteLeave(id: string) {
     return this.tdb.run(async (tx) => {
-      const [row] = await tx.delete(hrLeaves).where(eq(hrLeaves.id, id)).returning({ id: hrLeaves.id });
-      if (!row) throw new NotFoundException({ code: 'LEAVE_NOT_FOUND', message: 'Afastamento não encontrado' });
-      await this.audit.log(tx, { action: 'hr.leave.deleted', entity: 'hr_leave', entityId: id });
+      const [leave] = await tx.select().from(hrLeaves).where(eq(hrLeaves.id, id));
+      if (!leave) throw new NotFoundException({ code: 'LEAVE_NOT_FOUND', message: 'Afastamento não encontrado' });
+      const [closed] = await tx
+        .select({ competence: hrPayrolls.competence })
+        .from(hrPayrollItems)
+        .innerJoin(hrPayrolls, eq(hrPayrolls.id, hrPayrollItems.payrollId))
+        .where(and(eq(hrPayrollItems.employeeId, leave.employeeId), eq(hrPayrolls.type, 'monthly'), eq(hrPayrolls.status, 'closed'), gte(hrPayrolls.competence, leave.startOn.slice(0, 7)), lte(hrPayrolls.competence, leave.endOn.slice(0, 7))))
+        .limit(1);
+      if (closed) throw badRequest('LEAVE_IN_CLOSED_PAYROLL', `Este afastamento já entrou na folha fechada de ${closed.competence.slice(5)}/${closed.competence.slice(0, 4)}. Reabra a folha antes de excluir.`);
+      await tx.delete(hrLeaves).where(eq(hrLeaves.id, id));
+      await this.audit.log(tx, { action: 'hr.leave.deleted', entity: 'hr_leave', entityId: id, data: { employeeId: leave.employeeId, type: leave.type, startOn: leave.startOn, endOn: leave.endOn, notes: leave.notes } });
     });
   }
 
@@ -390,15 +459,18 @@ export class HrService implements OnModuleInit {
               ),
             )
         : [];
-      return rows.map(({ p, employerName, employerDocument }) => ({
-        id: p.id,
-        competence: p.competence,
-        type: p.type,
-        employer: p.employerCustomerId ? { id: p.employerCustomerId, name: employerName ?? '', document: employerDocument } : null,
-        status: p.status,
-        closedAt: p.closedAt?.toISOString() ?? null,
-        totals: totalsOf(items.filter((i) => i.payrollId === p.id).map((i) => normalizePayslip(i.result))),
-      }));
+      return rows
+        .map(({ p, employerName, employerDocument }) => ({
+          id: p.id,
+          competence: p.competence,
+          type: p.type,
+          employer: p.employerCustomerId ? { id: p.employerCustomerId, name: employerName ?? '', document: employerDocument } : null,
+          status: p.status,
+          closedAt: p.closedAt?.toISOString() ?? null,
+          totals: totalsOf(items.filter((i) => i.payrollId === p.id).map((i) => normalizePayslip(i.result))),
+        }))
+        // Folha de rescisões que ficou vazia (a rescisão foi desfeita) não aparece na lista.
+        .filter((p) => p.type !== 'termination' || p.totals.employees > 0);
     });
   }
 
@@ -418,13 +490,8 @@ export class HrService implements OnModuleInit {
     return this.tdb.run(async (tx) => {
       if (employerId) await this.assertEmployer(tx, employerId);
       const { tables } = await this.settings.getInTx<HrSettings>(tx, MODULE);
-      const start = `${competence}-01`;
-      const end = lastDayOf(competence);
       const payroll = await this.insertPayroll(tx, { tenantId, competence, type: 'monthly', employerCustomerId: employerId, holidays, tables }, `A folha deste mês já existe${employerId ? ' para esta empresa' : ''}`);
-      const terminated = new Set((await tx.select({ e: hrTerminations.employeeId }).from(hrTerminations).where(lte(hrTerminations.terminationDate, end))).map((r) => r.e));
-      const employees = (await tx.select().from(hrEmployees).where(sameEmployer(hrEmployees.employerCustomerId, employerId))).filter(
-        (e) => e.admissionDate <= end && (!e.terminationDate || e.terminationDate >= start) && !terminated.has(e.id),
-      );
+      const employees = await this.eligibleForMonth(tx, competence, employerId);
       if (!employees.length) throw badRequest('NO_EMPLOYEES', `Nenhum colaborador no mês${employerId ? ' nesta empresa' : ''}`);
       for (const e of employees) {
         const { daysWorked } = contractInMonth(e, competence);
@@ -461,17 +528,9 @@ export class HrService implements OnModuleInit {
         { tenantId, competence, type, employerCustomerId: employerId, holidays: 0, tables },
         `A folha do 13º (${installment}ª parcela) de ${year} já existe${employerId ? ' para esta empresa' : ''}`,
       );
-      const yearEnd = `${year}-12-31`;
-      const admittedBy = installment === 1 ? `${year}-11-30` : yearEnd;
-      const employees = (await tx.select().from(hrEmployees).where(sameEmployer(hrEmployees.employerCustomerId, employerId))).filter(
-        (e) => e.admissionDate <= admittedBy && !(e.terminationDate && e.terminationDate <= yearEnd),
-      );
-      const leaves = await tx.select().from(hrLeaves);
+      const employees = await this.eligibleForThirteenth(tx, year, installment, employerId, tables.sickLeaveCompanyDays);
       let count = 0;
-      for (const e of employees) {
-        // Avos contados até dezembro (na 1ª parcela, projetados).
-        const avos = thirteenthAvos(year, e.admissionDate, yearEnd, leaves.filter((l) => l.employeeId === e.id), tables.sickLeaveCompanyDays);
-        if (avos === 0) continue;
+      for (const { e, avos } of employees) {
         const average = await variableAverage(tx, e.id, `${year}-01`, `${year}-${installment === 1 ? '10' : '11'}`);
         const result = await this.thirteenthResult(tx, installment, year, e, Number(e.salary), e.dependents, avos, average, tablesOf(payroll.tables));
         await tx.insert(hrPayrollItems).values({ tenantId, payrollId: payroll.id, employeeId: e.id, salary: e.salary, dependents: e.dependents, daysWorked: 30, avos, variableAverage: centsToDecimal(toCents(average)), result });
@@ -553,6 +612,206 @@ export class HrService implements OnModuleInit {
     });
   }
 
+  /** Quem trabalhou no mês (admissão e desligamento) e não tem termo de rescisão até o fim dele. */
+  private async eligibleForMonth(tx: Tx, competence: string, employerId: string | null) {
+    const start = `${competence}-01`;
+    const end = lastDayOf(competence);
+    const terminated = new Set((await tx.select({ e: hrTerminations.employeeId }).from(hrTerminations).where(and(lte(hrTerminations.terminationDate, end), isNull(hrTerminations.cancelledAt)))).map((r) => r.e));
+    return (await tx.select().from(hrEmployees).where(sameEmployer(hrEmployees.employerCustomerId, employerId))).filter(
+      (e) => e.admissionDate <= end && (!e.terminationDate || e.terminationDate >= start) && !terminated.has(e.id),
+    );
+  }
+
+  /** Quem tem avos de 13º no ano e não foi desligado até dezembro (o desligado recebe no termo). Avos contados até dezembro (na 1ª parcela, projetados). */
+  private async eligibleForThirteenth(tx: Tx, year: number, installment: 1 | 2, employerId: string | null, sickLeaveCompanyDays: number) {
+    const yearEnd = `${year}-12-31`;
+    const admittedBy = installment === 1 ? `${year}-11-30` : yearEnd;
+    const employees = (await tx.select().from(hrEmployees).where(sameEmployer(hrEmployees.employerCustomerId, employerId))).filter(
+      (e) => e.admissionDate <= admittedBy && !(e.terminationDate && e.terminationDate <= yearEnd),
+    );
+    const leaves = await tx.select().from(hrLeaves);
+    return employees
+      .map((e) => ({ e, avos: thirteenthAvos(year, e.admissionDate, yearEnd, leaves.filter((l) => l.employeeId === e.id), sickLeaveCompanyDays) }))
+      .filter((x) => x.avos > 0);
+  }
+
+  private async eligibleFor(tx: Tx, payroll: PayrollRow): Promise<{ e: ContractRow; avos: number | null }[]> {
+    if (payroll.type === 'monthly') return (await this.eligibleForMonth(tx, payroll.competence, payroll.employerCustomerId)).map((e) => ({ e, avos: null }));
+    return this.eligibleForThirteenth(tx, Number(payroll.competence.slice(0, 4)), payroll.type === 'thirteenth_1' ? 1 : 2, payroll.employerCustomerId, tablesOf(payroll.tables).sickLeaveCompanyDays);
+  }
+
+  private async openPayrollOrFail(tx: Tx, id: string) {
+    const payroll = await payrollOrFail(tx, id);
+    if (payroll.type === 'termination') throw badRequest('TERMINATION_PAYROLL', 'A folha de rescisões muda só pelo termo de cada colaborador');
+    if (payroll.status === 'closed') throw badRequest('PAYROLL_CLOSED', 'Folha fechada não pode ser alterada');
+    return payroll;
+  }
+
+  /** O que mudou na ficha desde que a folha abriu. Nada é aplicado sozinho: lançamentos manuais e ajustes continuam como estão até a pessoa pedir. */
+  pendingChanges(id: string): Promise<PayrollPending> {
+    return this.tdb.run(async (tx) => {
+      const payroll = await payrollOrFail(tx, id);
+      if (payroll.status === 'closed' || payroll.type === 'termination') return { changes: [], missing: [] };
+      const items = await tx.select({ i: hrPayrollItems, e: hrEmployees, name: teamMemberName }).from(hrPayrollItems).innerJoin(hrEmployees, eq(hrEmployees.id, hrPayrollItems.employeeId)).innerJoin(teamMembers, eq(teamMembers.id, hrEmployees.teamMemberId)).where(eq(hrPayrollItems.payrollId, id)).orderBy(asc(teamMemberName));
+      const inPayroll = new Set(items.map(({ e }) => e.id));
+      const missing = (await this.eligibleFor(tx, payroll)).filter(({ e }) => !inPayroll.has(e.id));
+      const names = missing.length ? await tx.select({ id: hrEmployees.id, name: teamMemberName }).from(hrEmployees).innerJoin(teamMembers, eq(teamMembers.id, hrEmployees.teamMemberId)).where(inArray(hrEmployees.id, missing.map(({ e }) => e.id))) : [];
+      return {
+        changes: items
+          .filter(({ i, e }) => differs(i, e))
+          .map(({ i, e, name }) => ({ itemId: i.id, employeeId: e.id, name, salary: { from: Number(i.salary), to: Number(e.salary) }, dependents: { from: i.dependents, to: e.dependents } })),
+        missing: missing.map(({ e }) => ({ employeeId: e.id, name: names.find((n) => n.id === e.id)?.name ?? '', position: e.position, admissionDate: e.admissionDate })),
+      };
+    });
+  }
+
+  /** Traz para a folha aberta o salário e os dependentes atuais da ficha, mantendo os lançamentos e ajustes. */
+  applyChanges(id: string, input: PayrollApplyChanges): Promise<Payroll> {
+    return this.tdb.run(async (tx) => {
+      const payroll = await this.openPayrollOrFail(tx, id);
+      const items = await tx.select({ i: hrPayrollItems, e: hrEmployees }).from(hrPayrollItems).innerJoin(hrEmployees, eq(hrEmployees.id, hrPayrollItems.employeeId)).where(eq(hrPayrollItems.payrollId, id));
+      const wanted = input.itemIds?.length ? new Set(input.itemIds) : null;
+      const applied: { employeeId: string; salary: { from: number; to: number }; dependents: { from: number; to: number } }[] = [];
+      for (const { i, e } of items) {
+        if (!differs(i, e) || (wanted && !wanted.has(i.id))) continue;
+        const salary = Number(e.salary);
+        const result =
+          payroll.type === 'monthly'
+            ? await this.monthlyResult(tx, payroll, e, i.daysWorked, salary, e.dependents, manualOf(i))
+            : await this.thirteenthResult(tx, payroll.type === 'thirteenth_1' ? 1 : 2, Number(payroll.competence.slice(0, 4)), e, salary, e.dependents, i.avos ?? 0, Number(i.variableAverage), tablesOf(payroll.tables));
+        if (result.net < 0) throw badRequest('NEGATIVE_NET', 'Com o salário novo, os descontos passam do salário. Ajuste os lançamentos do colaborador');
+        await tx.update(hrPayrollItems).set({ salary: e.salary, dependents: e.dependents, result }).where(eq(hrPayrollItems.id, i.id));
+        applied.push({ employeeId: e.id, salary: { from: Number(i.salary), to: salary }, dependents: { from: i.dependents, to: e.dependents } });
+      }
+      if (applied.length) await this.audit.log(tx, { action: 'hr.payroll.changes_applied', entity: 'hr_payroll', entityId: id, data: { applied } });
+      return this.detailInTx(tx, id);
+    });
+  }
+
+  /** Inclui na folha aberta quem pertence a ela e não está: admitido depois de abrir, ou removido antes. */
+  addItem(id: string, input: PayrollAddItem): Promise<Payroll> {
+    const { tenantId } = requestContext.require();
+    return this.tdb.run(async (tx) => {
+      const payroll = await this.openPayrollOrFail(tx, id);
+      const emp = await employeeOrFail(tx, input.employeeId);
+      if (emp.employerCustomerId !== payroll.employerCustomerId) throw badRequest('OTHER_EMPLOYER', 'Este colaborador é de outra empresa');
+      const eligible = (await this.eligibleFor(tx, payroll)).find(({ e }) => e.id === emp.id);
+      if (!eligible) throw badRequest('NOT_ELIGIBLE', payroll.type === 'monthly' ? 'Este colaborador não trabalhou neste mês, ou a rescisão dele já paga o período' : 'Este colaborador não tem avos de 13º neste ano');
+      const e = eligible.e;
+      const values =
+        payroll.type === 'monthly'
+          ? { daysWorked: contractInMonth(e, payroll.competence).daysWorked, avos: null, variableAverage: '0', result: await this.monthlyResult(tx, payroll, e, contractInMonth(e, payroll.competence).daysWorked, Number(e.salary), e.dependents, noManual) }
+          : await this.thirteenthValues(tx, payroll, e, eligible.avos ?? 0);
+      try {
+        await tx.insert(hrPayrollItems).values({ tenantId, payrollId: id, employeeId: e.id, salary: e.salary, dependents: e.dependents, ...values });
+      } catch (err) {
+        if (pgCode(err) === '23505') throw new ConflictException({ code: 'ITEM_EXISTS', message: 'Este colaborador já está nesta folha' });
+        throw err;
+      }
+      await this.audit.log(tx, { action: 'hr.payroll.item_added', entity: 'hr_payroll', entityId: id, data: { employeeId: e.id, name: emp.name } });
+      return this.detailInTx(tx, id);
+    });
+  }
+
+  private async thirteenthValues(tx: Tx, payroll: PayrollRow, e: ContractRow, avos: number) {
+    const year = Number(payroll.competence.slice(0, 4));
+    const installment = payroll.type === 'thirteenth_1' ? 1 : 2;
+    const average = await variableAverage(tx, e.id, `${year}-01`, `${year}-${installment === 1 ? '10' : '11'}`);
+    return { daysWorked: 30, avos, variableAverage: centsToDecimal(toCents(average)), result: await this.thirteenthResult(tx, installment, year, e, Number(e.salary), e.dependents, avos, average, tablesOf(payroll.tables)) };
+  }
+
+  /** Tira um colaborador da folha aberta. A auditoria guarda o que ele tinha nela. */
+  removeItem(id: string, itemId: string): Promise<Payroll> {
+    return this.tdb.run(async (tx) => {
+      await this.openPayrollOrFail(tx, id);
+      const items = await tx.select().from(hrPayrollItems).where(eq(hrPayrollItems.payrollId, id));
+      const item = items.find((i) => i.id === itemId);
+      if (!item) throw new NotFoundException({ code: 'ITEM_NOT_FOUND', message: 'Colaborador não está nesta folha' });
+      if (items.length === 1) throw badRequest('LAST_ITEM', 'É o último colaborador desta folha. Para desistir dela, use Excluir folha');
+      await tx.delete(hrPayrollItems).where(eq(hrPayrollItems.id, itemId));
+      await this.audit.log(tx, { action: 'hr.payroll.item_removed', entity: 'hr_payroll', entityId: id, data: { employeeId: item.employeeId, salary: Number(item.salary), net: normalizePayslip(item.result).net, ...manualOf(item) } });
+      return this.detailInTx(tx, id);
+    });
+  }
+
+  /** Exclui uma folha ainda em aberto: não lançou nada. A auditoria guarda o resumo do que existia. */
+  deletePayroll(id: string) {
+    return this.tdb.run(async (tx) => {
+      await this.openPayrollOrFail(tx, id);
+      const detail = await this.detailInTx(tx, id);
+      await tx.delete(hrPayrolls).where(eq(hrPayrolls.id, id));
+      await this.audit.log(tx, {
+        action: 'hr.payroll.deleted',
+        entity: 'hr_payroll',
+        entityId: id,
+        data: { competence: detail.competence, type: detail.type, employerCustomerId: detail.employer?.id ?? null, totals: detail.totals, employees: detail.items.map((i) => i.employee.name) },
+      });
+    });
+  }
+
+  /**
+   * Reabre uma folha fechada (ADR-039). Vale enquanto o que ela gerou não foi usado:
+   * - nenhum lançamento pago no financeiro (estorne a baixa antes): os em aberto são cancelados, não
+   *   apagados, e o fechamento seguinte lança de novo;
+   * - na empresa-cliente, o ramo confere e cancela o honorário;
+   * - 1ª parcela do 13º sem 2ª parcela calculada, que desconta o adiantamento;
+   * - folha mensal sem 13º calculado depois do fechamento, que usou as médias dela;
+   * - nenhuma rescisão confirmada depois do fechamento de quem está nela: o termo usou esses valores
+   *   (saldo já pago, adiantamento, médias e FGTS).
+   */
+  reopenPayroll(id: string, input: ReversalInput): Promise<Payroll> {
+    const { modules } = requestContext.requireTenant();
+    return this.tdb.run(async (tx) => {
+      const payroll = await payrollOrFail(tx, id);
+      if (payroll.type === 'termination') throw badRequest('TERMINATION_PAYROLL', 'A folha de rescisões não reabre: desfaça a rescisão de cada colaborador');
+      if (payroll.status !== 'closed') throw badRequest('PAYROLL_NOT_CLOSED', 'Esta folha já está em aberto');
+
+      const employerId = payroll.employerCustomerId;
+      const year = payroll.competence.slice(0, 4);
+      const closedAt = payroll.closedAt ?? new Date(0);
+      if (payroll.type === 'thirteenth_1' && (await findPayroll(tx, `${year}-12`, 'thirteenth_2', employerId))) {
+        throw badRequest('LATER_PAYROLL', 'A 2ª parcela do 13º já foi calculada com este adiantamento. Exclua ou reabra a 2ª parcela antes');
+      }
+      if (payroll.type === 'monthly') {
+        const thirteenths = await tx.select({ createdAt: hrPayrolls.createdAt }).from(hrPayrolls).where(and(inArray(hrPayrolls.type, ['thirteenth_1', 'thirteenth_2']), inArray(hrPayrolls.competence, [`${year}-11`, `${year}-12`]), sameEmployer(hrPayrolls.employerCustomerId, employerId)));
+        if (thirteenths.some((p) => p.createdAt > closedAt)) throw badRequest('LATER_THIRTEENTH', 'O 13º deste ano foi calculado depois do fechamento, com as médias desta folha. Exclua ou reabra o 13º antes');
+      }
+      const [term] = await tx
+        .select({ id: hrTerminations.id })
+        .from(hrTerminations)
+        .innerJoin(hrPayrollItems, and(eq(hrPayrollItems.employeeId, hrTerminations.employeeId), eq(hrPayrollItems.payrollId, id)))
+        .where(and(isNull(hrTerminations.cancelledAt), gt(hrTerminations.createdAt, closedAt)))
+        .limit(1);
+      if (term) throw badRequest('TERMINATION_AFTER_CLOSE', 'Um colaborador desta folha foi rescindido depois do fechamento, e o termo usou estes valores. Desfaça a rescisão antes');
+
+      let cancelledEntries = 0;
+      if (employerId) {
+        const extensions = this.employers.active(modules);
+        if (!extensions.length) throw badRequest('EMPLOYERS_DISABLED', 'Folha de empresa atendida: ative o ramo Consultoria de RH para reabrir');
+        for (const ext of extensions) await ext.onPayrollReopened?.(tx, { payrollId: id, employerCustomerId: employerId, competence: payroll.competence, reason: input.reason });
+      } else {
+        const entries = await this.finance.listBySourceInTx(tx, PAYROLL_SOURCE, id);
+        if (entries.some((e) => e.status === 'paid')) throw badRequest('PAYROLL_HAS_PAID_ENTRIES', 'Há pagamento registrado desta folha. Estorne a baixa dos lançamentos no financeiro antes de reabrir');
+        cancelledEntries = await this.finance.cancelPendingBySourceInTx(tx, PAYROLL_SOURCE, id);
+      }
+      await tx.update(hrPayrolls).set({ status: 'draft', closedAt: null, closedById: null }).where(eq(hrPayrolls.id, id));
+      const detail = await this.detailInTx(tx, id);
+      await this.audit.log(tx, {
+        action: 'hr.payroll.reopened',
+        entity: 'hr_payroll',
+        entityId: id,
+        data: { reason: input.reason, competence: payroll.competence, type: payroll.type, closedAt: payroll.closedAt, closedById: payroll.closedById, cancelledEntries, totals: detail.totals },
+      });
+      return detail;
+    });
+  }
+
+  /** Histórico da folha (criação, mudanças, fechamento, reabertura), para a própria tela. */
+  async payrollHistory(id: string) {
+    await this.tdb.run((tx) => payrollOrFail(tx, id));
+    return this.audit.forEntity('hr_payroll', id);
+  }
+
   /**
    * Fecha a folha e lança no financeiro (baixa no financeiro):
    * - mensal: líquidos no dia de pagamento do mês seguinte; INSS + IRRF e FGTS no dia 20;
@@ -572,6 +831,7 @@ export class HrService implements OnModuleInit {
       if (payroll.status === 'closed') throw badRequest('PAYROLL_CLOSED', 'Folha já fechada');
       if (payroll.type === 'termination') throw badRequest('TERMINATION_PAYROLL', 'Rescisões são lançadas no financeiro ao confirmar cada uma');
       const detail = await this.detailInTx(tx, id);
+      if (!detail.items.length) throw badRequest('EMPTY_PAYROLL', 'Esta folha está sem colaboradores. Inclua alguém ou exclua a folha');
       if (payroll.employerCustomerId) {
         await tx.update(hrPayrolls).set({ status: 'closed', closedAt: new Date(), closedById: userId ?? null }).where(eq(hrPayrolls.id, id));
         await this.audit.log(tx, { action: 'hr.payroll.closed', entity: 'hr_payroll', entityId: id, data: { type: payroll.type, employerCustomerId: payroll.employerCustomerId, ...detail.totals } });
@@ -682,7 +942,7 @@ export class HrService implements OnModuleInit {
       .orderBy(asc(teamMemberName));
     const terminations =
       p.type === 'termination' && items.length
-        ? await tx.select({ id: hrTerminations.id, employeeId: hrTerminations.employeeId }).from(hrTerminations).where(inArray(hrTerminations.employeeId, items.map(({ e }) => e.id)))
+        ? await tx.select({ id: hrTerminations.id, employeeId: hrTerminations.employeeId }).from(hrTerminations).where(and(isNull(hrTerminations.cancelledAt), inArray(hrTerminations.employeeId, items.map(({ e }) => e.id))))
         : [];
     const list: PayrollItem[] = items.map(({ i, e, person }) => ({
       ...normalizePayslip(i.result),
@@ -735,7 +995,10 @@ const manualOf = (i: typeof hrPayrollItems.$inferSelect): ManualInputs => ({
   dsrLostDays: i.dsrLostDays,
 });
 
-function toEmployee(r: EmployeeRow, vacations: (typeof hrVacations.$inferSelect)[], termination: Employee['termination']): Employee {
+/** Salário ou dependentes da ficha diferentes do que a folha guardou. */
+const differs = (i: typeof hrPayrollItems.$inferSelect, e: ContractRow) => toCents(i.salary) !== toCents(e.salary) || i.dependents !== e.dependents;
+
+function toEmployee(r: EmployeeRow, vacations: (typeof hrVacations.$inferSelect)[], termination: Employee['termination'], leave: typeof hrLeaves.$inferSelect | null): Employee {
   const periods = acquisitionPeriods(
     r.admissionDate,
     r.terminationDate ?? localToday(),
@@ -759,7 +1022,11 @@ function toEmployee(r: EmployeeRow, vacations: (typeof hrVacations.$inferSelect)
     dependents: r.dependents,
     category: r.category,
     experienceEnd: r.experienceEnd,
-    status: r.status,
+    status: r.status === 'terminated' ? 'terminated' : r.status === 'on_leave' || leave ? 'on_leave' : 'active',
+    currentLeave: r.status !== 'terminated' && leave ? { type: leave.type, startOn: leave.startOn, endOn: leave.endOn } : null,
+    manualLeave: r.status === 'on_leave',
+    terminatedWithoutTerm: r.status === 'terminated' && !termination,
+    cancelledTerminations: [],
     terminationDate: r.terminationDate,
     pixKey: r.pixKey,
     notes: r.notes,
@@ -861,6 +1128,21 @@ export class HrController {
     return this.terminations.confirm(id, body);
   }
 
+  @Post('employees/:id/termination/undo')
+  @HttpCode(200)
+  @RequirePermission('hr.payroll')
+  undoTermination(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(reversalInput)) body: ReversalInput) {
+    return this.terminations.undo(id, body);
+  }
+
+  /** Desligado pela edição antiga, sem termo, volta a ativo. */
+  @Post('employees/:id/reactivate')
+  @HttpCode(204)
+  @RequirePermission('hr.manage')
+  reactivate(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(reversalInput)) body: ReversalInput) {
+    return this.hr.reactivateWithoutTerm(id, body);
+  }
+
   @Post('vacations')
   @RequirePermission('hr.manage')
   schedule(@Body(new ZodPipe(vacationInput)) body: VacationInput) {
@@ -935,6 +1217,52 @@ export class HrController {
   @RequirePermission('hr.payroll')
   close(@Param('id', ParseUUIDPipe) id: string) {
     return this.hr.closePayroll(id);
+  }
+
+  @Post('payrolls/:id/reopen')
+  @HttpCode(200)
+  @RequirePermission('hr.payroll')
+  reopen(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(reversalInput)) body: ReversalInput) {
+    return this.hr.reopenPayroll(id, body);
+  }
+
+  @Delete('payrolls/:id')
+  @HttpCode(204)
+  @RequirePermission('hr.payroll')
+  deletePayroll(@Param('id', ParseUUIDPipe) id: string) {
+    return this.hr.deletePayroll(id);
+  }
+
+  @Get('payrolls/:id/history')
+  @RequirePermission('hr.read')
+  payrollHistory(@Param('id', ParseUUIDPipe) id: string) {
+    return this.hr.payrollHistory(id);
+  }
+
+  /** Mudanças de salário e dependentes e quem falta na folha aberta. */
+  @Get('payrolls/:id/pending')
+  @RequirePermission('hr.read')
+  pending(@Param('id', ParseUUIDPipe) id: string) {
+    return this.hr.pendingChanges(id);
+  }
+
+  @Post('payrolls/:id/apply-changes')
+  @HttpCode(200)
+  @RequirePermission('hr.payroll')
+  applyChanges(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(payrollApplyChanges)) body: PayrollApplyChanges) {
+    return this.hr.applyChanges(id, body);
+  }
+
+  @Post('payrolls/:id/items')
+  @RequirePermission('hr.payroll')
+  addItem(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(payrollAddItem)) body: PayrollAddItem) {
+    return this.hr.addItem(id, body);
+  }
+
+  @Delete('payrolls/:id/items/:itemId')
+  @RequirePermission('hr.payroll')
+  removeItem(@Param('id', ParseUUIDPipe) id: string, @Param('itemId', ParseUUIDPipe) itemId: string) {
+    return this.hr.removeItem(id, itemId);
   }
 }
 

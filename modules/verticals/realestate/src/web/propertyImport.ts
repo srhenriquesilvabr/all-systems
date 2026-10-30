@@ -1,5 +1,5 @@
 import { api, type ImportRow, type ImportSpec } from '@all/module-sdk/web';
-import { propertyStatuses, propertyStatusLabel, propertyTypeLabel, propertyTypes, purposeLabel } from '../contracts';
+import { manualPropertyStatuses, propertyStatusLabel, propertyTypeLabel, propertyTypes, purposeLabel } from '../contracts';
 
 const text = (row: ImportRow, k: string) => (row[k] === null || row[k] === undefined ? undefined : String(row[k]));
 const fold = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -45,7 +45,7 @@ export function propertyImportSpec(): ImportSpec {
       { key: 'title', label: 'Título do anúncio', required: true, example: 'Apartamento 3 quartos com vista para o mar' },
       { key: 'type', label: 'Tipo', required: true, type: 'enum', options: propertyTypes.map((t) => ({ value: t, label: propertyTypeLabel[t] })), example: 'Apartamento' },
       { key: 'purpose', label: 'Finalidade', type: 'enum', options: Object.entries(purposeLabel).map(([value, label]) => ({ value, label })), example: 'Venda', hint: `Um destes: ${Object.values(purposeLabel).join(', ')} (vazio = Venda)` },
-      { key: 'status', label: 'Situação', type: 'enum', options: propertyStatuses.map((s) => ({ value: s, label: propertyStatusLabel[s] })), example: 'Disponível', hint: `Um destes: ${propertyStatuses.map((s) => propertyStatusLabel[s]).join(', ')} (vazio = Disponível)` },
+      { key: 'status', label: 'Situação', type: 'enum', options: manualPropertyStatuses.map((s) => ({ value: s, label: propertyStatusLabel[s] })), example: 'Disponível', hint: `Um destes: ${manualPropertyStatuses.map((s) => propertyStatusLabel[s]).join(', ')} (vazio = Disponível). Reservado, Vendido e Alugado vêm da proposta e do contrato.` },
       { key: 'zip', label: 'CEP', example: '88015-200' },
       { key: 'street', label: 'Rua', required: true, example: 'Rua Felipe Schmidt' },
       { key: 'number', label: 'Número', example: '500' },

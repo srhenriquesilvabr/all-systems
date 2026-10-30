@@ -1,6 +1,6 @@
 import type { FormField, MedicalEntry, MedicalForm } from '@all/medical-records';
 import { ListValue, openAttachment, RecordFieldInput } from '@all/medical-records/web';
-import { api, ApiError, formatDate, formatDateTime, today, useCan } from '@all/module-sdk/web';
+import { api, ApiError, apiUpload, formatDate, formatDateTime, today, useCan } from '@all/module-sdk/web';
 import { localToUtc, useResources, useServices } from '@all/scheduling/web';
 import { Alert, Badge, Button, Card, Field, Input, Modal, Select, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -126,6 +126,7 @@ export function SpecialtyRecordForm({
   cases,
   caseId: initialCase,
   nextSession,
+  amends,
   onClose,
 }: {
   customerId: string;
@@ -134,6 +135,8 @@ export function SpecialtyRecordForm({
   cases: AesCase[];
   caseId?: string;
   nextSession?: number;
+  /** Retificação: parte da ficha original; o original continua guardado. */
+  amends?: MedicalEntry;
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -141,11 +144,18 @@ export function SpecialtyRecordForm({
   const credentials = useCredentials();
   const products = useAesProducts({ specialty, active: true });
   const rooms = useResources();
-  const [occurredOn, setOccurredOn] = useState(today());
-  const [professionalId, setProfessionalId] = useState('');
-  const [caseId, setCaseId] = useState(initialCase ?? '');
-  const [notes, setNotes] = useState('');
+  const [occurredOn, setOccurredOn] = useState(amends?.occurredOn ?? today());
+  const [professionalId, setProfessionalId] = useState(typeof amends?.data.professionalId === 'string' ? amends.data.professionalId : '');
+  const openCases = cases.filter((c) => c.specialty === specialty && c.status === 'active');
+  const surgery = specialty === 'plastic_surgery';
+  // Na cirurgia, termo e pré-operatório só contam ligados ao tratamento: com um só, já vem escolhido.
+  const [caseId, setCaseId] = useState(initialCase ?? (typeof amends?.data.caseId === 'string' ? amends.data.caseId : surgery && openCases.length === 1 ? openCases[0]!.id : ''));
+  const [notes, setNotes] = useState(amends?.notes ?? '');
+  const [reason, setReason] = useState('');
+  const [photo, setPhoto] = useState<File | null>(null);
+  const [photoFailed, setPhotoFailed] = useState(false);
   const [data, setData] = useState<Row>(() => {
+    if (amends) return { ...amends.data };
     const d: Row = {};
     if (nextSession && form.fields.some((f) => f.key === 'session' && f.type === 'number')) d.session = nextSession;
     return d;
@@ -154,28 +164,37 @@ export function SpecialtyRecordForm({
   const returnKey = form.key === 'aesthetics.harmonization' ? 'returnOn' : form.key === 'aesthetics.micropigmentation' ? 'retouchOn' : null;
   const requirement = form.key.startsWith('aesthetics.') && !['aesthetics.complication'].includes(form.key) ? specialtyRequirement[specialty] : undefined;
   const options = useMemo(() => lotOptions(products.data, occurredOn), [products.data, occurredOn]);
-  const openCases = cases.filter((c) => c.specialty === specialty && c.status === 'active');
   const set = (patch: Row) => setData({ ...data, ...patch });
+  // Campo que pede foto (ex.: desenho aprovado da micropigmentação).
+  const wantsPhoto = form.key === 'aesthetics.micropigmentation';
 
   const save = useMutation({
-    mutationFn: () =>
-      api('/aesthetics/records', {
-        method: 'POST',
-        body: {
-          specialty,
-          formKey: form.key,
-          customerId,
-          caseId: caseId || null,
-          professionalId: professionalId || null,
-          occurredOn,
-          data: { ...(returnKey && returnDays && data[returnKey] === undefined ? { [returnKey]: daysFrom(occurredOn, returnDays) } : {}), ...data },
-          notes: notes || null,
-        },
-      }),
-    onSuccess: () => {
+    mutationFn: async () => {
+      const filled = { ...(returnKey && returnDays && data[returnKey] === undefined ? { [returnKey]: daysFrom(occurredOn, returnDays) } : {}), ...data };
+      const entry = amends
+        ? await api<MedicalEntry>(`/medical-records/${amends.id}/amend`, {
+            method: 'POST',
+            body: { data: { ...filled, professionalId: professionalId || undefined, caseId: caseId || undefined }, notes: notes || null, reason, occurredOn },
+          })
+        : await api<MedicalEntry>('/aesthetics/records', {
+            method: 'POST',
+            body: { specialty, formKey: form.key, customerId, caseId: caseId || null, professionalId: professionalId || null, occurredOn, data: filled, notes: notes || null },
+          });
+      // A ficha já entrou; se a foto falhar, avisa para anexar de novo sem perder o que foi escrito.
+      if (photo) {
+        try {
+          await apiUpload(`/medical-records/${entry.id}/attachments`, 'file', photo);
+        } catch {
+          return { photoFailed: true };
+        }
+      }
+      return { photoFailed: false };
+    },
+    onSuccess: ({ photoFailed: failed }) => {
       queryClient.invalidateQueries({ queryKey: specialtiesKey });
       queryClient.invalidateQueries({ queryKey: ['medical-records'] });
-      onClose();
+      if (failed) setPhotoFailed(true);
+      else onClose();
     },
   });
 
@@ -188,22 +207,30 @@ export function SpecialtyRecordForm({
   return (
     <Modal
       open
-      title={`${form.label} — ${specialtyLabel[specialty]}`}
+      title={`${amends ? 'Retificar: ' : ''}${form.label} — ${specialtyLabel[specialty]}`}
       onClose={onClose}
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button type="submit" form="aes-record-form" loading={save.isPending}>
-            Incluir no prontuário
-          </Button>
+          {!photoFailed && (
+            <Button type="submit" form="aes-record-form" loading={save.isPending} disabled={!!amends && reason.trim().length < 3}>
+              {amends ? 'Salvar retificação' : 'Incluir no prontuário'}
+            </Button>
+          )}
         </>
       }
     >
       <form id="aes-record-form" onSubmit={submit} className="space-y-4">
         {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao salvar'}</Alert>}
-        <p className="text-xs text-fg-muted">Depois de incluída, a ficha não pode ser apagada nem editada — só retificada pelo prontuário.</p>
+        {photoFailed && <Alert>A ficha foi incluída, mas a foto não subiu. Anexe pelo prontuário completo, no registro desta ficha.</Alert>}
+        {amends ? (
+          <p className="text-xs text-fg-muted">A ficha original continua guardada. Se a quantidade ou o lote mudar, o rastreio e o estoque são corrigidos com um estorno.</p>
+        ) : (
+          <p className="text-xs text-fg-muted">Depois de incluída, a ficha não pode ser apagada nem editada — só retificada.</p>
+        )}
+        {surgery && !openCases.length && !amends && <Alert tone="info">Este paciente não tem tratamento de cirurgia aberto. A ficha fica no prontuário, mas não conta para marcar a cirurgia: abra o tratamento antes.</Alert>}
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Data do atendimento">{(id) => <Input id={id} type="date" required max={today()} value={occurredOn} onChange={(e) => setOccurredOn(e.target.value)} />}</Field>
           <Field label="Profissional" hint={requirement?.message}>
@@ -226,10 +253,10 @@ export function SpecialtyRecordForm({
             )}
           </Field>
           {openCases.length > 0 && (
-            <Field label="Tratamento">
+            <Field label="Tratamento" hint={surgery ? 'Termo e pré-operatório só contam para marcar a cirurgia ligados ao tratamento.' : undefined}>
               {(id) => (
-                <Select id={id} value={caseId} onChange={(e) => setCaseId(e.target.value)}>
-                  <option value="">—</option>
+                <Select id={id} required={surgery} value={caseId} onChange={(e) => setCaseId(e.target.value)}>
+                  {(!surgery || openCases.length > 1) && <option value="">{surgery ? 'Escolha' : '—'}</option>}
                   {openCases.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.title}
@@ -280,14 +307,30 @@ export function SpecialtyRecordForm({
               );
             })}
         </div>
+        {wantsPhoto && (
+          <Field label="Foto do desenho aprovado" hint="JPG, PNG, WebP ou PDF. Fica anexa à ficha no prontuário.">
+            {(id) => <Input id={id} type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={(e) => setPhoto(e.target.files?.[0] ?? null)} />}
+          </Field>
+        )}
         <Field label="Observações">{(id) => <Textarea id={id} rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />}</Field>
+        {amends && <Field label="Motivo da retificação">{(id) => <Input id={id} required minLength={3} value={reason} onChange={(e) => setReason(e.target.value)} />}</Field>}
       </form>
     </Modal>
   );
 }
 
 /** Ficha de especialidade já incluída: campos, mapa facial (harmonização) e anexos. */
-export function SpecialtyEntryCard({ entry: e, form, onSchedule }: { entry: MedicalEntry; form: MedicalForm | undefined; onSchedule?: (date: string, professionalId: string | null) => void }) {
+export function SpecialtyEntryCard({
+  entry: e,
+  form,
+  onSchedule,
+  onAmend,
+}: {
+  entry: MedicalEntry;
+  form: MedicalForm | undefined;
+  onSchedule?: (date: string, professionalId: string | null) => void;
+  onAmend?: () => void;
+}) {
   const fields = (form?.fields ?? []).filter((f) => !f.hidden && f.key !== 'text' && e.data[f.key] !== undefined && e.data[f.key] !== '');
   const points = e.formKey === 'aesthetics.harmonization' && Array.isArray(e.data.points) ? (e.data.points as Row[]) : [];
   const returnOn = (e.data.returnOn ?? e.data.retouchOn ?? e.data.nextSessionOn ?? e.data.nextReturn) as string | undefined;
@@ -332,11 +375,18 @@ export function SpecialtyEntryCard({ entry: e, form, onSchedule }: { entry: Medi
           ))}
         </div>
       )}
-      {onSchedule && returnOn && !superseded && (
-        <div className="mt-3">
-          <Button size="sm" variant="secondary" onClick={() => onSchedule(returnOn, typeof e.data.professionalId === 'string' ? e.data.professionalId : null)}>
-            Agendar {e.formKey === 'aesthetics.micropigmentation' ? 'retoque' : e.formKey === 'aesthetics.harmonization' ? 'retorno / retoque' : 'retorno'} ({formatDate(returnOn)})
-          </Button>
+      {!superseded && ((onSchedule && returnOn) || onAmend) && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {onSchedule && returnOn && (
+            <Button size="sm" variant="secondary" onClick={() => onSchedule(returnOn, typeof e.data.professionalId === 'string' ? e.data.professionalId : null)}>
+              Agendar {e.formKey === 'aesthetics.micropigmentation' ? 'retoque' : e.formKey === 'aesthetics.harmonization' ? 'retorno / retoque' : 'retorno'} ({formatDate(returnOn)})
+            </Button>
+          )}
+          {onAmend && (
+            <Button size="sm" variant="ghost" onClick={onAmend}>
+              Retificar
+            </Button>
+          )}
         </div>
       )}
     </Card>

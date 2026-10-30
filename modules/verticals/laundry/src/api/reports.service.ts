@@ -46,20 +46,22 @@ export class LaundryReportsService {
           })
           .from(laundryPieceEvents)
           .where(eventsInRange),
-        // Receita contratada no período (ordens recebidas no período, exceto canceladas).
+        // Valor contratado (ordens recebidas no período, exceto canceladas): soma dos itens, antes do
+        // desconto da ordem. Não é o que entrou no caixa. Peças, quilos e metros não se misturam.
         tx
           .select({
             serviceName: laundryServices.name,
+            unit: laundryServices.pricingUnit,
             quantity: sql<string>`sum(${soItems.quantity})`,
-            revenue: sql<string>`sum(${soItems.total})`,
+            contracted: sql<string>`sum(${soItems.total})`,
           })
           .from(laundryItemDetails)
           .innerJoin(soItems, eq(soItems.id, laundryItemDetails.itemId))
           .innerJoin(soOrders, eq(soOrders.id, laundryItemDetails.orderId))
           .innerJoin(laundryServices, eq(laundryServices.id, laundryItemDetails.serviceId))
           .where(and(gte(soOrders.receivedAt, start(from)), lt(soOrders.receivedAt, end(to)), sql`${soOrders.status} <> 'cancelled'`))
-          .groupBy(laundryServices.name)
-          .orderBy(desc(sql`3`)),
+          .groupBy(laundryServices.name, laundryServices.pricingUnit)
+          .orderBy(desc(sql`4`)),
         tx
           .select({ userName: sql<string>`coalesce(${users.name}, 'Sistema')`, moves: count() })
           .from(laundryPieceEvents)
@@ -78,7 +80,7 @@ export class LaundryReportsService {
         piecesReady: events[0]!.ready,
         reworks: events[0]!.reworks,
         incidents: events[0]!.incidents,
-        byService: byService.map((s) => ({ serviceName: s.serviceName, quantity: Number(s.quantity), revenue: Number(s.revenue) })),
+        byService: byService.map((s) => ({ serviceName: s.serviceName, unit: s.unit, quantity: Number(s.quantity), contracted: Number(s.contracted) })),
         byOperator,
       };
     });

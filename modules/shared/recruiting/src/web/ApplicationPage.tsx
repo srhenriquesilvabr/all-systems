@@ -7,6 +7,9 @@ import { applicationStatusLabel } from '../contracts';
 import { Info, ResumeButton, ScoreBadge, Timeline } from './common';
 import { recruitingKey, type Analysis, type ApplicationDetail } from './types';
 
+/** Admissão no RH: ?admitir= traz a pessoa e ?empresa= a empresa contratante da vaga (na consultoria de RH). */
+const admissionPath = (teamMemberId: string, employerCustomerId: string | null) => `/rh/colaboradores?admitir=${teamMemberId}${employerCustomerId ? `&empresa=${employerCustomerId}` : ''}`;
+
 export function ApplicationPage() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
@@ -44,11 +47,11 @@ export function ApplicationPage() {
   });
   const analyze = useMutation({ mutationFn: (analysis: 'auto' | 'heuristic') => api(`/recruiting/applications/${id}/analyze`, { method: 'POST', body: { analysis } }), onSuccess: refresh });
   const hire = useMutation({
-    mutationFn: () => api<{ teamMemberId: string; hrActive: boolean }>(`/recruiting/applications/${id}/hire`, { method: 'POST', body: { startedOn: startedOn || null } }),
+    mutationFn: () => api<{ teamMemberId: string; hrActive: boolean; employerCustomerId: string | null }>(`/recruiting/applications/${id}/hire`, { method: 'POST', body: { startedOn: startedOn || null } }),
     onSuccess: async (r) => {
       await refresh();
-      // Com o RH ativo, segue para a admissão com a pessoa já escolhida.
-      if (r.hrActive) navigate(`/rh/colaboradores?admitir=${r.teamMemberId}`);
+      // Com o RH ativo, segue para a admissão com a pessoa já escolhida e a empresa da vaga como empregador.
+      if (r.hrActive) navigate(admissionPath(r.teamMemberId, r.employerCustomerId));
     },
   });
 
@@ -147,7 +150,7 @@ export function ApplicationPage() {
                       </Button>
                     )}
                     {hrActive && (
-                      <Button size="sm" onClick={() => navigate(`/rh/colaboradores?admitir=${a.teamMemberId}`)}>
+                      <Button size="sm" onClick={() => navigate(admissionPath(a.teamMemberId!, a.job.customerId))}>
                         Abrir admissão no RH
                       </Button>
                     )}

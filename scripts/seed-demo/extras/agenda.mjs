@@ -199,7 +199,7 @@ async function book(api, items) {
   const bank = accounts.find((a) => a.type === 'bank') ?? cash;
   for (const item of items) {
     try {
-      let a = await api.post('/scheduling/appointments', {
+      let a = await api.post('/scheduling/appointments', { overrideSchedule: true,
         customerId: item.customerId,
         resourceId: item.resourceId,
         roomId: item.roomId ?? null,

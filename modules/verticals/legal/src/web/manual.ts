@@ -81,7 +81,7 @@ export const manual: ManualGuide = {
             'Clique em Registrar andamento.',
           ],
         },
-        { warn: 'O andamento não pode ser editado nem apagado depois. Se errar, registre um novo explicando a correção.' },
+        { warn: 'Errou? Clique em Editar no andamento, ou em Excluir, informando o motivo. O texto anterior fica na auditoria. Os andamentos automáticos não mudam à mão: corrija a origem.' },
         { warn: 'Os andamentos são lançados à mão. O sistema não consulta o tribunal nem importa publicações.' },
       ],
       technical: [
@@ -89,7 +89,8 @@ export const manual: ManualGuide = {
           list: [
             'Permissão: legal.cases.write. Texto de 3 a 5.000 caracteres.',
             'A data aceita passado e futuro. A lista é ordenada por essa data, e mostra o autor.',
-            'Entram sozinhos: "Situação alterada para: ...", "Prazo cumprido: ..." e "Êxito registrado: ...".',
+            'Entram sozinhos, marcados como automático: "Situação alterada para: ...", "Prazo cumprido: ...", "Prazo reaberto: ..." e "Êxito registrado: ...".',
+            'Edição e exclusão: legal.cases.write, só no lançado à mão. O registro excluído sai das telas e continua no banco, com autor, data e motivo. Andamento corrigido mostra "corrigido em".',
             'O cliente não recebe aviso de andamento.',
           ],
         },
@@ -112,7 +113,7 @@ export const manual: ManualGuide = {
             'Clique em Salvar.',
           ],
         },
-        { warn: 'O prazo não pode ser editado nem excluído depois de salvo. Confira a data. Se errar, marque como cumprido e cadastre outro: isso também gera um andamento "Prazo cumprido".' },
+        { warn: 'Prazo errado não precisa virar cumprido. Em aberto, clique em Editar para corrigir, ou em Excluir, informando o motivo.' },
         { warn: 'O sistema não conta dias úteis, feriados nem recessos. O Vencimento é a data que você digitar.' },
       ],
       technical: [
@@ -149,10 +150,11 @@ export const manual: ManualGuide = {
         {
           list: [
             'Permissões: legal.cases.read para ver e legal.cases.write para cumprir e reabrir.',
-            'Só os meus filtra por Quem cuida. Prazo sem ninguém designado não aparece aí, mesmo que a pessoa seja Responsável pelo processo.',
+            'Só os meus mostra o que está em Quem cuida com a pessoa e também todos os prazos dos processos em que ela é Responsável.',
             'Vencidos sempre aparecem, em qualquer período. A tela mostra até 500 prazos.',
             'Cumprido em aceita passado, nunca futuro. O andamento "Prazo cumprido" sai com essa data.',
-            'Reabrir não apaga esse andamento e não envia novo aviso.',
+            'Reabrir tira o andamento "Prazo cumprido", registra "Prazo reaberto: ..." e libera o aviso de novo: sai na próxima rotina, se já estiver dentro da antecedência. O que foi retirado fica na auditoria.',
+            'Editar e excluir valem só para prazo em aberto; cumprido, reabra antes ("Este prazo já foi cumprido: reabra antes de alterar ou excluir"). Mudar vencimento, antecedência ou Quem cuida libera o aviso de novo. Prazo excluído sai das telas e dos avisos, e o motivo fica na auditoria. Marcar cumprido duas vezes é recusado.',
             'A coluna Próximo prazo, em Processos, mostra o prazo em aberto de vencimento mais próximo.',
           ],
         },
@@ -175,14 +177,14 @@ export const manual: ManualGuide = {
         },
         { tip: 'O que foi ligado ao processo aparece na aba Agenda dele.' },
         { warn: 'A audiência vai para a agenda como qualquer horário, e o cliente recebe o aviso automático de "horário marcado". Revise o texto em Configurações › Notificações, aba Mensagens, se precisar.' },
-        { warn: 'O horário de audiência é informado à mão. Se a audiência estiver fora do expediente cadastrado, use o campo Outro horário.' },
+        { warn: 'Audiência fora do expediente cadastrado é recusada à primeira tentativa. Quem configura a agenda (shared.scheduling.manage) clica em Marcar mesmo assim. Sem essa permissão, peça a essa pessoa, ou ajuste o expediente do advogado.' },
       ],
       technical: [
         {
           list: [
             'Permissões: shared.scheduling.write para marcar e shared.scheduling.read para a aba Agenda.',
             'O campo Processo lista só casos Em andamento e Suspenso, do cliente escolhido. É opcional.',
-            'A aba Agenda do processo lista todos os horários ligados, inclusive cancelados, sem mostrar a situação.',
+            'A aba Agenda do processo lista todos os horários ligados, com a situação de cada um. Cancelado aparece riscado, com o motivo.',
             'Marcação avulsa não confere expediente nem bloqueio. O banco recusa sobreposição no mesmo profissional.',
             'Repetir aceita até 52 datas e confere expediente e bloqueio em cada uma.',
             'O prazo e a audiência não se ligam: audiência não cria prazo, nem prazo cria horário.',
@@ -206,14 +208,15 @@ export const manual: ManualGuide = {
           ],
         },
         { warn: 'Concluído, Faltou e Cancelado não voltam atrás.' },
-        { warn: 'Não dá para trocar o advogado, o serviço ou o processo de um horário já marcado. Cancele e marque de novo.' },
+        { warn: 'Para trocar advogado, serviço, preço ou desconto de um horário aberto, clique em Alterar. O processo ligado não muda: para isso, cancele e marque de novo.' },
       ],
       technical: [
         {
           list: [
-            'Transições: Agendado e Confirmado vão para Chegou, Em atendimento, Concluído, Faltou ou Cancelado (Agendado também para Confirmado). Chegou vai para Em atendimento, Concluído ou Cancelado. Em atendimento só para Concluído, embora a tela mostre Cancelar horário.',
+            'Transições: Agendado e Confirmado vão para Chegou, Em atendimento, Concluído, Faltou ou Cancelado (Agendado também para Confirmado). Chegou vai para Em atendimento, Concluído ou Cancelado. Em atendimento só para Concluído.',
             'Permissões: shared.scheduling.status e shared.scheduling.write.',
-            'Remarcar só em Agendado e Confirmado, para horários livres do mesmo profissional. A situação volta para Agendado.',
+            'Remarcar só em Agendado e Confirmado. A tela mostra os horários livres do mesmo profissional, e Outro horário confere expediente e folga. A situação volta para Agendado.',
+            'Alterar vale até concluir e pede shared.scheduling.write; mudar preço ou desconto pede também shared.scheduling.payments. O início não muda, e o fim acompanha a duração. Valem as mesmas conferências da marcação (quem faz, expediente, folga, sala). O total não pode ficar abaixo do que já foi pago, e linha coberta por pacote ou tratamento não muda de valor. Trocar profissional ou serviço avisa o cliente.',
             'Concluir horário com valor, como Consulta inicial, gera "a receber" do saldo.',
             'No WhatsApp manual, use Abrir no WhatsApp e Já enviei, dentro do horário.',
           ],
@@ -264,7 +267,7 @@ export const manual: ManualGuide = {
             'Clique em Lançar.',
           ],
         },
-        { warn: 'O botão Cancelar age na hora, sem pedir confirmação. Ele cancela as parcelas em aberto. As já recebidas continuam no financeiro.' },
+        { warn: 'O botão Cancelar pede confirmação no próprio cartão, mostrando quanto está em aberto. Ele cancela as parcelas em aberto. As já recebidas continuam no financeiro.' },
         { warn: 'O sistema não confere se o valor ou o percentual seguem o contrato ou as regras da profissão. Isso é com o escritório.' },
       ],
       technical: [
@@ -328,7 +331,8 @@ export const manual: ManualGuide = {
             'Baixar exige core.finance.write, que a Secretaria tem. Registrar pagamento na agenda exige shared.scheduling.payments, que os dois papéis têm.',
             'Parcelas de honorários só são canceladas pela aba Honorários, não em Lançamentos.',
             'A tela Lançamentos mostra o cliente na coluna Cliente, e a busca encontra pelo nome dele. O título do processo também faz parte da descrição.',
-            'Pagamento na agenda: data de hoje, sem valor acima do saldo. Ao concluir, o saldo vira "a receber" e só se resolve pela agenda. Faltou ou Cancelado zera o saldo.',
+            'Pagamento na agenda: na data informada (padrão hoje; futuro é recusado), sem valor acima do saldo. Ao concluir, o saldo vira "a receber" e só se resolve pela agenda. Faltou ou Cancelado zera o saldo.',
+            'Com Caixa escolhido e sessão aberta, o recebimento entra na conferência do fechamento como "Recebimento de atendimento". No financeiro continua um lançamento só. Dinheiro no caixa vai para a conta Caixa. Caixa fechado recusa o pagamento de hoje; com data passada, a tela não oferece caixa.',
           ],
         },
       ],
@@ -342,20 +346,20 @@ export const manual: ManualGuide = {
         {
           steps: [
             'Abra Serviços da agenda.',
-            'Edite Audiência, Diligência e Reunião com cliente e desmarque Pode ser marcado online pelo cliente. Clique em Salvar em cada um.',
             'Desça até Lembretes e agendamento online e marque Receber agendamentos online.',
+            'Em Serviços liberados no link, marque o que o visitante pode marcar. Deixe de fora Audiência e Diligência.',
             'Preencha Antecedência mínima (horas) e Até quantos dias à frente.',
             'Clique em Salvar configurações, depois em Copiar, e divulgue o link.',
           ],
         },
-        { warn: 'Todos os serviços vêm liberados para o link. Sem o passo 2, um visitante poderia marcar uma Audiência na agenda do escritório.' },
+        { warn: 'Serviço novo vem desligado do link. Audiência e Diligência saíram do link em todos os escritórios: para um visitante marcar, alguém precisa ligar de propósito.' },
       ],
       technical: [
         {
           list: [
             'Cliente reconhecido pelo celular. Sem cadastro, um novo é criado com nome, celular e e-mail.',
             'A marcação online não liga o horário a um processo.',
-            'Até 5 serviços por marcação e 5 marcações por IP a cada 10 minutos. A página mostra no máximo os próximos 14 dias.',
+            'Até 5 serviços por marcação e 5 marcações por IP a cada 10 minutos. A página mostra os dias até o limite de Até quantos dias à frente (até 180), com um campo de data para ir direto.',
             'Salvar exige core.access.settings. Sem pagamento pelo link.',
           ],
         },

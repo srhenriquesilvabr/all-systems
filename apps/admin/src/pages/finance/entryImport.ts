@@ -21,7 +21,7 @@ const columns: ImportColumn[] = [
       { value: 'cash', label: 'Dinheiro' },
       { value: 'credit_card', label: 'Cartão de crédito' },
       { value: 'debit_card', label: 'Cartão de débito' },
-      { value: 'transfer', label: 'Boleto' },
+      { value: 'boleto', label: 'Boleto' },
       { value: 'transfer', label: 'Transferência' },
     ],
     example: 'Pix',

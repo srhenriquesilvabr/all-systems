@@ -22,8 +22,11 @@ import {
   type GuaranteeType,
   type Lease,
   type LeaseAdjustment,
+  type LeaseCharge,
   type LeaseDetail,
+  type LeaseExtra,
   type LeaseStatus,
+  type LeaseUpdateResult,
   type OwnerStatement,
   type PayoutStatus,
   type Property,
@@ -62,6 +65,7 @@ export function LeasesPage() {
         query: { status: status || undefined, ownerId: ownerId || undefined, renterId: renterId || undefined, dueThisMonth: dueThisMonth || undefined },
       }),
   });
+  if (creating) return <LeaseForm property={null} onClose={() => setCreating(false)} onSaved={(l) => navigate(`/imoveis/locacoes/${l.id}`)} />;
   const people = (pick: (l: Lease) => { id: string; name: string }) =>
     [...new Map((all.data ?? []).map((l) => [pick(l).id, pick(l).name])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
   return (
@@ -166,7 +170,6 @@ export function LeasesPage() {
         )}
       </Card>
       <LeaseSettingsCard />
-      {creating && <LeaseModal property={null} onClose={() => setCreating(false)} onSaved={(l) => navigate(`/imoveis/locacoes/${l.id}`)} />}
     </>
   );
 }
@@ -257,8 +260,12 @@ export function LeasePage() {
   const { id = '' } = useParams();
   const canWrite = useCan('real_estate.leases.write');
   const lease = useQuery({ queryKey: [...key, 'lease', id], queryFn: () => api<LeaseDetail>(`/real-estate/leases/${id}`) });
+  const canPayout = useCan('core.finance.write');
   const [modal, setModal] = useState<'terminate' | 'extra' | 'extend' | null>(null);
   const [applying, setApplying] = useState<LeaseAdjustment | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [applied, setApplied] = useState<LeaseUpdateResult['applied']>(null);
+  const [paying, setPaying] = useState<PayoutTarget | null>(null);
   const queryClient = useQueryClient();
   const cancelExtra = useMutation({
     mutationFn: (extraId: string) => api(`/real-estate/leases/${id}/extras/${extraId}/cancel`, { method: 'POST' }),
@@ -269,16 +276,32 @@ export function LeasePage() {
   const l = lease.data;
   const active = l.status === 'active';
   const charges = l.charges.filter((c) => c.status === 'active');
+  if (editing) {
+    return (
+      <LeaseEditForm
+        lease={l}
+        onClose={() => setEditing(false)}
+        onSaved={(r) => {
+          setApplied(r.applied);
+          setEditing(false);
+        }}
+      />
+    );
+  }
   return (
     <>
       <PageHeader
         title={`Contrato de locação nº ${l.number}`}
         description={`${l.renter.name} · Cód. ${l.property.code} — ${l.property.title}`}
         actions={
-          canWrite && (
+          canWrite &&
+          active && (
             <>
               <Button variant="secondary" onClick={() => setModal('extra')}>
                 Cobrança extra
+              </Button>
+              <Button variant="secondary" onClick={() => setEditing(true)}>
+                Editar contrato
               </Button>
               {active && (
                 <>
@@ -295,6 +318,13 @@ export function LeasePage() {
         }
       />
       {cancelExtra.error && <Alert>{errorText(cancelExtra.error, 'Erro ao cancelar')}</Alert>}
+      {applied && (
+        <Alert tone="success">
+          Valores novos a partir de {formatDate(applied.from)}: {applied.rebilled} mensalidade(s) relançada(s) no financeiro
+          {applied.kept > 0 ? `; ${applied.kept} com recebimento ou repasse já baixado ficou(aram) como estava(m)` : ''}.
+        </Alert>
+      )}
+      {paying && <PayoutForm lease={l} target={paying} onClose={() => setPaying(null)} />}
       <div className="grid gap-6 lg:grid-cols-[20rem_1fr]">
         <Card className="h-fit space-y-2 p-5 text-sm">
           <Badge tone={leaseTone[l.status]}>{leaseStatusLabel[l.status]}</Badge>
@@ -324,6 +354,7 @@ export function LeasePage() {
           <Line label={`Taxa de administração`}>{pct(l.adminFeePercent)}</Line>
           <Line label="Garantia">{guaranteeTypeLabel[l.guaranteeType]}</Line>
           {l.guaranteeAmount != null && <Line label="Valor da garantia">{formatMoney(l.guaranteeAmount)}</Line>}
+          {l.guaranteeType === 'deposit' && <p className="text-xs text-fg-muted">A caução é só um registro: o valor não entra no financeiro nem é devolvido ou abatido pelo sistema. Guarde e devolva por fora.</p>}
           {l.guarantorName && (
             <Line label="Fiador">
               {l.guarantorName} {l.guarantorDocument ? `(${formatDocument(l.guarantorDocument)})` : ''}
@@ -354,7 +385,7 @@ export function LeasePage() {
           <Card>
             <div className="flex items-center justify-between px-4 pt-4">
               <h2 className="font-medium">Mensalidades</h2>
-              <span className="text-xs text-fg-muted">Recebimento e repasse são baixados no financeiro.</span>
+              <span className="text-xs text-fg-muted">O recebimento é baixado no financeiro; o repasse, aqui.</span>
             </div>
             {charges.length === 0 ? (
               <EmptyState title="Nenhuma mensalidade lançada" />
@@ -389,7 +420,17 @@ export function LeasePage() {
                         {formatMoney(c.payout)}
                         <div className="text-xs text-fg-muted">{formatDate(c.payoutDate)}</div>
                       </Td>
-                      <Td>{c.payoutStatus ? <Badge tone={payoutTone[c.payoutStatus]}>{payoutStatusLabel[c.payoutStatus]}</Badge> : '—'}</Td>
+                      <Td>
+                        {c.payoutStatus ? <Badge tone={payoutTone[c.payoutStatus]}>{payoutStatusLabel[c.payoutStatus]}</Badge> : '—'}
+                        {c.payoutStatus === 'paid' && c.receipt !== 'paid' && <div className="text-xs text-danger-600">Repassado antes de receber</div>}
+                        {canPayout && c.payoutStatus === 'pending' && (
+                          <div>
+                            <button type="button" className="text-xs text-brand-700 hover:underline" onClick={() => setPaying({ kind: 'charge', item: c })}>
+                              repassar
+                            </button>
+                          </div>
+                        )}
+                      </Td>
                     </tr>
                   ))}
                 </tbody>
@@ -410,7 +451,13 @@ export function LeasePage() {
                     </span>
                     <span className="flex items-center gap-2">
                       <Badge tone={receiptTone[e.receipt]}>{receiptStatusLabel[e.receipt]}</Badge>
-                      {canWrite && e.status === 'active' && e.receipt !== 'paid' && (
+                      {e.payoutStatus && e.status === 'active' && <Badge tone={payoutTone[e.payoutStatus]}>{payoutStatusLabel[e.payoutStatus]}</Badge>}
+                      {canPayout && e.status === 'active' && e.payoutStatus === 'pending' && (
+                        <Button size="sm" variant="secondary" onClick={() => setPaying({ kind: 'extra', item: e })}>
+                          Repassar
+                        </Button>
+                      )}
+                      {canWrite && e.status === 'active' && e.receipt !== 'paid' && e.payoutStatus !== 'paid' && (
                         <Button size="sm" variant="ghost" loading={cancelExtra.isPending && cancelExtra.variables === e.id} onClick={() => cancelExtra.mutate(e.id)}>
                           Cancelar
                         </Button>
@@ -468,6 +515,216 @@ function Line({ label, strong, children }: { label: string; strong?: boolean; ch
       <span className={strong ? '' : 'text-fg-muted'}>{label}</span>
       <span className="text-right tabular-nums">{children}</span>
     </div>
+  );
+}
+
+type PayoutTarget = { kind: 'charge'; item: LeaseCharge } | { kind: 'extra'; item: LeaseExtra };
+
+/**
+ * Baixa do repasse no contrato. Sem o aluguel recebido, o aviso aparece antes e a confirmação é
+ * obrigatória: pagar assim é adiantar o dinheiro do caixa da imobiliária.
+ */
+function PayoutForm({ lease, target, onClose }: { lease: LeaseDetail; target: PayoutTarget; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const accounts = useQuery({ queryKey: [...key, 'payout-accounts'], queryFn: () => api<{ id: string; name: string }[]>('/real-estate/leases/payout-accounts') });
+  const [accountId, setAccountId] = useState('');
+  const [paidAt, setPaidAt] = useState(today());
+  const [acknowledged, setAcknowledged] = useState(false);
+  const amount = target.kind === 'charge' ? target.item.payout : target.item.amount;
+  const received = target.item.receipt === 'paid';
+  const chosen = accountId || accounts.data?.[0]?.id || '';
+  const save = useMutation({
+    mutationFn: () =>
+      api(`/real-estate/leases/${lease.id}/${target.kind === 'charge' ? 'charges' : 'extras'}/${target.item.id}/payout`, { method: 'POST', body: { paidAt, accountId: chosen, acknowledgeUnreceived: acknowledged } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: key });
+      onClose();
+    },
+  });
+  return (
+    <Card className="mb-4 space-y-3 p-4 text-sm">
+      <h2 className="font-medium">
+        Repasse ao proprietário: {formatMoney(amount)} para {lease.owner.name}
+      </h2>
+      {save.error && <Alert>{errorText(save.error, 'Erro ao registrar o repasse')}</Alert>}
+      {!received && (
+        <Alert>
+          O inquilino ainda não pagou este valor. Se repassar agora, a imobiliária adianta o dinheiro do próprio caixa e arca com o prejuízo se o aluguel não for pago.
+        </Alert>
+      )}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="Pago em">{(id) => <Input id={id} type="date" max={today()} value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />}</Field>
+        <Field label="Conta">
+          {(id) => (
+            <Select id={id} value={chosen} onChange={(e) => setAccountId(e.target.value)}>
+              {accounts.data?.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
+      </div>
+      {!received && <Checkbox label="Sei que o aluguel não foi recebido e quero repassar mesmo assim" checked={acknowledged} onChange={(e) => setAcknowledged(e.target.checked)} />}
+      <div className="flex gap-2">
+        <Button size="sm" disabled={!chosen || !paidAt || (!received && !acknowledged)} loading={save.isPending} onClick={() => save.mutate()}>
+          Registrar repasse
+        </Button>
+        <Button size="sm" variant="secondary" onClick={onClose}>
+          Voltar
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+/** Campos da garantia, iguais no novo contrato e na edição. */
+function GuaranteeFields({ form, set }: { form: GuaranteeForm; set: (patch: Partial<GuaranteeForm>) => void }) {
+  const g = form.guaranteeType;
+  return (
+    <>
+      <Field label="Garantia">
+        {(id) => (
+          <Select id={id} value={g} onChange={(e) => set({ guaranteeType: e.target.value as GuaranteeType })}>
+            {guaranteeTypes.map((t) => (
+              <option key={t} value={t}>
+                {guaranteeTypeLabel[t]}
+              </option>
+            ))}
+          </Select>
+        )}
+      </Field>
+      {(g === 'deposit' || g === 'capitalization') && (
+        <Field label={g === 'deposit' ? 'Valor da caução (R$)' : 'Valor do título (R$)'} hint={g === 'deposit' ? `Até ${MAX_DEPOSIT_RENTS} aluguéis. É só um registro: não entra no financeiro nem é devolvida ou abatida pelo sistema.` : undefined}>
+          {(id) => <Input id={id} inputMode="decimal" required={g === 'deposit'} value={form.guaranteeAmount} onChange={(e) => set({ guaranteeAmount: e.target.value })} />}
+        </Field>
+      )}
+      {g === 'guarantor' && (
+        <>
+          <Field label="Nome do fiador">{(id) => <Input id={id} required value={form.guarantorName} onChange={(e) => set({ guarantorName: e.target.value })} />}</Field>
+          <Field label="CPF do fiador">{(id) => <Input id={id} required inputMode="numeric" value={form.guarantorDocument} onChange={(e) => set({ guarantorDocument: e.target.value })} />}</Field>
+        </>
+      )}
+      {(g === 'insurance' || g === 'capitalization') && (
+        <>
+          <Field label={g === 'insurance' ? 'Seguradora' : 'Emissora'}>
+            {(id) => <Input id={id} required={g === 'insurance'} value={form.guaranteeProvider} onChange={(e) => set({ guaranteeProvider: e.target.value })} />}
+          </Field>
+          <Field label={g === 'insurance' ? 'Nº da apólice' : 'Nº do título'}>{(id) => <Input id={id} required value={form.guaranteeNumber} onChange={(e) => set({ guaranteeNumber: e.target.value })} />}</Field>
+        </>
+      )}
+    </>
+  );
+}
+interface GuaranteeForm {
+  guaranteeType: GuaranteeType;
+  guaranteeAmount: string;
+  guarantorName: string;
+  guarantorDocument: string;
+  guaranteeProvider: string;
+  guaranteeNumber: string;
+}
+
+/**
+ * Edição do contrato ativo, na própria página. A tela diz antes de salvar o que vai mudar nas
+ * mensalidades: quantas são relançadas e quantas ficam como estão (já recebidas ou repassadas).
+ */
+function LeaseEditForm({ lease, onClose, onSaved }: { lease: LeaseDetail; onClose: () => void; onSaved: (r: LeaseUpdateResult) => void }) {
+  const queryClient = useQueryClient();
+  const moneyText = (n: number) => (n ? n.toFixed(2).replace('.', ',') : '');
+  const charges = lease.charges.filter((c) => c.status === 'active');
+  const settled = (c: LeaseCharge) => c.receipt === 'paid' || c.payoutStatus === 'paid';
+  const now = today();
+  const firstOpen = charges.find((c) => c.periodStart >= now && !settled(c)) ?? charges.find((c) => !settled(c));
+  const [form, setForm] = useState({
+    condoFee: moneyText(lease.condoFee),
+    iptuMonthly: moneyText(lease.iptuMonthly),
+    applyFrom: firstOpen?.periodStart ?? '',
+    guaranteeType: lease.guaranteeType,
+    guaranteeAmount: lease.guaranteeAmount ? moneyText(lease.guaranteeAmount) : '',
+    guarantorName: lease.guarantorName ?? '',
+    guarantorDocument: lease.guarantorDocument ?? '',
+    guaranteeProvider: lease.guaranteeProvider ?? '',
+    guaranteeNumber: lease.guaranteeNumber ?? '',
+    notes: lease.notes ?? '',
+  });
+  const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
+  const condo = form.condoFee ? parseMoney(form.condoFee) : 0;
+  const iptu = form.iptuMonthly ? parseMoney(form.iptuMonthly) : 0;
+  const changed = condo !== lease.condoFee || iptu !== lease.iptuMonthly;
+  const affected = charges.filter((c) => c.periodStart >= form.applyFrom && (c.condoFee !== condo || c.iptu !== iptu));
+  const save = useMutation({
+    mutationFn: () =>
+      api<LeaseUpdateResult>(`/real-estate/leases/${lease.id}`, {
+        method: 'PATCH',
+        body: {
+          condoFee: condo,
+          iptuMonthly: iptu,
+          applyFrom: changed ? form.applyFrom || null : null,
+          guaranteeType: form.guaranteeType,
+          guaranteeAmount: form.guaranteeAmount ? parseMoney(form.guaranteeAmount) : null,
+          guarantorName: form.guarantorName || null,
+          guarantorDocument: form.guarantorDocument || null,
+          guaranteeProvider: form.guaranteeProvider || null,
+          guaranteeNumber: form.guaranteeNumber || null,
+          notes: form.notes || null,
+        },
+      }),
+    onSuccess: (r) => {
+      queryClient.invalidateQueries({ queryKey: key });
+      onSaved(r);
+    },
+  });
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    save.mutate();
+  }
+  return (
+    <>
+      <PageHeader title={`Editar contrato nº ${lease.number}`} description={`${lease.renter.name} · Cód. ${lease.property.code} — ${lease.property.title}`} />
+      <Card className="p-5">
+        <form onSubmit={submit} className="space-y-4">
+          {save.error && <Alert>{errorText(save.error, 'Erro ao salvar')}</Alert>}
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Field label="Condomínio (R$/mês)">{(id) => <Input id={id} inputMode="decimal" value={form.condoFee} onChange={(e) => set({ condoFee: e.target.value })} />}</Field>
+            <Field label="IPTU (R$/mês)">{(id) => <Input id={id} inputMode="decimal" value={form.iptuMonthly} onChange={(e) => set({ iptuMonthly: e.target.value })} />}</Field>
+            {changed && (
+              <Field label="A partir de">
+                {(id) => (
+                  <Select id={id} value={form.applyFrom} onChange={(e) => set({ applyFrom: e.target.value })}>
+                    {charges.map((c) => (
+                      <option key={c.id} value={c.periodStart} disabled={settled(c)}>
+                        {monthOf(c.periodStart)} (vence {formatDate(c.dueDate)}){settled(c) ? ' — já baixada' : ''}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+            )}
+          </div>
+          {changed && (
+            <Alert tone="info">
+              {affected.filter((c) => !settled(c)).length} mensalidade(s) em aberto serão relançadas com os valores novos: a anterior fica cancelada no financeiro e o proprietário recebe o novo repasse.
+              {affected.some(settled) && ` ${affected.filter(settled).length} já recebida(s) ou repassada(s) não muda(m): acerte a diferença por cobrança extra.`} As mensalidades seguintes já nascem com os valores novos.
+            </Alert>
+          )}
+          <div className="grid gap-4 sm:grid-cols-3">
+            <GuaranteeFields form={form} set={set} />
+          </div>
+          <Field label="Observações">{(id) => <Textarea id={id} rows={2} value={form.notes} onChange={(e) => set({ notes: e.target.value })} />}</Field>
+          <p className="text-xs text-fg-muted">Aluguel muda pelo reajuste, e prazo pela prorrogação. Início, vencimento, índice e taxa de administração fazem parte do que foi assinado e não mudam aqui.</p>
+          <div className="flex gap-2">
+            <Button type="submit" loading={save.isPending}>
+              Salvar
+            </Button>
+            <Button type="button" variant="secondary" onClick={onClose}>
+              Cancelar
+            </Button>
+          </div>
+        </form>
+      </Card>
+    </>
   );
 }
 
@@ -683,7 +940,7 @@ function ExtendModal({ lease, onClose }: { lease: LeaseDetail; onClose: () => vo
 // ---- Novo contrato --------------------------------------------------------------------------------
 
 /** Novo contrato: da página do imóvel (imóvel já escolhido) ou da lista de locações. */
-export function LeaseModal({ property, onClose, onSaved }: { property: Property | null; onClose: () => void; onSaved?: (l: LeaseDetail) => void }) {
+export function LeaseForm({ property, onClose, onSaved }: { property: Property | null; onClose: () => void; onSaved?: (l: LeaseDetail) => void }) {
   const queryClient = useQueryClient();
   const [propertyId, setPropertyId] = useState(property?.id ?? '');
   const [renter, setRenter] = useState<CustomerOption | null>(null);
@@ -700,7 +957,8 @@ export function LeaseModal({ property, onClose, onSaved }: { property: Property 
     termMonths: '30',
     rent: money(property?.rentPrice),
     dueDay: '10',
-    condoFee: '',
+    // Pela página do imóvel, o condomínio vem do cadastro, como na lista de Locações.
+    condoFee: money(property?.condoFee),
     iptuMonthly: '',
     adjustmentIndex: 'igpm' as AdjustmentIndex,
     adjustmentPercent: '',
@@ -760,134 +1018,104 @@ export function LeaseModal({ property, onClose, onSaved }: { property: Property 
     e.preventDefault();
     save.mutate();
   }
-  const g = form.guaranteeType;
   return (
-    <Modal
-      open
-      title="Novo contrato de locação"
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose}>
-            Cancelar
-          </Button>
-          <Button type="submit" form="re-lease-form" loading={save.isPending} disabled={!renter || !chosen}>
-            Assinar contrato
-          </Button>
-        </>
-      }
-    >
-      {!renter ? (
-        <div className="space-y-2">
-          <p className="text-sm text-fg-muted">Quem é o inquilino?</p>
-          <CustomerSearch onSelect={setRenter} />
-        </div>
-      ) : (
-        <form id="re-lease-form" onSubmit={submit} className="space-y-4">
-          {save.error && <Alert>{errorText(save.error, 'Erro ao salvar')}</Alert>}
-          <p className="text-sm">
-            Inquilino: <span className="font-medium">{renter.name}</span>
-            {chosen && (
-              <>
-                {' '}
-                · Proprietário: <span className="font-medium">{chosen.owner.name}</span>
-              </>
-            )}
-          </p>
-          {!property && (
-            <Field label="Imóvel" hint="Imóveis disponíveis para locação.">
-              {(id) => (
-                <Select id={id} required value={propertyId} onChange={(e) => pickProperty(e.target.value)}>
-                  <option value="">{available.isPending ? 'Carregando…' : 'Escolha o imóvel'}</option>
-                  {options.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      Cód. {p.code} — {p.title} ({p.district})
-                    </option>
-                  ))}
-                </Select>
+    <>
+      <PageHeader title="Novo contrato de locação" description={property ? `Cód. ${property.code} — ${property.title}` : undefined} />
+      <Card className="p-5">
+        {!renter ? (
+          <div className="space-y-3">
+            <p className="text-sm text-fg-muted">Quem é o inquilino?</p>
+            <CustomerSearch onSelect={setRenter} />
+            <Button variant="secondary" onClick={onClose}>
+              Cancelar
+            </Button>
+          </div>
+        ) : (
+          <form id="re-lease-form" onSubmit={submit} className="space-y-4">
+            {save.error && <Alert>{errorText(save.error, 'Erro ao salvar')}</Alert>}
+            <p className="text-sm">
+              Inquilino: <span className="font-medium">{renter.name}</span>
+              {chosen && (
+                <>
+                  {' '}
+                  · Proprietário: <span className="font-medium">{chosen.owner.name}</span>
+                </>
               )}
-            </Field>
-          )}
-          <div className="grid gap-4 sm:grid-cols-3">
-            <Field label="Início">{(id) => <Input id={id} type="date" required value={form.startDate} onChange={(e) => set({ startDate: e.target.value })} />}</Field>
-            <Field label="Prazo (meses)">{(id) => <Input id={id} type="number" min={1} max={240} required value={form.termMonths} onChange={(e) => set({ termMonths: e.target.value })} />}</Field>
-            <Field label="Dia do vencimento">{(id) => <Input id={id} type="number" min={1} max={31} required value={form.dueDay} onChange={(e) => set({ dueDay: e.target.value })} />}</Field>
-            <Field label="Aluguel (R$/mês)">{(id) => <Input id={id} inputMode="decimal" required value={form.rent} onChange={(e) => set({ rent: e.target.value })} />}</Field>
-            <Field label="Condomínio (R$/mês)" hint="Repassado ao proprietário.">
-              {(id) => <Input id={id} inputMode="decimal" value={form.condoFee} onChange={(e) => set({ condoFee: e.target.value })} />}
-            </Field>
-            <Field label="IPTU (R$/mês)" hint="Repassado ao proprietário.">
-              {(id) => <Input id={id} inputMode="decimal" value={form.iptuMonthly} onChange={(e) => set({ iptuMonthly: e.target.value })} />}
-            </Field>
-            <Field label="Taxa de administração (%)" hint={rent > 0 ? `${formatMoney(fee)} por mês; repasse ${formatMoney(rent - fee)} + condomínio e IPTU.` : undefined}>
-              {(id) => <Input id={id} inputMode="decimal" value={form.adminFeePercent} onChange={(e) => set({ adminFeePercent: e.target.value })} />}
-            </Field>
-            <Field label="Índice de reajuste">
-              {(id) => (
-                <Select id={id} value={form.adjustmentIndex} onChange={(e) => set({ adjustmentIndex: e.target.value as AdjustmentIndex })}>
-                  {adjustmentIndexes.map((i) => (
-                    <option key={i} value={i}>
-                      {adjustmentIndexLabel[i]}
-                    </option>
-                  ))}
-                </Select>
-              )}
-            </Field>
-            {form.adjustmentIndex === 'fixed' && (
-              <Field label="Reajuste anual (%)">{(id) => <Input id={id} inputMode="decimal" required value={form.adjustmentPercent} onChange={(e) => set({ adjustmentPercent: e.target.value })} />}</Field>
-            )}
-            {form.adjustmentIndex !== 'none' && (
-              <Field label="Mês do aniversário">
+            </p>
+            {!property && (
+              <Field label="Imóvel" hint="Imóveis disponíveis para locação.">
                 {(id) => (
-                  <Select id={id} value={form.adjustmentMonth} onChange={(e) => set({ adjustmentMonth: e.target.value })}>
-                    <option value="">Mês do início</option>
-                    {months.map((name, i) => (
-                      <option key={name} value={i + 1}>
-                        {name}
+                  <Select id={id} required value={propertyId} onChange={(e) => pickProperty(e.target.value)}>
+                    <option value="">{available.isPending ? 'Carregando…' : 'Escolha o imóvel'}</option>
+                    {options.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        Cód. {p.code} — {p.title} ({p.district})
                       </option>
                     ))}
                   </Select>
                 )}
               </Field>
             )}
-            <Field label="Garantia">
-              {(id) => (
-                <Select id={id} value={g} onChange={(e) => set({ guaranteeType: e.target.value as GuaranteeType })}>
-                  {guaranteeTypes.map((t) => (
-                    <option key={t} value={t}>
-                      {guaranteeTypeLabel[t]}
-                    </option>
-                  ))}
-                </Select>
-              )}
-            </Field>
-            {(g === 'deposit' || g === 'capitalization') && (
-              <Field label={g === 'deposit' ? 'Valor da caução (R$)' : 'Valor do título (R$)'} hint={g === 'deposit' ? `Até ${MAX_DEPOSIT_RENTS} aluguéis.` : undefined}>
-                {(id) => <Input id={id} inputMode="decimal" required={g === 'deposit'} value={form.guaranteeAmount} onChange={(e) => set({ guaranteeAmount: e.target.value })} />}
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Field label="Início">{(id) => <Input id={id} type="date" required value={form.startDate} onChange={(e) => set({ startDate: e.target.value })} />}</Field>
+              <Field label="Prazo (meses)">{(id) => <Input id={id} type="number" min={1} max={240} required value={form.termMonths} onChange={(e) => set({ termMonths: e.target.value })} />}</Field>
+              <Field label="Dia do vencimento">{(id) => <Input id={id} type="number" min={1} max={31} required value={form.dueDay} onChange={(e) => set({ dueDay: e.target.value })} />}</Field>
+              <Field label="Aluguel (R$/mês)">{(id) => <Input id={id} inputMode="decimal" required value={form.rent} onChange={(e) => set({ rent: e.target.value })} />}</Field>
+              <Field label="Condomínio (R$/mês)" hint="Repassado ao proprietário.">
+                {(id) => <Input id={id} inputMode="decimal" value={form.condoFee} onChange={(e) => set({ condoFee: e.target.value })} />}
               </Field>
-            )}
-            {g === 'guarantor' && (
-              <>
-                <Field label="Nome do fiador">{(id) => <Input id={id} required value={form.guarantorName} onChange={(e) => set({ guarantorName: e.target.value })} />}</Field>
-                <Field label="CPF do fiador">{(id) => <Input id={id} required inputMode="numeric" value={form.guarantorDocument} onChange={(e) => set({ guarantorDocument: e.target.value })} />}</Field>
-              </>
-            )}
-            {(g === 'insurance' || g === 'capitalization') && (
-              <>
-                <Field label={g === 'insurance' ? 'Seguradora' : 'Emissora'}>
-                  {(id) => <Input id={id} required={g === 'insurance'} value={form.guaranteeProvider} onChange={(e) => set({ guaranteeProvider: e.target.value })} />}
+              <Field label="IPTU (R$/mês)" hint="Repassado ao proprietário.">
+                {(id) => <Input id={id} inputMode="decimal" value={form.iptuMonthly} onChange={(e) => set({ iptuMonthly: e.target.value })} />}
+              </Field>
+              <Field label="Taxa de administração (%)" hint={rent > 0 ? `${formatMoney(fee)} por mês; repasse ${formatMoney(rent - fee)} + condomínio e IPTU.` : undefined}>
+                {(id) => <Input id={id} inputMode="decimal" value={form.adminFeePercent} onChange={(e) => set({ adminFeePercent: e.target.value })} />}
+              </Field>
+              <Field label="Índice de reajuste">
+                {(id) => (
+                  <Select id={id} value={form.adjustmentIndex} onChange={(e) => set({ adjustmentIndex: e.target.value as AdjustmentIndex })}>
+                    {adjustmentIndexes.map((i) => (
+                      <option key={i} value={i}>
+                        {adjustmentIndexLabel[i]}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+              {form.adjustmentIndex === 'fixed' && (
+                <Field label="Reajuste anual (%)">{(id) => <Input id={id} inputMode="decimal" required value={form.adjustmentPercent} onChange={(e) => set({ adjustmentPercent: e.target.value })} />}</Field>
+              )}
+              {form.adjustmentIndex !== 'none' && (
+                <Field label="Mês do aniversário">
+                  {(id) => (
+                    <Select id={id} value={form.adjustmentMonth} onChange={(e) => set({ adjustmentMonth: e.target.value })}>
+                      <option value="">Mês do início</option>
+                      {months.map((name, i) => (
+                        <option key={name} value={i + 1}>
+                          {name}
+                        </option>
+                      ))}
+                    </Select>
+                  )}
                 </Field>
-                <Field label={g === 'insurance' ? 'Nº da apólice' : 'Nº do título'}>{(id) => <Input id={id} required value={form.guaranteeNumber} onChange={(e) => set({ guaranteeNumber: e.target.value })} />}</Field>
-              </>
-            )}
-          </div>
-          <Field label="Observações">{(id) => <Textarea id={id} rows={2} value={form.notes} onChange={(e) => set({ notes: e.target.value })} />}</Field>
-          <p className="text-sm text-fg-muted">
-            Ao assinar, o imóvel fica "Alugado" e as mensalidades dos próximos 12 meses entram no financeiro: o aluguel a receber do inquilino e o repasse a pagar ao proprietário.
-          </p>
-        </form>
-      )}
-    </Modal>
+              )}
+              <GuaranteeFields form={form} set={set} />
+            </div>
+            <Field label="Observações">{(id) => <Textarea id={id} rows={2} value={form.notes} onChange={(e) => set({ notes: e.target.value })} />}</Field>
+            <p className="text-sm text-fg-muted">
+              Ao assinar, o imóvel fica "Alugado" e as mensalidades dos próximos 12 meses entram no financeiro: o aluguel a receber do inquilino e o repasse a pagar ao proprietário.
+            </p>
+            <div className="flex gap-2">
+              <Button type="submit" loading={save.isPending} disabled={!chosen}>
+                Assinar contrato
+              </Button>
+              <Button type="button" variant="secondary" onClick={onClose}>
+                Cancelar
+              </Button>
+            </div>
+          </form>
+        )}
+      </Card>
+    </>
   );
 }
 

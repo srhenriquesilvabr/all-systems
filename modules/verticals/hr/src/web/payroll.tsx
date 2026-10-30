@@ -1,9 +1,9 @@
 import { api, ApiError, formatDate, formatDateTime, formatDocument, formatMoney, parseMoney, useCan } from '@all/module-sdk/web';
-import { Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th } from '@all/ui';
+import { Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { payrollTypeLabel, type Payroll, type PayrollItem } from '../contracts';
+import { payrollTypeLabel, type Payroll, type PayrollHistoryEntry, type PayrollItem, type PayrollPending } from '../contracts';
 import { EmployerHeading, EmployerSelect, employerIdOf, employerLabel, useEmployerParam, useEmployers } from './employers';
 import { hrKey } from './hrKey';
 
@@ -186,8 +186,10 @@ export function PayrollPage() {
   const [slip, setSlip] = useState<PayrollItem | null>(null);
   const [holidays, setHolidays] = useState<string | null>(null);
   const [report, setReport] = useState(false);
+  const [panel, setPanel] = useState<'reopen' | 'delete' | 'history' | null>(null);
   const invalidate = () => queryClient.invalidateQueries({ queryKey: hrKey });
   const close = useMutation({ mutationFn: () => api(`/hr/payrolls/${id}/close`, { method: 'POST' }), onSuccess: invalidate });
+  const removeItem = useMutation({ mutationFn: (itemId: string) => api(`/hr/payrolls/${id}/items/${itemId}`, { method: 'DELETE' }), onSuccess: invalidate });
   const useCurrentTables = useMutation({
     mutationFn: () => api(`/hr/payrolls/${id}/recalculate`, { method: 'POST', body: { useCurrentTables: true } }),
     onSuccess: invalidate,
@@ -204,7 +206,8 @@ export function PayrollPage() {
   const payroll = p.data;
   const open = payroll.status === 'draft';
   const thirteenth = payroll.type === 'thirteenth_1' || payroll.type === 'thirteenth_2';
-  const error = close.error ?? recalc.error;
+  const error = close.error ?? recalc.error ?? removeItem.error;
+  const editable = payroll.type !== 'termination';
   return (
     <>
       <div className="print:hidden">
@@ -218,6 +221,21 @@ export function PayrollPage() {
                   Resumo para a empresa
                 </Button>
               )}
+              {editable && (
+                <Button variant="ghost" onClick={() => setPanel(panel === 'history' ? null : 'history')}>
+                  Histórico
+                </Button>
+              )}
+              {canRun && editable && !open && (
+                <Button variant="secondary" onClick={() => setPanel('reopen')}>
+                  Reabrir folha
+                </Button>
+              )}
+              {canRun && editable && open && (
+                <Button variant="secondary" onClick={() => setPanel('delete')}>
+                  Excluir folha
+                </Button>
+              )}
               {canRun && open && (
                 <Button loading={close.isPending} onClick={() => close.mutate()}>
                   Fechar folha
@@ -227,6 +245,10 @@ export function PayrollPage() {
           }
         />
         {error && <Alert>{error instanceof ApiError ? error.message : 'Erro'}</Alert>}
+        {panel === 'reopen' && <ReopenPanel payroll={payroll} onClose={() => setPanel(null)} />}
+        {panel === 'delete' && <DeletePanel payroll={payroll} onClose={() => setPanel(null)} />}
+        {panel === 'history' && <HistoryPanel payrollId={payroll.id} />}
+        {canRun && open && editable && <PendingPanel payroll={payroll} />}
         {payroll.employer && payroll.type !== 'termination' && (
           <Alert tone="info">
             Folha da empresa atendida {payroll.employer.name}
@@ -340,6 +362,11 @@ export function PayrollPage() {
                         <Button size="sm" variant="ghost" onClick={() => setSlip(i)}>
                           Holerite
                         </Button>
+                        {canRun && open && (
+                          <Button size="sm" variant="ghost" loading={removeItem.isPending && removeItem.variables === i.id} onClick={() => window.confirm(`Tirar ${i.employee.name} desta folha? Os lançamentos dele nesta folha se perdem.`) && removeItem.mutate(i.id)}>
+                            Remover
+                          </Button>
+                        )}
                       </>
                     )}
                   </Td>
@@ -355,6 +382,159 @@ export function PayrollPage() {
       {report && !slip && <EmployerReportModal payroll={payroll} onClose={() => setReport(false)} />}
       {report && !slip && <EmployerReport payroll={payroll} className="hidden text-black print:block" />}
     </>
+  );
+}
+
+/** Mudanças na ficha depois de abrir a folha: salário, dependentes e quem falta. Nada entra sem pedir. */
+function PendingPanel({ payroll }: { payroll: Payroll }) {
+  const queryClient = useQueryClient();
+  const pending = useQuery({ queryKey: [...hrKey, 'payroll-pending', payroll.id], queryFn: () => api<PayrollPending>(`/hr/payrolls/${payroll.id}/pending`) });
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: hrKey });
+  const apply = useMutation({ mutationFn: () => api(`/hr/payrolls/${payroll.id}/apply-changes`, { method: 'POST', body: {} }), onSuccess: invalidate });
+  const add = useMutation({ mutationFn: (employeeId: string) => api(`/hr/payrolls/${payroll.id}/items`, { method: 'POST', body: { employeeId } }), onSuccess: invalidate });
+  const error = apply.error ?? add.error;
+  if (!pending.data || (!pending.data.changes.length && !pending.data.missing.length)) return null;
+  const { changes, missing } = pending.data;
+  return (
+    <Card className="mb-4 space-y-3 p-4 text-sm">
+      {error && <Alert>{error instanceof ApiError ? error.message : 'Erro'}</Alert>}
+      {changes.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="font-medium">Mudou na ficha depois de abrir a folha</h2>
+            <Button size="sm" variant="secondary" loading={apply.isPending} onClick={() => apply.mutate()}>
+              Aplicar na folha
+            </Button>
+          </div>
+          <ul className="space-y-1 text-fg-muted">
+            {changes.map((c) => (
+              <li key={c.itemId}>
+                <span className="text-fg">{c.name}</span>
+                {c.salary.from !== c.salary.to && ` · salário de ${formatMoney(c.salary.from)} para ${formatMoney(c.salary.to)}`}
+                {c.dependents.from !== c.dependents.to && ` · dependentes de ${c.dependents.from} para ${c.dependents.to}`}
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-fg-muted">Aplicar recalcula só essas pessoas e mantém as horas extras, faltas, comissões e ajustes já lançados.</p>
+        </div>
+      )}
+      {missing.length > 0 && (
+        <div className="space-y-2">
+          <h2 className="font-medium">Faltam nesta folha</h2>
+          <ul className="divide-y divide-line">
+            {missing.map((m) => (
+              <li key={m.employeeId} className="flex flex-wrap items-center justify-between gap-2 py-1.5">
+                <span>
+                  {m.name} <span className="text-fg-muted">· {m.position} · admissão em {formatDate(m.admissionDate)}</span>
+                </span>
+                <Button size="sm" variant="secondary" loading={add.isPending && add.variables === m.employeeId} onClick={() => add.mutate(m.employeeId)}>
+                  Incluir
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function ReopenPanel({ payroll, onClose }: { payroll: Payroll; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [reason, setReason] = useState('');
+  const reopen = useMutation({
+    mutationFn: () => api(`/hr/payrolls/${payroll.id}/reopen`, { method: 'POST', body: { reason } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: hrKey });
+      onClose();
+    },
+  });
+  return (
+    <Card className="mb-4 space-y-3 p-4 text-sm">
+      <h2 className="font-medium">Reabrir folha</h2>
+      <p className="text-fg-muted">
+        {payroll.employer ? 'O honorário desta folha é cancelado e lançado de novo ao fechar.' : 'Os lançamentos desta folha são cancelados, não apagados, e lançados de novo ao fechar.'} Só é possível se nada dela foi pago (estorne a baixa antes), se o 13º não foi calculado depois dela e se ninguém dela foi rescindido depois do fechamento. Holerites já entregues deixam de valer: entregue os novos.
+      </p>
+      {reopen.error && <Alert>{reopen.error instanceof ApiError ? reopen.error.message : 'Não foi possível reabrir'}</Alert>}
+      <Field label="Motivo">{(id) => <Textarea id={id} rows={2} value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />}</Field>
+      <div className="flex justify-end gap-2">
+        <Button variant="secondary" onClick={onClose}>
+          Voltar
+        </Button>
+        <Button variant="danger" loading={reopen.isPending} disabled={reason.trim().length < 3} onClick={() => reopen.mutate()}>
+          Reabrir folha
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+function DeletePanel({ payroll, onClose }: { payroll: Payroll; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const remove = useMutation({
+    mutationFn: () => api(`/hr/payrolls/${payroll.id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: hrKey });
+      navigate('/rh/folha');
+    },
+  });
+  return (
+    <Card className="mb-4 space-y-3 p-4 text-sm">
+      <h2 className="font-medium">Excluir esta folha em aberto?</h2>
+      <p className="text-fg-muted">Os lançamentos de horas, faltas e comissões desta folha se perdem. Nada vai para o financeiro. A exclusão e os totais ficam na auditoria.</p>
+      {remove.error && <Alert>{remove.error instanceof ApiError ? remove.error.message : 'Não foi possível excluir'}</Alert>}
+      <div className="flex justify-end gap-2">
+        <Button variant="secondary" onClick={onClose}>
+          Voltar
+        </Button>
+        <Button variant="danger" loading={remove.isPending} onClick={() => remove.mutate()}>
+          Excluir folha
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+const historyLabel: Record<string, string> = {
+  'hr.payroll.created': 'Folha aberta',
+  'hr.payroll.closed': 'Folha fechada',
+  'hr.payroll.reopened': 'Folha reaberta',
+  'hr.payroll.changes_applied': 'Salário ou dependentes aplicados',
+  'hr.payroll.item_added': 'Colaborador incluído',
+  'hr.payroll.item_removed': 'Colaborador removido',
+};
+
+function HistoryPanel({ payrollId }: { payrollId: string }) {
+  const history = useQuery({ queryKey: [...hrKey, 'payroll-history', payrollId], queryFn: () => api<PayrollHistoryEntry[]>(`/hr/payrolls/${payrollId}/history`) });
+  return (
+    <Card className="mb-4 p-4 text-sm">
+      <h2 className="mb-2 font-medium">Histórico da folha</h2>
+      {history.isPending ? (
+        <Spinner />
+      ) : history.isError ? (
+        <Alert>{history.error.message}</Alert>
+      ) : !history.data.length ? (
+        <p className="text-fg-muted">Sem registros.</p>
+      ) : (
+        <ul className="divide-y divide-line">
+          {history.data.map((h) => {
+            const data = h.data as { reason?: string; name?: string } | null;
+            return (
+              <li key={h.id} className="py-1.5">
+                <span className="font-medium">{historyLabel[h.action] ?? 'Alteração'}</span>
+                <span className="text-fg-muted">
+                  {' '}
+                  · {formatDateTime(h.createdAt)} · {h.user?.name ?? 'Sistema'}
+                  {data?.name && ` · ${data.name}`}
+                  {data?.reason && ` · Motivo: ${data.reason}`}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Card>
   );
 }
 

@@ -85,7 +85,7 @@ function ServiceModal({ service, onClose }: { service: Service | null; onClose: 
     durationMin: String(service?.durationMin ?? 60),
     bufferMin: String(service?.bufferMin ?? 0),
     price: service ? service.price.toFixed(2).replace('.', ',') : '',
-    online: service?.online ?? true,
+    online: service?.online ?? false,
     active: service?.active ?? true,
     requiresRoom: service?.requiresRoom ?? false,
     description: service?.description ?? '',
@@ -152,7 +152,7 @@ function ServiceModal({ service, onClose }: { service: Service | null; onClose: 
         </Field>
         <fieldset>
           <legend className="mb-1.5 text-sm font-medium">Quem faz</legend>
-          <p className="mb-2 text-xs text-fg-muted">Nenhum marcado = qualquer profissional.</p>
+          <p className="mb-2 text-xs text-fg-muted">Com alguém marcado, só essas pessoas fazem o serviço, mesmo que outro profissional não tenha nenhum serviço marcado. Sem ninguém marcado, qualquer profissional faz.</p>
           <div className="grid gap-1.5 sm:grid-cols-2">
             {resources.data
               ?.filter((r) => r.kind === 'professional')
@@ -187,7 +187,7 @@ function ServiceModal({ service, onClose }: { service: Service | null; onClose: 
           checked={form.requiresRoom}
           onChange={(e) => set({ requiresRoom: e.target.checked })}
         />
-        <Checkbox label="Pode ser marcado online pelo cliente" checked={form.online} onChange={(e) => set({ online: e.target.checked })} />
+        <Checkbox label="Pode ser marcado online pelo cliente (vem desligado: libere só o que o visitante pode marcar sozinho)" checked={form.online} onChange={(e) => set({ online: e.target.checked })} />
         <Checkbox label="Ativo" checked={form.active} onChange={(e) => set({ active: e.target.checked })} />
       </form>
     </Modal>
@@ -199,14 +199,24 @@ function SettingsCard() {
   const queryClient = useQueryClient();
   const { tenant } = useSession();
   const settings = useSchedulingSettings();
+  const services = useServices();
   const [form, setForm] = useState<SchedulingSettings | null>(null);
+  const [online, setOnline] = useState<string[] | null>(null);
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (settings.data) setForm(settings.data);
   }, [settings.data]);
+  const onlineIds = online ?? services.data?.filter((s) => s.online).map((s) => s.id) ?? [];
   const save = useMutation({
-    mutationFn: () => api('/modules/shared.scheduling/settings', { method: 'PUT', body: form }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['modules', 'shared.scheduling', 'settings'] }),
+    mutationFn: async () => {
+      await api('/modules/shared.scheduling/settings', { method: 'PUT', body: form });
+      if (online) await api('/scheduling/services/online', { method: 'PUT', body: { serviceIds: online } });
+    },
+    onSuccess: () => {
+      setOnline(null);
+      queryClient.invalidateQueries({ queryKey: ['modules', 'shared.scheduling', 'settings'] });
+      queryClient.invalidateQueries({ queryKey: schedulingKey });
+    },
   });
   if (settings.isError) return null; // sem permissão de configurar: o cartão não aparece
   if (!form) return null;
@@ -251,6 +261,25 @@ function SettingsCard() {
             {(id) => <Input id={id} type="number" min={1} max={180} value={form.onlineMaxDays} onChange={(e) => setForm({ ...form, onlineMaxDays: Number(e.target.value) })} />}
           </Field>
         </div>
+      )}
+      {form.onlineBooking && (
+        <fieldset>
+          <legend className="mb-1.5 text-sm font-medium">Serviços liberados no link</legend>
+          <p className="mb-2 text-xs text-fg-muted">Só o que estiver marcado aparece para o visitante. Serviço novo vem desligado.</p>
+          <div className="grid max-h-56 gap-1.5 overflow-y-auto sm:grid-cols-2">
+            {services.data
+              ?.filter((s) => s.active)
+              .map((s) => (
+                <Checkbox
+                  key={s.id}
+                  label={s.name}
+                  checked={onlineIds.includes(s.id)}
+                  onChange={(e) => setOnline(e.target.checked ? [...onlineIds, s.id] : onlineIds.filter((id) => id !== s.id))}
+                />
+              ))}
+          </div>
+          {services.data && onlineIds.length === 0 && <p className="mt-2 text-sm text-warning-700">Nenhum serviço liberado: a página vai abrir sem nada para marcar.</p>}
+        </fieldset>
       )}
       {form.onlineBooking && link && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg bg-muted p-3 text-sm">

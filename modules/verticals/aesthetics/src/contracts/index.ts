@@ -21,6 +21,8 @@ export const packageInput = z.object({
   firstDueOn: isoDate.optional(),
   expiresOn: isoDate.nullish().or(z.literal('')).transform((v) => v || null),
   notes: z.string().trim().max(500).nullish(),
+  /** Tratamento de origem, quando vendido a partir dele (ex.: drenagem do pós-operatório). */
+  caseId: z.string().uuid().nullish(),
 });
 export type PackageInput = z.infer<typeof packageInput>;
 
@@ -47,6 +49,8 @@ export interface SessionPackage {
   notes: string | null;
   cancelReason: string | null;
   cancelledOn: string | null;
+  /** Tratamento de origem, se foi vendido a partir de um. */
+  case: { id: string; title: string } | null;
   createdAt: string;
 }
 

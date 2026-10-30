@@ -22,7 +22,7 @@ const columns: ImportColumn[] = [
     hint: 'Profissional ou Sala / equipamento (vazio = Profissional)',
   },
   { key: 'color', label: 'Cor na agenda', example: '#2d4bff', hint: 'Código da cor em hexadecimal, ex.: #2d4bff (vazio = azul padrão)' },
-  { key: 'services', label: 'Serviços', example: 'Corte feminino; Escova', hint: 'Nomes dos serviços que faz, separados por ; (vazio = faz todos)' },
+  { key: 'services', label: 'Serviços', example: 'Corte feminino; Escova', hint: 'Nomes dos serviços que faz, separados por ; (vazio = só os serviços sem ninguém em "Quem faz")' },
   { key: 'active', label: 'Ativo', type: 'boolean', example: 'Sim', hint: 'Sim ou Não (vazio = Sim). Inativo não aparece na agenda' },
 ];
 

@@ -1,4 +1,5 @@
 import { defineWebModule } from '@all/module-sdk/web';
+import { EditLaundryOrderPage } from './EditLaundryOrderPage';
 import { LaundryOrderPage } from './LaundryOrderPage';
 import { LogisticsPage } from './LogisticsPage';
 import { MyRoutePage } from './MyRoutePage';
@@ -14,6 +15,7 @@ export const laundryWeb = defineWebModule({
   routes: [
     { path: 'lavanderia/ordens/nova', permission: 'laundry.orders.write', Component: NewLaundryOrderPage },
     { path: 'lavanderia/ordens/:id', permission: 'laundry.orders.read', Component: LaundryOrderPage },
+    { path: 'lavanderia/ordens/:id/editar', permission: 'laundry.orders.write', Component: EditLaundryOrderPage },
     { path: 'lavanderia/ordens/:id/etiquetas', permission: 'laundry.orders.read', Component: PrintLabelsPage },
     { path: 'lavanderia/ordens/:id/comprovante', permission: 'laundry.orders.read', Component: PrintReceiptPage },
     { path: 'lavanderia/producao', permission: 'laundry.orders.status', Component: ProductionPage },

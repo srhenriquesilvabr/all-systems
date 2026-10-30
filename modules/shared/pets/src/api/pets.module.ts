@@ -4,7 +4,7 @@ import type { Tx } from '@all/db';
 import { ModuleRoute, RequirePermission, requestContext } from '@all/module-sdk';
 import { SchedulingModule, SchedulingService } from '@all/scheduling';
 import { BadRequestException, Body, Controller, Get, Injectable, Module, NotFoundException, OnModuleInit, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
-import { and, asc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, count, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { petInput, species, speciesLabel, type Pet, type PetInput, type Species } from '../contracts';
 import { pets } from '../db/schema';
@@ -69,14 +69,27 @@ export class PetsService implements OnModuleInit {
 
   list(opts: { q?: string; customerId?: string; limit: number }) {
     return this.tdb.run(async (tx) => {
-      const term = opts.q?.trim();
-      const like = term ? `%${term.replace(/[%_\\]/g, (c) => `\\${c}`)}%` : undefined;
-      const rows = await this.query(tx)
-        .where(and(opts.customerId ? eq(pets.customerId, opts.customerId) : undefined, like ? or(ilike(pets.name, like), ilike(customers.name, like), ilike(pets.breed, like)) : undefined))
-        .orderBy(asc(pets.name))
-        .limit(opts.limit);
+      const rows = await this.query(tx).where(this.filter(opts)).orderBy(asc(pets.name), asc(pets.id)).limit(opts.limit);
       return rows.map(toDto);
     });
+  }
+
+  /** A mesma busca, em páginas, com o total: a lista de pets da tela. */
+  page(opts: { q?: string; customerId?: string; limit: number; offset: number }) {
+    return this.tdb.run(async (tx) => {
+      const where = this.filter(opts);
+      const [rows, totals] = await Promise.all([
+        this.query(tx).where(where).orderBy(asc(pets.name), asc(pets.id)).limit(opts.limit).offset(opts.offset),
+        tx.select({ total: count() }).from(pets).innerJoin(customers, eq(customers.id, pets.customerId)).where(where),
+      ]);
+      return { items: rows.map(toDto), total: totals[0]?.total ?? 0 };
+    });
+  }
+
+  private filter(opts: { q?: string; customerId?: string }) {
+    const term = opts.q?.trim();
+    const like = term ? `%${term.replace(/[%_\\]/g, (c) => `\\${c}`)}%` : undefined;
+    return and(opts.customerId ? eq(pets.customerId, opts.customerId) : undefined, like ? or(ilike(pets.name, like), ilike(customers.name, like), ilike(pets.breed, like)) : undefined);
   }
 
   get(id: string) {
@@ -176,6 +189,7 @@ const listQuery = z.object({
   customerId: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
+const pageQuery = listQuery.extend({ limit: z.coerce.number().int().min(1).max(100).default(25), offset: z.coerce.number().int().min(0).default(0) });
 
 @Controller('pets')
 @ModuleRoute('shared.pets')
@@ -186,6 +200,12 @@ export class PetsController {
   @RequirePermission('shared.pets.read')
   list(@Query(new ZodPipe(listQuery)) q: z.infer<typeof listQuery>) {
     return this.pets.list(q);
+  }
+
+  @Get('page')
+  @RequirePermission('shared.pets.read')
+  page(@Query(new ZodPipe(pageQuery)) q: z.infer<typeof pageQuery>) {
+    return this.pets.page(q);
   }
 
   @Get(':id')

@@ -13,14 +13,15 @@ export const schedulingManifest = defineModule({
   icon: 'calendar',
   version: '1.0.0',
   dependsOn: ['core.customers', 'core.finance', 'core.team', 'shared.notifications'],
-  optionalDependsOn: ['integration.whatsapp'],
+  // Com o PDV ativo, o pagamento na agenda pode entrar na sessão de caixa.
+  optionalDependsOn: ['integration.whatsapp', 'shared.sales'],
   events: { publishes: ['shared.scheduling.status_changed', 'shared.scheduling.payment_recorded'], subscribes: ['integration.whatsapp.reply'] },
   permissions: [
     { key: 'shared.scheduling.read', label: 'Ver a agenda' },
     { key: 'shared.scheduling.write', label: 'Marcar, remarcar e cancelar horários' },
     { key: 'shared.scheduling.status', label: 'Registrar chegada, atendimento e conclusão' },
     { key: 'shared.scheduling.payments', label: 'Registrar pagamentos de atendimentos' },
-    { key: 'shared.scheduling.manage', label: 'Configurar profissionais, serviços, horários e agendamento online' },
+    { key: 'shared.scheduling.manage', label: 'Configurar profissionais, serviços, horários e agendamento online; marcar fora do expediente ou em folga' },
   ],
   menu: [
     { label: 'Agenda', path: '/agenda', icon: 'calendar', permission: 'shared.scheduling.read' },

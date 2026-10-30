@@ -1,8 +1,8 @@
-import { api, ApiError, SpreadsheetImport } from '@all/module-sdk/web';
+import { api, ApiError, SpreadsheetImport, useCan } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Tabs, Td, Th } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
-import { pricingUnitLabel, pricingUnits, serviceInput, type LaundryService, type PricingUnit, type ServiceInput } from '../contracts';
+import { pricingUnitLabel, pricingUnits, serviceInput, type LaundryService, type LaundrySettings, type PricingUnit, type ServiceInput } from '../contracts';
 import { GarmentTypesTab, PricesModal } from './CatalogExtras';
 import { laundryKey } from './hooks';
 import { garmentTypeImportSpec, serviceImportSpec } from './laundryImport';
@@ -16,6 +16,7 @@ export function ServicesPage() {
   const [pricing, setPricing] = useState<LaundryService | null>(null);
   const [tab, setTab] = useState('services');
   const queryClient = useQueryClient();
+  const canConfigure = useCan('core.access.settings');
 
   return (
     <>
@@ -23,7 +24,7 @@ export function ServicesPage() {
         title="Serviços e preços"
         description="O que a lavanderia oferece, como cobra e em quanto tempo entrega."
         actions={
-          tab === 'services' ? (
+          tab === 'rules' ? undefined : tab === 'services' ? (
             <>
               <SpreadsheetImport spec={serviceImportSpec} onImported={() => queryClient.invalidateQueries({ queryKey: KEY })} />
               <Button onClick={() => setEditing('new')}>Novo serviço</Button>
@@ -37,12 +38,15 @@ export function ServicesPage() {
         items={[
           { key: 'services', label: 'Serviços' },
           { key: 'garments', label: 'Tipos de peça' },
+          ...(canConfigure ? [{ key: 'rules', label: 'Regras' }] : []),
         ]}
         active={tab}
         onChange={setTab}
       />
 
-      {tab === 'garments' ? (
+      {tab === 'rules' ? (
+        <LaundryRules />
+      ) : tab === 'garments' ? (
         <GarmentTypesTab />
       ) : (
         <Card>
@@ -184,6 +188,45 @@ function ServiceForm({ service, onClose }: { service: LaundryService | null; onC
         <Checkbox label="Serviço ativo (aparece ao abrir ordens)" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} />
       </form>
     </Modal>
+  );
+}
+
+/** Regras gerais da lavanderia (configurações do módulo): só para quem pode mexer nas configurações. */
+function LaundryRules() {
+  const queryClient = useQueryClient();
+  const key = ['modules', 'laundry', 'settings'];
+  const settings = useQuery({ queryKey: key, queryFn: () => api<LaundrySettings>('/modules/laundry/settings') });
+  const [hours, setHours] = useState<string | null>(null);
+  const [photos, setPhotos] = useState<boolean | null>(null);
+  const save = useMutation({
+    // O PUT grava o objeto inteiro: parte do que já está salvo (taxas, por exemplo).
+    mutationFn: () =>
+      api('/modules/laundry/settings', {
+        method: 'PUT',
+        body: { ...settings.data, defaultTurnaroundHours: Number(hours ?? settings.data!.defaultTurnaroundHours), requirePiecePhotos: photos ?? settings.data!.requirePiecePhotos },
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: key }),
+  });
+  if (settings.isPending) return <Spinner />;
+  if (settings.isError) return <Alert>{settings.error.message}</Alert>;
+
+  return (
+    <Card className="max-w-xl space-y-4 p-5">
+      {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao salvar'}</Alert>}
+      {save.isSuccess && <Alert tone="success">Regras salvas.</Alert>}
+      <Checkbox
+        label="Exigir foto de cada peça antes de começar a produção"
+        checked={photos ?? settings.data.requirePiecePhotos}
+        onChange={(e) => setPhotos(e.target.checked)}
+      />
+      <p className="text-sm text-fg-muted">A ordem abre sem foto, porque a peça só existe depois de aberta. Ligado, a peça sem foto não sai de Recebida: nem pelo quadro, nem pelo leitor de etiqueta.</p>
+      <Field label="Prazo padrão (horas)" hint="Vale quando a ordem não informa a previsão e nenhum serviço dela tem prazo próprio.">
+        {(id) => <Input id={id} type="number" min={1} max={1440} className="w-32" value={hours ?? String(settings.data.defaultTurnaroundHours)} onChange={(e) => setHours(e.target.value)} />}
+      </Field>
+      <Button loading={save.isPending} onClick={() => save.mutate()}>
+        Salvar regras
+      </Button>
+    </Card>
   );
 }
 

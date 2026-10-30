@@ -168,6 +168,10 @@ export const hrTerminations = pgTable(
     notes: text('notes'),
     createdById: uuid('created_by_id').references(() => users.id),
     createdAt: ts('created_at').notNull().defaultNow(),
+    /** Rescisão desfeita: o termo fica guardado, com quem desfez e o motivo, e deixa de valer. */
+    cancelledAt: ts('cancelled_at'),
+    cancelledById: uuid('cancelled_by_id').references(() => users.id),
+    cancelReason: text('cancel_reason'),
   },
-  (t) => [uniqueIndex('hr_terminations_employee_key').on(t.tenantId, t.employeeId), tenantIsolation()],
+  (t) => [uniqueIndex('hr_terminations_employee_key').on(t.tenantId, t.employeeId).where(sql`cancelled_at is null`), tenantIsolation()],
 );

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applies, competencesFor } from './index';
+import { applies, competencesFor, feeDueDate } from './index';
 
 describe('calendário de obrigações', () => {
   it('mensal: competência anterior vence neste mês, a atual no próximo', () => {
@@ -25,5 +25,16 @@ describe('calendário de obrigações', () => {
     expect(applies({ ...esocial, regimes: [...esocial.regimes] }, { taxRegime: 'simples', hasEmployees: false })).toBe(false);
     expect(applies({ ...esocial, regimes: [...esocial.regimes] }, { taxRegime: 'simples', hasEmployees: true })).toBe(true);
     expect(applies({ regimes: ['presumido'], requiresEmployees: false }, { taxRegime: 'mei', hasEmployees: true })).toBe(false);
+  });
+});
+
+describe('vencimento do honorário', () => {
+  it('no prazo, fica no mês; no próprio dia, ainda vale', () => {
+    expect(feeDueDate('2026-10-05', 10)).toEqual({ competence: '2026-10', dueOn: '2026-10-10', moved: false });
+    expect(feeDueDate('2026-10-10', 10)).toEqual({ competence: '2026-10', dueOn: '2026-10-10', moved: false });
+  });
+  it('depois do dia, vai para o mês seguinte, mantendo a competência', () => {
+    expect(feeDueDate('2026-10-11', 10)).toEqual({ competence: '2026-10', dueOn: '2026-11-10', moved: true });
+    expect(feeDueDate('2026-12-20', 10)).toEqual({ competence: '2026-12', dueOn: '2027-01-10', moved: true });
   });
 });

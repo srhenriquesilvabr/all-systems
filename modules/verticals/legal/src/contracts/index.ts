@@ -93,8 +93,14 @@ export interface CaseUpdate {
   occurredOn: string;
   description: string;
   author: string | null;
+  /** Gerado pelo sistema: não se edita nem se exclui à mão. */
+  auto: boolean;
+  editedAt: string | null;
   createdAt: string;
 }
+
+/** Exclusão de prazo ou andamento: o motivo fica registrado. */
+export const removeInput = z.object({ reason: z.string().trim().min(3, 'Explique o motivo').max(300) });
 
 export const deadlineInput = z.object({
   caseId: z.string().uuid(),
@@ -106,6 +112,8 @@ export const deadlineInput = z.object({
   notes: z.string().trim().max(1000).nullish(),
 });
 export type DeadlineInput = z.infer<typeof deadlineInput>;
+export const deadlineUpdateInput = deadlineInput.omit({ caseId: true }).partial();
+export type DeadlineUpdateInput = z.infer<typeof deadlineUpdateInput>;
 
 /** Data em que o prazo foi cumprido (padrão: hoje). Pode ser no passado, nunca no futuro. */
 export const deadlineDoneInput = z.preprocess(

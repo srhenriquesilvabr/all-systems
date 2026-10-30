@@ -1,4 +1,4 @@
-import { AuditService, CoreConfig, coreSchema, CustomerDataRegistry, CustomersService, ModuleSettingsService, nextSequence, ScheduledJobs, TenantDb } from '@all/core';
+import { AuditService, CoreConfig, coreSchema, CustomerDataRegistry, CustomersService, financeSchema, FinanceService, ModuleSettingsService, nextSequence, ScheduledJobs, TenantDb, toCents } from '@all/core';
 import { CREDIT_BUREAU, CreditBureauService } from '@all/credit-bureau';
 import type { Tx } from '@all/db';
 import { requestContext } from '@all/module-sdk';
@@ -25,7 +25,7 @@ import {
 } from '../../contracts';
 import { consLeadEvents, consLeads, consLeadTasks, consPlans, consQuotas, consReferrers } from '../../db/schema';
 import type { ConsortiumSettings } from '../../manifest';
-import { badRequest, brl, localToday, MODULE } from '../shared';
+import { badRequest, brl, localToday, MODULE, REWARD_SOURCE } from '../shared';
 import { assertTeamMember, LEAD_SOURCE, normalizePhone, planProfilesInTx, referralCode, type LeadRow } from './shared';
 
 /** Dados de um lead novo, de qualquer origem (simulador, anúncio, planilha, manual, indicação). */
@@ -54,6 +54,7 @@ export interface NewLead {
   createdBy?: string | null;
 }
 
+const { finAccounts, finEntries } = financeSchema;
 const sellerUser = coreSchema.users;
 const dayStart = (date: string) => sql`(${date}::date)::timestamp at time zone 'America/Sao_Paulo'`;
 const dayEnd = (date: string) => sql`((${date}::date + 1)::timestamp at time zone 'America/Sao_Paulo')`;
@@ -77,6 +78,7 @@ export class LeadsService implements OnModuleInit {
     private readonly jobs: ScheduledJobs,
     private readonly config: CoreConfig,
     private readonly credit: CreditBureauService,
+    private readonly finance: FinanceService,
   ) {}
 
   onModuleInit() {
@@ -335,6 +337,9 @@ export class LeadsService implements OnModuleInit {
     const next = new Map<string, (typeof tasks)[number]>();
     for (const t of tasks) if (!next.has(t.leadId)) next.set(t.leadId, t);
     const credit = requestContext.get().modules?.has(CREDIT_BUREAU) ? await this.credit.decisionsForSourcesInTx(tx, LEAD_SOURCE, ids) : new Map();
+    // Baixa dada direto no financeiro: a recompensa aparece paga.
+    const dueIds = rows.filter((r) => r.lead.rewardStatus === 'due').map((r) => r.lead.id);
+    const paidRewards = new Set((await this.finance.listBySourceInTx(tx, REWARD_SOURCE, dueIds)).filter((e) => e.kind === 'expense' && e.status === 'paid').map((e) => e.sourceId));
     return rows.map(({ lead: l, sellerName, referrerName }) => {
       const t = next.get(l.id);
       return {
@@ -356,7 +361,7 @@ export class LeadsService implements OnModuleInit {
         statusChangedAt: l.statusChangedAt.toISOString(),
         seller: l.sellerId ? { id: l.sellerId, name: sellerName ?? '' } : null,
         referrer: l.referrerId ? { id: l.referrerId, name: referrerName ?? '' } : null,
-        rewardStatus: l.rewardStatus,
+        rewardStatus: paidRewards.has(l.id) ? 'paid' : l.rewardStatus,
         rewardAmount: l.rewardAmount == null ? null : Number(l.rewardAmount),
         quotaId: l.quotaId,
         customerId: l.customerId,
@@ -614,9 +619,101 @@ export class LeadsService implements OnModuleInit {
     const settings = await this.settings.getInTx<ConsortiumSettings>(tx, MODULE);
     const reward = lead.rewardStatus === 'waiting' ? { rewardStatus: 'due' as const, rewardAmount: settings.referralRewardAmount ? settings.referralRewardAmount.toFixed(2) : lead.rewardAmount } : {};
     await tx.update(consLeads).set({ status: 'won', statusChangedAt: new Date(), ...reward }).where(eq(consLeads.id, lead.id));
+    if (reward.rewardStatus) await this.syncRewardEntryInTx(tx, lead, reward.rewardAmount);
     await tx.update(consLeadTasks).set({ doneAt: new Date() }).where(and(eq(consLeadTasks.leadId, lead.id), isNull(consLeadTasks.doneAt)));
     await this.event(tx, lead, 'status', `${leadStatusLabel[lead.status]} → ${leadStatusLabel.won}: adesão aceita`, { from: lead.status, to: 'won', quotaId }, null);
     if (reward.rewardStatus) await this.event(tx, lead, 'reward', 'Recompensa da indicação a pagar', null, null);
+  }
+
+  /**
+   * Cota cancelada: o lead que tinha virado venda fica Perdido (pode ser reaberto para outra venda);
+   * em Proposta, continua lá. Dentro do prazo de estorno, a recompensa volta: a pagar é cancelada no
+   * financeiro e a já paga vira um valor a recuperar de quem indicou. Fora do prazo, fica como está.
+   */
+  async quotaCancelledInTx(tx: Tx, quota: { id: string; number: number }, opts: { reason: string; withinReversal: boolean }) {
+    const [lead] = await tx.select().from(consLeads).where(eq(consLeads.quotaId, quota.id)).for('update');
+    if (!lead) return null;
+    if (lead.status === 'won') {
+      const lostReason = `Cota nº ${quota.number} cancelada: ${opts.reason}`;
+      await tx.update(consLeads).set({ status: 'lost', lostReason, statusChangedAt: new Date() }).where(eq(consLeads.id, lead.id));
+      await this.event(tx, lead, 'status', `${leadStatusLabel.won} → ${leadStatusLabel.lost}: ${lostReason}`, { from: 'won', to: 'lost', quotaId: quota.id });
+    } else {
+      await this.event(tx, lead, 'quota', `Cota nº ${quota.number} cancelada: ${opts.reason}`, { quotaId: quota.id });
+    }
+    let reward: { from: LeadRow['rewardStatus']; to: LeadRow['rewardStatus']; cancelledPending: number; toRecover: number } | null = null;
+    if (lead.rewardStatus === 'due' || lead.rewardStatus === 'paid') {
+      if (opts.withinReversal) reward = await this.reverseRewardInTx(tx, lead, quota.number);
+      else await this.event(tx, lead, 'reward', 'Cota cancelada fora do prazo de estorno: a recompensa da indicação foi mantida', { quotaId: quota.id });
+    }
+    return { leadId: lead.id, from: lead.status, reward };
+  }
+
+  private async reverseRewardInTx(tx: Tx, lead: LeadRow, quotaNumber: number) {
+    const entries = (await this.finance.listBySourceInTx(tx, REWARD_SOURCE, lead.id)).filter((e) => e.kind === 'expense');
+    const cancelledPending = entries.filter((e) => e.status === 'pending').reduce((sum, e) => sum + toCents(e.amount), 0);
+    const paid = entries.filter((e) => e.status === 'paid').reduce((sum, e) => sum + toCents(e.amount), 0);
+    // Paga antes de a recompensa entrar no financeiro: vale o valor anotado no lead.
+    const toRecover = paid || (lead.rewardStatus === 'paid' && lead.rewardAmount ? toCents(lead.rewardAmount) : 0);
+    if (cancelledPending) await this.finance.cancelPendingBySourceInTx(tx, REWARD_SOURCE, lead.id);
+    if (toRecover) {
+      const referrer = await this.referrerOrFail(tx, lead.referrerId!);
+      await this.finance.recordInTx(tx, {
+        kind: 'income',
+        status: 'pending',
+        description: `Estorno de recompensa de indicação — ${referrer.name}, lead nº ${lead.number} (cota nº ${quotaNumber} cancelada)`,
+        amount: toRecover / 100,
+        dueDate: localToday(),
+        customerId: referrer.customerId,
+        sourceType: REWARD_SOURCE,
+        sourceId: lead.id,
+        settleInFinance: true,
+        categoryKey: 'other_income',
+      });
+    }
+    const to = toRecover ? ('reversed' as const) : ('cancelled' as const);
+    await tx.update(consLeads).set({ rewardStatus: to }).where(eq(consLeads.id, lead.id));
+    await this.event(tx, lead, 'reward', toRecover ? `Recompensa estornada: ${brl.format(toRecover / 100)} a recuperar de quem indicou` : 'Recompensa cancelada: a cota caiu dentro do prazo de estorno', { quotaNumber });
+    return { from: lead.rewardStatus, to, cancelledPending: cancelledPending / 100, toRecover: toRecover / 100 };
+  }
+
+  /**
+   * Mantém a despesa "a pagar" da recompensa no financeiro: uma só por lead. Valor mudou, a anterior
+   * é cancelada e outra é lançada; sem valor, nada entra (fica na tela até informarem o valor).
+   */
+  private async syncRewardEntryInTx(tx: Tx, lead: LeadRow, amount: string | number | null | undefined) {
+    const cents = amount == null ? 0 : toCents(amount);
+    const entries = (await this.finance.listBySourceInTx(tx, REWARD_SOURCE, lead.id)).filter((e) => e.kind === 'expense');
+    if (entries.some((e) => e.status === 'paid')) return;
+    const pending = entries.filter((e) => e.status === 'pending');
+    if (pending.length === 1 && toCents(pending[0]!.amount) === cents) return;
+    if (pending.length) await this.finance.cancelPendingBySourceInTx(tx, REWARD_SOURCE, lead.id);
+    if (!cents) return;
+    const referrer = await this.referrerOrFail(tx, lead.referrerId!);
+    await this.finance.recordInTx(tx, {
+      kind: 'expense',
+      status: 'pending',
+      description: `Recompensa de indicação — ${referrer.name}, lead nº ${lead.number}`,
+      amount: cents / 100,
+      dueDate: localToday(),
+      customerId: referrer.customerId,
+      sourceType: REWARD_SOURCE,
+      sourceId: lead.id,
+      settleInFinance: true,
+      categoryKey: 'other_expense',
+    });
+  }
+
+  /** Baixa da recompensa em aberto, feita pela ficha do lead: é a mesma despesa do financeiro, sem duplicar. */
+  private async payRewardEntryInTx(tx: Tx, lead: LeadRow, amount: string | number, accountId?: string | null) {
+    await this.syncRewardEntryInTx(tx, lead, amount);
+    const account = accountId ?? (await this.finance.defaultAccountId(tx));
+    if (!account) throw badRequest('ACCOUNT_REQUIRED', 'Cadastre uma conta no financeiro para dar baixa na recompensa');
+    const [valid] = await tx.select({ id: finAccounts.id }).from(finAccounts).where(and(eq(finAccounts.id, account), eq(finAccounts.active, true)));
+    if (!valid) throw badRequest('ACCOUNT_NOT_FOUND', 'Conta não encontrada ou inativa');
+    await tx
+      .update(finEntries)
+      .set({ status: 'paid', paidAt: localToday(), accountId: account })
+      .where(and(eq(finEntries.sourceType, REWARD_SOURCE), eq(finEntries.sourceId, lead.id), eq(finEntries.kind, 'expense'), eq(finEntries.status, 'pending')));
   }
 
   // ---- Indicação premiada --------------------------------------------------------------------
@@ -625,13 +722,14 @@ export class LeadsService implements OnModuleInit {
     const { tenantId } = requestContext.require();
     return this.tdb.run(async (tx) => {
       const base = await this.publicBase(tx, tenantId);
+      const paidInFinance = sql`exists (select 1 from ${finEntries} where ${finEntries.sourceType} = ${REWARD_SOURCE} and ${finEntries.sourceId} = ${consLeads.id}::text and ${finEntries.kind} = 'expense' and ${finEntries.status} = 'paid')`;
       const rows = await tx
         .select({
           r: consReferrers,
           leads: sql<number>`count(${consLeads.id})`.mapWith(Number),
           won: sql<number>`count(${consLeads.id}) filter (where ${consLeads.status} = 'won')`.mapWith(Number),
-          due: sql<number>`count(${consLeads.id}) filter (where ${consLeads.rewardStatus} = 'due')`.mapWith(Number),
-          paid: sql<number>`count(${consLeads.id}) filter (where ${consLeads.rewardStatus} = 'paid')`.mapWith(Number),
+          due: sql<number>`count(${consLeads.id}) filter (where ${consLeads.rewardStatus} = 'due' and not ${paidInFinance})`.mapWith(Number),
+          paid: sql<number>`count(${consLeads.id}) filter (where ${consLeads.rewardStatus} = 'paid' or (${consLeads.rewardStatus} = 'due' and ${paidInFinance}))`.mapWith(Number),
         })
         .from(consReferrers)
         .leftJoin(consLeads, eq(consLeads.referrerId, consReferrers.id))
@@ -693,20 +791,34 @@ export class LeadsService implements OnModuleInit {
       .then(async () => (await this.listReferrers()).find((r) => r.id === id)!);
   }
 
-  /** Recompensa da indicação: a pagar (valor), paga ou cancelada. */
-  setReward(id: string, input: { status: 'due' | 'paid' | 'cancelled'; amount?: number | null }): Promise<LeadDetail> {
+  /**
+   * Recompensa da indicação: a pagar (valor), paga ou cancelada. O financeiro acompanha: despesa a
+   * pagar, baixa ou cancelamento da mesma despesa. O que já foi pago só sai pelo estorno da cota.
+   */
+  setReward(id: string, input: { status: 'due' | 'paid' | 'cancelled'; amount?: number | null; accountId?: string | null }): Promise<LeadDetail> {
     return this.tdb
       .run(async (tx) => {
         const [lead] = await tx.select().from(consLeads).where(eq(consLeads.id, id)).for('update');
         if (!lead) throw new NotFoundException({ code: 'LEAD_NOT_FOUND', message: 'Lead não encontrado' });
         if (!lead.referrerId) throw badRequest('NOT_REFERRED', 'Este lead não veio de indicação');
-        if (input.status === 'paid' && lead.status !== 'won') throw badRequest('REWARD_NOT_DUE', 'A recompensa só é paga depois da venda');
+        if (lead.rewardStatus === 'reversed') throw badRequest('REWARD_REVERSED', 'Esta recompensa foi estornada');
+        const entries = (await this.finance.listBySourceInTx(tx, REWARD_SOURCE, id)).filter((e) => e.kind === 'expense');
+        const alreadyPaid = lead.rewardStatus === 'paid' || entries.some((e) => e.status === 'paid');
+        if (alreadyPaid && input.status !== 'paid') throw badRequest('REWARD_ALREADY_PAID', 'Esta recompensa já foi paga: não pode voltar nem ser cancelada por aqui');
+        if (input.status === 'paid' && lead.status !== 'won' && lead.rewardStatus !== 'due') throw badRequest('REWARD_NOT_DUE', 'A recompensa só é paga depois da venda');
+        const amount = input.amount ?? lead.rewardAmount;
+        if (input.status === 'paid' && !alreadyPaid) {
+          if (!amount || !toCents(amount)) throw badRequest('REWARD_AMOUNT_REQUIRED', 'Informe o valor da recompensa');
+          await this.payRewardEntryInTx(tx, lead, amount, input.accountId);
+        }
+        if (input.status === 'due') await this.syncRewardEntryInTx(tx, lead, amount);
+        if (input.status === 'cancelled') await this.finance.cancelPendingBySourceInTx(tx, REWARD_SOURCE, id);
         await tx
           .update(consLeads)
           .set({
             rewardStatus: input.status,
-            rewardAmount: input.amount != null ? input.amount.toFixed(2) : lead.rewardAmount,
-            rewardPaidAt: input.status === 'paid' ? new Date() : null,
+            rewardAmount: amount == null ? null : Number(amount).toFixed(2),
+            rewardPaidAt: input.status === 'paid' ? (lead.rewardPaidAt ?? new Date()) : null,
           })
           .where(eq(consLeads.id, id));
         await this.event(tx, lead, 'reward', `Recompensa da indicação: ${rewardStatusLabel[input.status]}${input.amount != null ? ` (${brl.format(input.amount)})` : ''}`);

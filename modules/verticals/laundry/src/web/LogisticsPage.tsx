@@ -4,12 +4,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { jobKindLabel, jobKinds, jobStatuses, jobStatusLabel, type JobKind, type JobStatus, type LaundrySettings, type LogisticsJob } from '../contracts';
-import { addDays, errorText, JobCard, ScheduleModal, useJobs, useRefreshLogistics, useTeam } from './logistics';
+import { addDays, errorText, JobCard, ScheduleModal, useDrivers, useJobs, useRefreshLogistics, withCurrent } from './logistics';
 
 /** Escritório: coletas e entregas do dia, por motorista, com atribuição e reagendamento. */
 export function LogisticsPage() {
   const refresh = useRefreshLogistics();
-  const team = useTeam();
+  const drivers = useDrivers();
   const [date, setDate] = useState(today());
   const [status, setStatus] = useState<JobStatus | ''>('');
   const [kind, setKind] = useState<JobKind | ''>('');
@@ -79,7 +79,7 @@ export function LogisticsPage() {
             <Select id={id} className="w-48" value={driverId} onChange={(e) => setDriverId(e.target.value)}>
               <option value="">Todos</option>
               <option value="none">Sem motorista</option>
-              {team.data?.map((m) => (
+              {drivers.data?.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.name}
                 </option>
@@ -174,7 +174,7 @@ function groupByDriver(jobs: LogisticsJob[]) {
 
 /** Atribuir motorista na hora, reagendar/editar, cancelar e, na coleta concluída, abrir a ordem. */
 function OfficeActions({ job, onEdit, onChanged }: { job: LogisticsJob; onEdit: () => void; onChanged: () => void }) {
-  const team = useTeam();
+  const drivers = useDrivers();
   const canOpenOrder = useCan('laundry.orders.write');
   const assign = useMutation({
     mutationFn: (driverUserId: string | null) => api(`/laundry/logistics/jobs/${job.id}`, { method: 'PATCH', body: { driverUserId } }),
@@ -200,7 +200,7 @@ function OfficeActions({ job, onEdit, onChanged }: { job: LogisticsJob; onEdit: 
             onChange={(e) => assign.mutate(e.target.value || null)}
           >
             <option value="">Sem motorista</option>
-            {team.data?.map((m) => (
+            {withCurrent(drivers.data, job.driver).map((m) => (
               <option key={m.id} value={m.id}>
                 {m.name}
               </option>

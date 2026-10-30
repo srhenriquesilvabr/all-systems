@@ -176,6 +176,13 @@
       "when": 1793362974390,
       "tag": "0024_cadastro_publico",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1793373084884,
+      "tag": "0025_melhorias_gerais",
+      "breakpoints": true
     }
   ]
 }

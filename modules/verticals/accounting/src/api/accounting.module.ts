@@ -1,27 +1,59 @@
-import { AuditService, centsToDecimal, coreSchema, CustomersService, FinanceService, MailService, ModuleHooks, ScheduledJobs, TenantDb, toCents, ZodPipe } from '@all/core';
+import { AuditService, centsToDecimal, coreSchema, CustomersService, FilesService, FinanceService, MailService, MAX_DOCUMENT_BYTES, ModuleHooks, ScheduledJobs, TenantDb, toCents, ZodPipe, type UploadedFile as StoredFile } from '@all/core';
 import { customers } from '@all/core/schema';
 import type { Tx } from '@all/db';
 import { ModuleRoute, RequirePermission, requestContext } from '@all/module-sdk';
-import { BadRequestException, Body, ConflictException, Controller, Get, HttpCode, Injectable, Module, NotFoundException, OnModuleInit, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  ConflictException,
+  Controller,
+  Delete,
+  Get,
+  Header,
+  HttpCode,
+  Injectable,
+  Module,
+  NotFoundException,
+  OnModuleInit,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+  Res,
+  StreamableFile,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { and, asc, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
+import type { Response } from 'express';
 import { z } from 'zod';
 import {
   applies,
   clientInput,
   competencesFor,
   DEFAULT_OBLIGATIONS,
+  feeDueDate,
+  obligationNotesInput,
   obligationTypeInput,
+  taxRegimeLabel,
+  taxRegimes,
   type AccountingClient,
   type ClientInput,
   type Obligation,
   type ObligationType,
   type ObligationTypeInput,
+  type RegimeImpactItem,
+  type SaveClientResult,
   type TaxRegime,
 } from '../contracts';
 import { accClients, accFeeInvoices, accObligations, accObligationTypes } from '../db/schema';
 
 const MODULE = 'accounting';
 const ALERT_DAYS = 3;
+/** Dono dos anexos (guia, recibo): só saem pela rota da obrigação, que confere a permissão. */
+const FILE_OWNER = 'acc_obligation';
 const localToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 const brDate = (iso: string) => iso.split('-').reverse().join('/');
 const badRequest = (code: string, message: string) => new BadRequestException({ code, message });
@@ -36,9 +68,11 @@ export class AccountingService implements OnModuleInit {
     private readonly finance: FinanceService,
     private readonly customers: CustomersService,
     private readonly audit: AuditService,
+    private readonly files: FilesService,
   ) {}
 
   onModuleInit() {
+    this.files.protectOwner(FILE_OWNER);
     this.hooks.register(MODULE, { onEnable: (tx, tenantId) => this.seed(tx, tenantId) });
     // Uma vez por dia: gera obrigações e honorários do período e avisa os prazos próximos.
     this.jobs.every('accounting.daily', 24 * 60 * 60_000, () => this.dailyAll());
@@ -78,7 +112,77 @@ export class AccountingService implements OnModuleInit {
     });
   }
 
-  saveClient(id: string | null, input: ClientInput) {
+  /** O que a mudança de regime ou de funcionários deixa sem efeito, para a tela perguntar antes de salvar. */
+  regimeImpact(id: string, taxRegime: TaxRegime, hasEmployees: boolean): Promise<RegimeImpactItem[]> {
+    return this.tdb.run((tx) => this.impactInTx(tx, id, taxRegime, hasEmployees));
+  }
+
+  private async impactInTx(tx: Tx, clientId: string, taxRegime: TaxRegime, hasEmployees: boolean): Promise<RegimeImpactItem[]> {
+    const today = localToday();
+    const rows = await tx
+      .select({ o: accObligations, type: accObligationTypes })
+      .from(accObligations)
+      .innerJoin(accObligationTypes, eq(accObligationTypes.id, accObligations.typeId))
+      .where(and(eq(accObligations.clientId, clientId), eq(accObligations.status, 'pending')))
+      .orderBy(asc(accObligations.dueOn));
+    return rows
+      .filter((r) => !applies({ regimes: r.type.regimes as TaxRegime[], requiresEmployees: r.type.requiresEmployees }, { taxRegime, hasEmployees }))
+      .map((r) => ({ id: r.o.id, name: r.type.name, competence: r.o.competence, dueOn: r.o.dueOn, overdue: r.o.dueOn < today }));
+  }
+
+  /**
+   * Mudou o regime ou os funcionários: as obrigações em aberto que deixaram de valer não somem. As
+   * escolhidas (por padrão, as que ainda não venceram) ficam Dispensadas; as outras continuam a fazer.
+   * Todas ganham uma observação com o motivo, e dá para reabrir.
+   */
+  private async applyRegimeChange(tx: Tx, previous: typeof accClients.$inferSelect, input: ClientInput) {
+    const regimeChanged = previous.taxRegime !== input.taxRegime;
+    const employeesChanged = previous.hasEmployees !== input.hasEmployees;
+    if (!regimeChanged && !employeesChanged) return undefined;
+    const impact = await this.impactInTx(tx, previous.id, input.taxRegime, input.hasEmployees);
+    if (!impact.length) return undefined;
+    const { userId } = requestContext.requireTenant();
+    const today = brDate(localToday());
+    const change = [
+      regimeChanged ? `regime mudou de ${taxRegimeLabel[previous.taxRegime as TaxRegime]} para ${taxRegimeLabel[input.taxRegime]}` : null,
+      employeesChanged ? (input.hasEmployees ? 'a empresa passou a ter funcionários' : 'a empresa deixou de ter funcionários') : null,
+    ]
+      .filter(Boolean)
+      .join(' e ');
+    const chosen = input.waiveObligationIds ? new Set(input.waiveObligationIds) : new Set(impact.filter((i) => !i.overdue).map((i) => i.id));
+    const waived = impact.filter((i) => chosen.has(i.id));
+    const kept = impact.filter((i) => !chosen.has(i.id));
+    const appendNote = (text: string) => sql`case when ${accObligations.notes} is null or ${accObligations.notes} = '' then ${text} else ${accObligations.notes} || E'\n' || ${text} end`;
+    if (waived.length) {
+      await tx
+        .update(accObligations)
+        .set({ status: 'waived', doneAt: new Date(), doneById: userId ?? null, notes: appendNote(`Dispensada em ${today}: ${change}.`) })
+        .where(inArray(accObligations.id, waived.map((i) => i.id)));
+    }
+    if (kept.length) {
+      await tx
+        .update(accObligations)
+        .set({ notes: appendNote(`Em ${today}, ${change}: confira se esta ainda precisa ser entregue.`) })
+        .where(inArray(accObligations.id, kept.map((i) => i.id)));
+    }
+    await this.audit.log(tx, {
+      action: 'accounting.client.regime_changed',
+      entity: 'acc_client',
+      entityId: previous.id,
+      data: { from: previous.taxRegime, to: input.taxRegime, hasEmployees: input.hasEmployees, waived: waived.map((i) => i.id), kept: kept.map((i) => i.id) },
+    });
+    await this.customers.addTimeline(tx, {
+      customerId: previous.customerId,
+      moduleKey: MODULE,
+      type: 'accounting.regime_changed',
+      title: `Contabilidade: ${change}. ${waived.length} obrigação(ões) dispensada(s), ${kept.length} mantida(s) a fazer.`,
+      entity: 'acc_client',
+      entityId: previous.id,
+    });
+    return { waived: waived.length, kept: kept.length };
+  }
+
+  saveClient(id: string | null, input: ClientInput): Promise<SaveClientResult> {
     const { tenantId } = requestContext.require();
     return this.tdb.run(async (tx) => {
       const customer = await this.customers.findInTx(tx, input.customerId);
@@ -95,6 +199,7 @@ export class AccountingService implements OnModuleInit {
         notes: input.notes ?? null,
       };
       let clientId = id;
+      const [previous] = id ? await tx.select().from(accClients).where(eq(accClients.id, id)).for('update') : [];
       try {
         if (id) {
           const [row] = await tx.update(accClients).set(values).where(eq(accClients.id, id)).returning({ id: accClients.id });
@@ -108,10 +213,11 @@ export class AccountingService implements OnModuleInit {
         if (code === '23505') throw new ConflictException({ code: 'CLIENT_EXISTS', message: 'Esta empresa já está na carteira' });
         throw err;
       }
+      const regimeChange = previous ? await this.applyRegimeChange(tx, previous, input) : undefined;
       // Já gera o calendário do período atual para a empresa (nova ou com regime alterado).
       await this.generateInTx(tx, tenantId, localToday(), clientId!);
       await this.audit.log(tx, { action: id ? 'accounting.client.updated' : 'accounting.client.created', entity: 'acc_client', entityId: clientId! });
-      return { id: clientId };
+      return { id: clientId!, ...(regimeChange ? { regimeChange } : {}) };
     });
   }
 
@@ -167,6 +273,7 @@ export class AccountingService implements OnModuleInit {
         .orderBy(asc(accObligations.dueOn), asc(customers.name))
         .limit(2000);
       const doneBy = await this.userNames(tx, rows.map((r) => r.o.doneById).filter((v): v is string => !!v));
+      const attachments = await this.files.listByOwners(tx, FILE_OWNER, rows.map((r) => r.o.id));
       return rows.map(({ o, client, clientName, type, responsible }) => ({
         id: o.id,
         client: { id: client.id, name: clientName, regime: client.regime as TaxRegime },
@@ -178,6 +285,7 @@ export class AccountingService implements OnModuleInit {
         doneBy: o.doneById ? (doneBy.get(o.doneById) ?? null) : null,
         notes: o.notes,
         responsible,
+        attachments: attachments.filter((f) => f.ownerId === o.id).map((f) => ({ id: f.id, filename: f.filename, mime: f.mime, size: f.size })),
       }));
     });
   }
@@ -195,13 +303,44 @@ export class AccountingService implements OnModuleInit {
     });
   }
 
+  /** Observação da obrigação, sem mudar a situação. */
+  setNotes(id: string, notes: string | null) {
+    return this.tdb.run(async (tx) => {
+      const [row] = await tx.update(accObligations).set({ notes }).where(eq(accObligations.id, id)).returning({ id: accObligations.id });
+      if (!row) throw new NotFoundException({ code: 'OBLIGATION_NOT_FOUND', message: 'Obrigação não encontrada' });
+      await this.audit.log(tx, { action: 'accounting.obligation.notes', entity: 'acc_obligation', entityId: id });
+    });
+  }
+
+  /** Guia, recibo ou comprovante da obrigação. */
+  attach(id: string, file: StoredFile) {
+    return this.tdb.run(async (tx) => {
+      const [row] = await tx.select({ id: accObligations.id }).from(accObligations).where(eq(accObligations.id, id));
+      if (!row) throw new NotFoundException({ code: 'OBLIGATION_NOT_FOUND', message: 'Obrigação não encontrada' });
+      const saved = await this.files.saveDocumentInTx(tx, file, { entity: FILE_OWNER, id });
+      await this.audit.log(tx, { action: 'accounting.obligation.attached', entity: 'acc_obligation', entityId: id, data: { fileId: saved.id, filename: saved.filename } });
+      return { id: saved.id, filename: saved.filename, mime: saved.mime, size: saved.size };
+    });
+  }
+
+  removeAttachment(id: string, fileId: string) {
+    return this.tdb.run(async (tx) => {
+      await this.files.removeInTx(tx, fileId, { entity: FILE_OWNER, id });
+      await this.audit.log(tx, { action: 'accounting.obligation.attachment_removed', entity: 'acc_obligation', entityId: id, data: { fileId } });
+    });
+  }
+
+  openAttachment(fileId: string) {
+    return this.files.open(fileId, FILE_OWNER);
+  }
+
   /** Roda a geração agora (o job faz isso todo dia). */
   generateNow() {
     const { tenantId } = requestContext.require();
     return this.tdb.run(async (tx) => {
       const created = await this.generateInTx(tx, tenantId, localToday());
-      const fees = await this.invoiceFeesInTx(tx, tenantId, localToday());
-      return { obligations: created, fees };
+      const { count: fees, moved } = await this.invoiceFeesInTx(tx, tenantId, localToday());
+      return { obligations: created, fees, feesMoved: moved };
     });
   }
 
@@ -237,8 +376,12 @@ export class AccountingService implements OnModuleInit {
     return inserted.length;
   }
 
-  /** Honorário do mês de cada empresa com valor > 0, uma vez por competência. */
-  private async invoiceFeesInTx(tx: Tx, tenantId: string, today: string): Promise<number> {
+  /**
+   * Honorário do mês de cada empresa com valor > 0, uma vez por competência. Se o dia de vencimento
+   * já passou (empresa adicionada ou reativada depois dele), não nasce vencido: fica para o mesmo dia
+   * do mês seguinte, com o motivo na observação do lançamento.
+   */
+  private async invoiceFeesInTx(tx: Tx, tenantId: string, today: string): Promise<{ count: number; moved: { name: string; dueOn: string }[] }> {
     const competence = today.slice(0, 7);
     const clients = await tx
       .select({ c: accClients, name: customers.name })
@@ -246,16 +389,20 @@ export class AccountingService implements OnModuleInit {
       .innerJoin(customers, eq(customers.id, accClients.customerId))
       .where(and(eq(accClients.active, true), sql`${accClients.monthlyFee} > 0`));
     let count = 0;
-    for (const { c } of clients) {
+    const moved: { name: string; dueOn: string }[] = [];
+    for (const { c, name } of clients) {
       const [mark] = await tx.insert(accFeeInvoices).values({ tenantId, clientId: c.id, competence }).onConflictDoNothing().returning({ id: accFeeInvoices.id });
       if (!mark) continue;
       const [y, m] = competence.split('-');
+      const fee = feeDueDate(today, c.feeDueDay);
+      if (fee.moved) moved.push({ name, dueOn: fee.dueOn });
       await this.finance.recordInTx(tx, {
         kind: 'income',
         status: 'pending',
         description: `Honorários contábeis ${m}/${y}`,
         amount: Number(c.monthlyFee),
-        dueDate: `${competence}-${String(c.feeDueDay).padStart(2, '0')}`,
+        dueDate: fee.dueOn,
+        notes: fee.moved ? `O dia ${c.feeDueDay} deste mês já tinha passado quando o honorário foi lançado: o vencimento ficou para o mês seguinte.` : undefined,
         customerId: c.customerId,
         sourceType: 'acc_fee',
         settleInFinance: true,
@@ -264,7 +411,7 @@ export class AccountingService implements OnModuleInit {
       });
       count++;
     }
-    return count;
+    return { count, moved };
   }
 
   /** E-mail ao responsável pela empresa (ou a todos do escritório) dias antes do vencimento. Um por obrigação. */
@@ -324,7 +471,8 @@ const listQuery = z.object({
   status: z.enum(['pending', 'done', 'waived']).optional(),
   clientId: z.string().uuid().optional(),
 });
-const statusBody = z.object({ status: z.enum(['pending', 'done', 'waived']), notes: z.string().trim().max(500).nullish() });
+const statusBody = z.object({ status: z.enum(['pending', 'done', 'waived']), notes: z.string().trim().max(2000).nullish() });
+const impactQuery = z.object({ taxRegime: z.enum(taxRegimes), hasEmployees: z.enum(['true', 'false']).transform((v) => v === 'true') });
 
 @Controller('accounting')
 @ModuleRoute('accounting')
@@ -347,6 +495,13 @@ export class AccountingController {
   @RequirePermission('accounting.manage')
   updateClient(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(clientInput)) body: ClientInput) {
     return this.acc.saveClient(id, body);
+  }
+
+  /** Obrigações em aberto que deixam de valer com o regime informado (para confirmar antes de salvar). */
+  @Get('clients/:id/regime-impact')
+  @RequirePermission('accounting.manage')
+  regimeImpact(@Param('id', ParseUUIDPipe) id: string, @Query(new ZodPipe(impactQuery)) q: z.infer<typeof impactQuery>) {
+    return this.acc.regimeImpact(id, q.taxRegime, q.hasEmployees);
   }
 
   @Get('obligation-types')
@@ -378,6 +533,39 @@ export class AccountingController {
   @RequirePermission('accounting.work')
   status(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(statusBody)) body: z.infer<typeof statusBody>) {
     return this.acc.setStatus(id, body.status, body.notes);
+  }
+
+  @Patch('obligations/:id/notes')
+  @HttpCode(204)
+  @RequirePermission('accounting.work')
+  notes(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(obligationNotesInput)) body: z.infer<typeof obligationNotesInput>) {
+    return this.acc.setNotes(id, body.notes);
+  }
+
+  @Post('obligations/:id/attachments')
+  @RequirePermission('accounting.work')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_DOCUMENT_BYTES, files: 1 } }))
+  attach(@Param('id', ParseUUIDPipe) id: string, @UploadedFile() file: StoredFile | undefined) {
+    if (!file) throw new BadRequestException({ code: 'FILE_REQUIRED', message: 'Envie o arquivo no campo "file"' });
+    return this.acc.attach(id, file);
+  }
+
+  @Delete('obligations/:id/attachments/:fileId')
+  @HttpCode(204)
+  @RequirePermission('accounting.work')
+  removeAttachment(@Param('id', ParseUUIDPipe) id: string, @Param('fileId', ParseUUIDPipe) fileId: string) {
+    return this.acc.removeAttachment(id, fileId);
+  }
+
+  @Get('attachments/:fileId')
+  @RequirePermission('accounting.read')
+  @Header('Cache-Control', 'private, no-store')
+  async download(@Param('fileId', ParseUUIDPipe) fileId: string, @Res({ passthrough: true }) res: Response) {
+    const { file, stream } = await this.acc.openAttachment(fileId);
+    res.setHeader('Content-Type', file.mime);
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.filename)}"`);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    return new StreamableFile(stream);
   }
 
   @Post('generate')

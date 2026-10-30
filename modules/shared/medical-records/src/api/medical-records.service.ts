@@ -12,6 +12,17 @@ const FILE_OWNER = 'mr_entry';
 
 /** De quem é o prontuário: devolve o cliente responsável e um nome para exibir. */
 export type SubjectResolver = (tx: Tx, id: string) => Promise<{ customerId: string; label: string } | undefined>;
+/** O horário da agenda é mesmo deste paciente? Registrado por quem conhece os dois (ex.: a veterinária). */
+export type AppointmentChecker = (tx: Tx, appointmentId: string, subjectId: string) => Promise<boolean>;
+
+/**
+ * Retificação de formulário de um módulo: antes de gravar, ele pode completar os dados; depois,
+ * reagir na mesma transação (ex.: a estética corrige o uso do lote e o estoque).
+ */
+export type AmendHook = (
+  tx: Tx,
+  ctx: { original: { id: string; customerId: string; formKey: string; amendsId: string | null; data: Record<string, unknown> }; data: Record<string, unknown>; occurredOn: string },
+) => Promise<{ data: Record<string, unknown>; after: (entry: MedicalEntry) => Promise<void> }>;
 
 const NOTE_FORM: MedicalForm = { key: 'note', moduleKey: MODULE, label: 'Anotação', subjectTypes: ['customer', 'pet'], fields: [] };
 
@@ -21,6 +32,8 @@ type AccessAction = AccessLogEntry['action'];
 export class MedicalRecordsService implements OnModuleInit {
   private readonly forms = new Map<string, MedicalForm>([[NOTE_FORM.key, NOTE_FORM]]);
   private readonly subjects = new Map<string, SubjectResolver>();
+  private readonly amendHooks = new Map<string, AmendHook>();
+  private readonly appointmentCheckers = new Map<string, AppointmentChecker>();
 
   constructor(
     private readonly tdb: TenantDb,
@@ -55,6 +68,11 @@ export class MedicalRecordsService implements OnModuleInit {
     });
   }
 
+  /** O módulo dono dos formulários reage às retificações deles (ver AmendHook). */
+  registerAmendHook(moduleKey: string, hook: AmendHook) {
+    this.amendHooks.set(moduleKey, hook);
+  }
+
   /** Verticais registram os seus formulários (consulta veterinária, anamnese estética…). */
   registerForm(form: MedicalForm) {
     if (this.forms.has(form.key)) throw new Error(`Formulário de prontuário duplicado: ${form.key}`);
@@ -64,6 +82,11 @@ export class MedicalRecordsService implements OnModuleInit {
   /** Verticais registram de quem pode ser o prontuário além do próprio cliente (ex.: "pet"). */
   registerSubject(type: string, resolver: SubjectResolver) {
     this.subjects.set(type, resolver);
+  }
+
+  /** Com um verificador registrado, o registro só se liga a um horário que seja do mesmo paciente. */
+  registerAppointmentChecker(subjectType: string, checker: AppointmentChecker) {
+    this.appointmentCheckers.set(subjectType, checker);
   }
 
   formsFor(subjectType: string): Promise<MedicalForm[]> {
@@ -114,6 +137,10 @@ export class MedicalRecordsService implements OnModuleInit {
     const form = await this.formOrFail(tx, input.formKey, input.subjectType);
     const data = validate(form, input.data);
     if (!Object.keys(data).length && !input.notes) throw badRequest('EMPTY_ENTRY', 'Preencha algum campo ou escreva uma anotação');
+    const checker = this.appointmentCheckers.get(input.subjectType);
+    if (input.appointmentId && checker && !(await checker(tx, input.appointmentId, input.subjectId))) {
+      throw badRequest('APPOINTMENT_MISMATCH', 'Este horário da agenda não é deste paciente');
+    }
     const [row] = await tx
       .insert(mrEntries)
       .values({
@@ -144,7 +171,10 @@ export class MedicalRecordsService implements OnModuleInit {
       const [newer] = await tx.select({ id: mrEntries.id }).from(mrEntries).where(eq(mrEntries.amendsId, id)).limit(1);
       if (newer) throw new ConflictException({ code: 'ALREADY_AMENDED', message: 'Este registro já foi retificado: retifique a versão mais recente' });
       const form = this.forms.get(original.formKey) ?? NOTE_FORM;
-      const data = validate(form, input.data);
+      const occurredOn = input.occurredOn ?? original.occurredOn;
+      const hook = this.amendHooks.get(form.moduleKey);
+      const prepared = hook ? await hook(tx, { original, data: validate(form, input.data), occurredOn }) : null;
+      const data = prepared ? prepared.data : validate(form, input.data);
       const [row] = await tx
         .insert(mrEntries)
         .values({
@@ -167,7 +197,9 @@ export class MedicalRecordsService implements OnModuleInit {
         .returning();
       await this.log(tx, 'amend', original.subjectType, original.subjectId, row!.id);
       await this.audit.log(tx, { action: 'medical_record.amended', entity: 'mr_entry', entityId: row!.id, data: { amends: id } });
-      return (await this.toDtos(tx, [row!]))[0]!;
+      const entry = (await this.toDtos(tx, [row!]))[0]!;
+      await prepared?.after(entry);
+      return entry;
     });
   }
 
@@ -226,8 +258,9 @@ export class MedicalRecordsService implements OnModuleInit {
 
   private async toDtos(tx: Tx, rows: (typeof mrEntries.$inferSelect)[]): Promise<MedicalEntry[]> {
     const ids = rows.map((r) => r.id);
+    const ancestors = await this.ancestorsOf(tx, rows);
     const [attachments, amendments] = await Promise.all([
-      this.files.listByOwners(tx, FILE_OWNER, ids),
+      this.files.listByOwners(tx, FILE_OWNER, [...ids, ...ancestors.keys()]),
       ids.length
         ? tx.select({ id: mrEntries.id, amendsId: mrEntries.amendsId }).from(mrEntries).where(inArray(mrEntries.amendsId, ids)).orderBy(asc(mrEntries.createdAt))
         : Promise.resolve([]),
@@ -245,10 +278,39 @@ export class MedicalRecordsService implements OnModuleInit {
       amendReason: r.amendReason,
       amendedById: amendments.findLast((a) => a.amendsId === r.id)?.id ?? null,
       author: { id: r.authorId, name: r.authorName },
-      attachments: attachments.filter((a) => a.ownerId === r.id).map((a) => ({ id: a.id, filename: a.filename, mime: a.mime, size: a.size })),
+      attachments: [
+        ...attachments.filter((a) => a.ownerId === r.id).map((a) => ({ id: a.id, filename: a.filename, mime: a.mime, size: a.size })),
+        // Retificação leva os anexos do que ela corrige, só por referência: nada é copiado nem movido.
+        ...chainOf(r, ancestors).flatMap((ancestor) =>
+          attachments
+            .filter((a) => a.ownerId === ancestor.id)
+            .map((a) => ({ id: a.id, filename: a.filename, mime: a.mime, size: a.size, inheritedFrom: { entryId: ancestor.id, occurredOn: ancestor.occurredOn } })),
+        ),
+      ],
       occurredOn: r.occurredOn,
       createdAt: r.createdAt.toISOString(),
     }));
+  }
+
+  /** Registros anteriores das retificações (toda a cadeia até o original), além dos que já vieram. */
+  private async ancestorsOf(tx: Tx, rows: (typeof mrEntries.$inferSelect)[]) {
+    const known = new Map<string, { id: string; amendsId: string | null; occurredOn: string }>();
+    for (const r of rows) known.set(r.id, r);
+    const out = new Map<string, { id: string; amendsId: string | null; occurredOn: string }>();
+    let missing = [...new Set(rows.map((r) => r.amendsId).filter((id): id is string => !!id))];
+    while (missing.length) {
+      const toLoad = missing.filter((id) => !known.has(id));
+      if (toLoad.length) {
+        const loaded = await tx.select({ id: mrEntries.id, amendsId: mrEntries.amendsId, occurredOn: mrEntries.occurredOn }).from(mrEntries).where(inArray(mrEntries.id, toLoad));
+        for (const r of loaded) known.set(r.id, r);
+      }
+      for (const id of missing) {
+        const entry = known.get(id);
+        if (entry) out.set(id, entry);
+      }
+      missing = [...new Set(missing.map((id) => known.get(id)?.amendsId).filter((id): id is string => !!id && !out.has(id)))];
+    }
+    return out;
   }
 
   private async subjectOrFail(tx: Tx, type: string, id: string) {
@@ -276,6 +338,19 @@ export class MedicalRecordsService implements OnModuleInit {
     const { tenantId, userId } = requestContext.requireTenant();
     await tx.insert(mrAccessLog).values({ tenantId, userId: userId ?? null, action, subjectType, subjectId, entryId: entryId ?? null });
   }
+}
+
+/** Do registro corrigido por este até o original, do mais recente ao mais antigo. */
+function chainOf(entry: { amendsId: string | null }, ancestors: Map<string, { id: string; amendsId: string | null; occurredOn: string }>) {
+  const chain: { id: string; occurredOn: string }[] = [];
+  let next = entry.amendsId;
+  while (next) {
+    const ancestor = ancestors.get(next);
+    if (!ancestor) break;
+    chain.push(ancestor);
+    next = ancestor.amendsId;
+  }
+  return chain;
 }
 
 /** Confere os valores contra os campos do formulário e descarta o que não é do formulário. */

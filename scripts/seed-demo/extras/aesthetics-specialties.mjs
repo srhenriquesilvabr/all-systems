@@ -200,7 +200,7 @@ async function createContext(api, rng, pros, lots) {
         const [slots] = await api.get('/scheduling/availability', { date: day(i), serviceIds: service.id, resourceId: professional.id });
         const time = slots?.slots.find((s) => s >= '10:00') ?? slots?.slots[0];
         if (!time) continue;
-        return api.post('/scheduling/appointments', {
+        return api.post('/scheduling/appointments', { overrideSchedule: true,
           customerId: customer.id,
           resourceId: professional.id,
           serviceIds: [service.id],

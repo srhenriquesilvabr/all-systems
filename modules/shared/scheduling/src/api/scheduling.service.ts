@@ -23,6 +23,7 @@ import { customers } from '@all/core/schema';
 import type { Tx } from '@all/db';
 import { requestContext } from '@all/module-sdk';
 import { NotificationsService } from '@all/notifications';
+import { RegistersService, type SalePaymentMethod } from '@all/sales';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { and, asc, eq, gte, inArray, isNull, lt, ne, notInArray, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -33,6 +34,7 @@ import {
   MAX_OCCURRENCES,
   statusTransitions,
   type Appointment,
+  type AppointmentEditInput,
   type AppointmentInput,
   type AppointmentRoomOptions,
   type AppointmentSeriesInput,
@@ -87,6 +89,18 @@ export interface AppointmentStatusChanged {
 export interface ServicePricer {
   moduleKey: string;
   price(tx: Tx, ctx: { appointmentId: string; customerId: string; serviceId: string; price: number }): Promise<{ price: number; label?: string } | null>;
+  /** O serviço saiu de um horário já marcado: desfaz o que `price` reservou para ele. */
+  release?(tx: Tx, ctx: { appointmentId: string; serviceId: string }): Promise<void>;
+}
+
+/**
+ * Reação de outro módulo à mudança de situação, na mesma transação (ex.: o salão grava o percentual
+ * da comissão ao concluir). Só roda nas empresas com o módulo dono ativo. O que puder esperar usa o
+ * evento STATUS_CHANGED.
+ */
+export interface AppointmentStatusHook {
+  moduleKey: string;
+  onStatus(tx: Tx, ctx: { appointmentId: string; resourceId: string; status: AppointmentStatus }): Promise<void>;
 }
 
 /**
@@ -105,6 +119,8 @@ export interface BookingSubjectProvider {
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const badRequest = (code: string, message: string) => new BadRequestException({ code, message });
 const roomTaken = (message = 'Esta sala/equipamento já está ocupado neste horário') => new ConflictException({ code: 'ROOM_TAKEN', message });
+/** Forma de pagamento da agenda na conferência do caixa (transferência entra em "Outras"). */
+const registerMethod = (method: string): SalePaymentMethod => (['cash', 'pix', 'credit_card', 'debit_card'].includes(method) ? (method as SalePaymentMethod) : 'other');
 const roomRequired = () => badRequest('ROOM_REQUIRED', 'Um dos serviços deste atendimento exige sala/equipamento: escolha outra sala em vez de deixar sem');
 /** Quantos atendimentos "distribuir salas" grava por vez (o resto fica para a próxima rodada). */
 const MAX_ROOM_DISTRIBUTION = 500;
@@ -114,6 +130,7 @@ type AppointmentRow = typeof schAppointments.$inferSelect;
 @Injectable()
 export class SchedulingService implements OnModuleInit {
   private readonly pricers: ServicePricer[] = [];
+  private readonly statusHooks: AppointmentStatusHook[] = [];
   private readonly bookingSubjects: BookingSubjectProvider[] = [];
   private readonly logger = new Logger('Agenda');
 
@@ -130,6 +147,7 @@ export class SchedulingService implements OnModuleInit {
     private readonly customerData: CustomerDataRegistry,
     private readonly team: TeamService,
     private readonly teamLinks: TeamLinksRegistry,
+    private readonly registers: RegistersService,
   ) {}
 
   onModuleInit() {
@@ -325,6 +343,21 @@ export class SchedulingService implements OnModuleInit {
     });
   }
 
+  /** Liga no link os serviços da lista e desliga os demais. */
+  setOnlineServices(serviceIds: string[]) {
+    return this.tdb.run(async (tx) => {
+      const rows = await tx.select({ id: schServices.id }).from(schServices);
+      const known = new Set(rows.map((r) => r.id));
+      if (serviceIds.some((id) => !known.has(id))) throw badRequest('SERVICE_NOT_FOUND', 'Serviço inexistente');
+      const chosen = new Set(serviceIds);
+      const on = rows.filter((r) => chosen.has(r.id)).map((r) => r.id);
+      const off = rows.filter((r) => !chosen.has(r.id)).map((r) => r.id);
+      if (on.length) await tx.update(schServices).set({ online: true }).where(inArray(schServices.id, on));
+      if (off.length) await tx.update(schServices).set({ online: false }).where(inArray(schServices.id, off));
+      await this.audit.log(tx, { action: 'scheduling.services.online_updated', entity: 'sch_service', data: { serviceIds } });
+    });
+  }
+
   // ---- Horários livres ------------------------------------------------------------------------
 
   availability(opts: { date: string; serviceIds: string[]; resourceId?: string; online?: boolean }): Promise<AvailabilitySlots[]> {
@@ -414,13 +447,13 @@ export class SchedulingService implements OnModuleInit {
   }
 
   create(input: AppointmentInput, opts: { source?: 'admin' | 'online' | 'whatsapp'; online?: boolean } = {}) {
-    return this.tdb.run((tx) => this.createInTx(tx, input, opts));
+    return this.tdb.run((tx) => this.createInTx(tx, input, { ...opts, checkSchedule: true }));
   }
 
   async createInTx(
     tx: Tx,
     input: AppointmentInput,
-    opts: { source?: 'admin' | 'online' | 'whatsapp'; online?: boolean; seriesId?: string; notify?: boolean } = {},
+    opts: { source?: 'admin' | 'online' | 'whatsapp'; online?: boolean; seriesId?: string; notify?: boolean; checkSchedule?: boolean } = {},
   ): Promise<Appointment> {
     const { tenantId, userId } = requestContext.requireTenant();
     const customer = await this.customers.findInTx(tx, input.customerId);
@@ -433,6 +466,7 @@ export class SchedulingService implements OnModuleInit {
 
     const duration = services.reduce((sum, s) => sum + s.durationMin + s.bufferMin, 0);
     const endsAt = addMinutes(input.startsAt, duration);
+    const scheduleOverride = opts.checkSchedule ? await this.guardSchedule(tx, resource.id, input.startsAt, endsAt, input.overrideSchedule) : null;
     const roomId = await this.pickRoom(tx, services, input.roomId ?? null, input.startsAt, endsAt);
 
     const appointment = await this.insertAppointment(tx, {
@@ -470,7 +504,7 @@ export class SchedulingService implements OnModuleInit {
       action: 'appointment.created',
       entity: 'appointment',
       entityId: appointment.id,
-      data: { source: opts.source ?? 'admin', ...(opts.seriesId ? { seriesId: opts.seriesId } : {}) },
+      data: { source: opts.source ?? 'admin', ...(opts.seriesId ? { seriesId: opts.seriesId } : {}), ...(scheduleOverride ? { scheduleOverride } : {}) },
     });
     return this.detailInTx(tx, appointment.id);
   }
@@ -561,18 +595,47 @@ export class SchedulingService implements OnModuleInit {
     return this.bookingSubjects.find((p) => activeModules.has(p.moduleKey)) ?? null;
   }
 
+  /**
+   * Um módulo passa a cobrir um serviço já marcado (ex.: a taxa do tratamento cobre a instalação):
+   * a linha fica sem custo e o total acompanha. Devolve false se já há pagamento que passaria do
+   * novo total ou se o atendimento encerrou: aí é decisão de quem está cobrando.
+   */
+  async coverServiceInTx(tx: Tx, appointmentId: string, serviceId: string, label: string): Promise<boolean> {
+    const a = await this.findOrFail(tx, appointmentId, true);
+    if (closedStatuses.includes(a.status)) return false;
+    const [line] = await tx
+      .select()
+      .from(schAppointmentServices)
+      .where(and(eq(schAppointmentServices.appointmentId, appointmentId), eq(schAppointmentServices.serviceId, serviceId)));
+    if (!line) return false;
+    const total = toCents(a.total) - toCents(line.price);
+    if (total < toCents(a.paidAmount)) return false;
+    await tx.update(schAppointmentServices).set({ price: '0', discount: '0', covered: true, name: `${line.name} (${label})` }).where(eq(schAppointmentServices.id, line.id));
+    const [updated] = await tx.update(schAppointments).set({ total: centsToDecimal(total) }).where(eq(schAppointments.id, appointmentId)).returning();
+    await this.syncReceivable(tx, updated!);
+    await this.audit.log(tx, { action: 'appointment.service_covered', entity: 'appointment', entityId: appointmentId, data: { serviceId, label, price: Number(line.price) } });
+    return true;
+  }
+
+  /** Outros módulos reagem à mudança de situação na mesma transação (ver AppointmentStatusHook). */
+  registerStatusHook(hook: AppointmentStatusHook) {
+    this.statusHooks.push(hook);
+  }
+
+  private async activeModules(tx: Tx) {
+    return new Set((await tx.select({ key: coreSchema.tenantModules.moduleKey }).from(coreSchema.tenantModules).where(eq(coreSchema.tenantModules.status, 'active'))).map((r) => r.key));
+  }
+
   private async priceLines(tx: Tx, appointmentId: string, customerId: string, services: { id: string; name: string; durationMin: number; bufferMin: number; price: string }[]) {
-    const active = this.pricers.length
-      ? new Set((await tx.select({ key: coreSchema.tenantModules.moduleKey }).from(coreSchema.tenantModules).where(eq(coreSchema.tenantModules.status, 'active'))).map((r) => r.key))
-      : new Set<string>();
+    const active = this.pricers.length ? await this.activeModules(tx) : new Set<string>();
     const pricers = this.pricers.filter((p) => active.has(p.moduleKey));
     const lines = [];
     for (const s of services) {
-      let line = { serviceId: s.id, name: s.name, durationMin: s.durationMin + s.bufferMin, price: s.price };
+      let line = { serviceId: s.id, name: s.name, durationMin: s.durationMin + s.bufferMin, price: s.price, covered: false };
       for (const pricer of pricers) {
         const adjusted = await pricer.price(tx, { appointmentId, customerId, serviceId: s.id, price: Number(s.price) });
         if (adjusted) {
-          line = { ...line, price: centsToDecimal(toCents(adjusted.price)), name: adjusted.label ? `${s.name} (${adjusted.label})` : s.name };
+          line = { ...line, price: centsToDecimal(toCents(adjusted.price)), name: adjusted.label ? `${s.name} (${adjusted.label})` : s.name, covered: true };
           break;
         }
       }
@@ -581,7 +644,7 @@ export class SchedulingService implements OnModuleInit {
     return lines;
   }
 
-  reschedule(id: string, input: { startsAt: Date; resourceId?: string; roomId?: string | null }) {
+  reschedule(id: string, input: { startsAt: Date; resourceId?: string; roomId?: string | null; overrideSchedule?: boolean }) {
     return this.tdb.run(async (tx) => {
       const current = await this.findOrFail(tx, id, true);
       if (current.status !== 'scheduled' && current.status !== 'confirmed') {
@@ -594,6 +657,7 @@ export class SchedulingService implements OnModuleInit {
       }
       const duration = current.endsAt.getTime() - current.startsAt.getTime();
       const endsAt = new Date(input.startsAt.getTime() + duration);
+      const scheduleOverride = await this.guardSchedule(tx, resourceId, input.startsAt, endsAt, input.overrideSchedule);
       const roomId = await this.rescheduleRoom(tx, current, svc, input.roomId, input.startsAt, endsAt);
       await this.guardOverlap(() =>
         tx
@@ -606,7 +670,143 @@ export class SchedulingService implements OnModuleInit {
         action: 'appointment.rescheduled',
         entity: 'appointment',
         entityId: id,
-        data: { from: current.startsAt, to: input.startsAt, ...(roomId !== current.roomId ? { roomFrom: current.roomId, roomTo: roomId } : {}) },
+        data: { from: current.startsAt, to: input.startsAt, ...(roomId !== current.roomId ? { roomFrom: current.roomId, roomTo: roomId } : {}), ...(scheduleOverride ? { scheduleOverride } : {}) },
+      });
+      return this.detailInTx(tx, id);
+    });
+  }
+
+  /**
+   * Troca profissional, serviços, preço, desconto, sala ou observação de um horário ainda aberto,
+   * no mesmo início e com as validações da marcação. Linha mantida guarda o preço dela; serviço novo
+   * passa pelos ajustes de preço (pacote, tratamento). Linha coberta por pacote não muda de valor.
+   */
+  editAppointment(id: string, input: AppointmentEditInput) {
+    const ctx = requestContext.require();
+    const { tenantId } = ctx;
+    return this.tdb.run(async (tx) => {
+      const current = await this.findOrFail(tx, id, true);
+      if (closedStatuses.includes(current.status)) throw badRequest('APPOINTMENT_CLOSED', 'Atendimento concluído, cancelado ou com falta não pode ser alterado');
+      const lines = await tx.select().from(schAppointmentServices).where(eq(schAppointmentServices.appointmentId, id));
+      const fixed = lines.filter((l) => !l.serviceId);
+      const wanted: { serviceId: string; price?: number; discount?: number }[] = input.services ?? lines.filter((l) => l.serviceId).map((l) => ({ serviceId: l.serviceId! }));
+      if (new Set(wanted.map((w) => w.serviceId)).size !== wanted.length) throw badRequest('SERVICE_REPEATED', 'O mesmo serviço apareceu duas vezes');
+      const lineOf = new Map(lines.filter((l) => l.serviceId).map((l) => [l.serviceId!, l]));
+      const removed = lines.filter((l) => l.serviceId && !wanted.some((w) => w.serviceId === l.serviceId));
+      const addedIds = wanted.filter((w) => !lineOf.has(w.serviceId)).map((w) => w.serviceId);
+
+      // Profissional: ativo e que faz todos os serviços que ficam.
+      const resourceId = input.resourceId ?? current.resourceId;
+      const serviceIds = wanted.map((w) => w.serviceId);
+      if (resourceId !== current.resourceId) {
+        const resource = await this.resourceOrFail(tx, resourceId);
+        if (resource.kind !== 'professional' || !resource.active) throw badRequest('RESOURCE_INACTIVE', 'Profissional inativo');
+      }
+      if (resourceId !== current.resourceId || addedIds.length) {
+        const [resource] = await tx.select({ name: schResources.name }).from(schResources).where(eq(schResources.id, resourceId));
+        if (!(await this.eligibleResources(tx, serviceIds, resourceId)).length) throw badRequest('RESOURCE_NOT_ELIGIBLE', `${resource?.name ?? 'Este profissional'} não faz todos os serviços escolhidos`);
+      }
+
+      // Valores: `price` e `discount` são de tabela e desconto; o banco guarda o cobrado e o desconto.
+      const added = addedIds.length ? await this.priceLines(tx, id, current.customerId, await this.servicesOrFail(tx, addedIds)) : [];
+      let valuesChanged = false;
+      const net = (service: string, gross: number, discount: number) => {
+        if (discount > gross) throw badRequest('DISCOUNT_EXCEEDS_PRICE', `O desconto passa do preço de ${service}`);
+        return gross - discount;
+      };
+      const keep: { row: (typeof lines)[number]; price: number; discount: number }[] = [];
+      const fresh: ((typeof added)[number] & { discount: number })[] = [];
+      for (const w of wanted) {
+        const row = lineOf.get(w.serviceId);
+        if (row) {
+          const before = { discount: toCents(row.discount), gross: toCents(row.price) + toCents(row.discount) };
+          const gross = w.price === undefined ? before.gross : toCents(w.price);
+          const discount = w.discount === undefined ? before.discount : toCents(w.discount);
+          if (gross !== before.gross || discount !== before.discount) {
+            if (row.covered) throw badRequest('LINE_COVERED', `${row.name}: o valor vem do pacote ou do tratamento e não muda à mão`);
+            valuesChanged = true;
+          }
+          keep.push({ row, price: net(row.name, gross, discount), discount });
+        } else {
+          const line = added.find((l) => l.serviceId === w.serviceId)!;
+          const custom = w.price !== undefined || w.discount !== undefined;
+          if (custom && line.covered) throw badRequest('LINE_COVERED', `${line.name}: o valor vem do pacote ou do tratamento e não muda à mão`);
+          if (custom) valuesChanged = true;
+          const discount = toCents(w.discount ?? 0);
+          fresh.push({ ...line, price: centsToDecimal(net(line.name, w.price === undefined ? toCents(line.price) : toCents(w.price), discount)), discount });
+        }
+      }
+      if (valuesChanged && !ctx.permissions?.has('shared.scheduling.payments')) {
+        throw new ForbiddenException({ code: 'MISSING_PERMISSION', message: 'Você não tem permissão para mudar preço ou desconto', missing: ['shared.scheduling.payments'] });
+      }
+      const totalCents = [...fixed.map((l) => toCents(l.price)), ...keep.map((k) => k.price), ...fresh.map((f) => toCents(f.price))].reduce((a, b) => a + b, 0);
+      const paid = toCents(current.paidAmount);
+      if (totalCents < paid) throw badRequest('TOTAL_BELOW_PAID', `O novo total fica abaixo do que já foi pago (${brl.format(centsToNumber(paid))})`);
+
+      // Agenda: mesmo início; o fim acompanha a duração dos serviços.
+      const durationMin = [...fixed, ...keep.map((k) => k.row), ...fresh].reduce((sum, l) => sum + l.durationMin, 0);
+      const endsAt = addMinutes(current.startsAt, durationMin);
+      const scheduleMoved = resourceId !== current.resourceId || endsAt.getTime() !== current.endsAt.getTime();
+      const scheduleOverride = scheduleMoved ? await this.guardSchedule(tx, resourceId, current.startsAt, endsAt, input.overrideSchedule) : null;
+
+      const after = await tx.select({ requiresRoom: schServices.requiresRoom }).from(schServices).where(inArray(schServices.id, serviceIds));
+      const svc = { serviceIds, requiresRoom: after.some((r) => r.requiresRoom) };
+      // A sala atual só fica se ainda servir para os serviços.
+      const roomKeeps = current.roomId && (await this.eligibleResources(tx, serviceIds, current.roomId, 'room')).length ? current.roomId : null;
+      const roomId =
+        input.roomId === undefined && !scheduleMoved && !addedIds.length && !removed.length
+          ? current.roomId
+          : await this.rescheduleRoom(tx, { ...current, roomId: roomKeeps }, svc, input.roomId, current.startsAt, endsAt);
+
+      if (removed.length) {
+        const active = await this.activeModules(tx);
+        for (const l of removed) {
+          for (const pricer of this.pricers.filter((p) => active.has(p.moduleKey))) await pricer.release?.(tx, { appointmentId: id, serviceId: l.serviceId! });
+        }
+        await tx.delete(schAppointmentServices).where(inArray(schAppointmentServices.id, removed.map((l) => l.id)));
+      }
+      for (const k of keep) {
+        await tx.update(schAppointmentServices).set({ price: centsToDecimal(k.price), discount: centsToDecimal(k.discount) }).where(eq(schAppointmentServices.id, k.row.id));
+      }
+      if (fresh.length) await tx.insert(schAppointmentServices).values(fresh.map((f) => ({ ...f, discount: centsToDecimal(f.discount), tenantId, appointmentId: id })));
+
+      const [updated] = await this.guardOverlap(() =>
+        tx
+          .update(schAppointments)
+          .set({
+            resourceId,
+            roomId,
+            endsAt,
+            total: centsToDecimal(totalCents),
+            paymentStatus: paid === 0 ? 'pending' : paid >= totalCents ? 'paid' : 'partial',
+            ...(input.notes !== undefined ? { notes: input.notes ?? null } : {}),
+          })
+          .where(eq(schAppointments.id, id))
+          .returning(),
+      );
+      await this.syncReceivable(tx, updated!);
+      if (resourceId !== current.resourceId || addedIds.length > 0 || removed.length > 0) {
+        await this.customers.addTimeline(tx, {
+          customerId: current.customerId,
+          moduleKey: MODULE,
+          type: 'appointment.updated',
+          title: `Horário de ${formatDate(utcToLocal(current.startsAt).date)} alterado`,
+          entity: 'appointment',
+          entityId: id,
+        });
+        await this.notify(tx, id, 'shared.scheduling.rescheduled');
+      }
+      await this.audit.log(tx, {
+        action: 'appointment.updated',
+        entity: 'appointment',
+        entityId: id,
+        data: {
+          resource: { from: current.resourceId, to: resourceId },
+          total: { from: Number(current.total), to: centsToNumber(totalCents) },
+          services: { before: lines.map((l) => ({ serviceId: l.serviceId, price: Number(l.price), discount: Number(l.discount) })), after: wanted },
+          ...(roomId !== current.roomId ? { room: { from: current.roomId, to: roomId } } : {}),
+          ...(scheduleOverride ? { scheduleOverride } : {}),
+        },
       });
       return this.detailInTx(tx, id);
     });
@@ -752,6 +952,10 @@ export class SchedulingService implements OnModuleInit {
       .where(eq(schAppointments.id, id))
       .returning();
     await this.syncReceivable(tx, updated!);
+    if (this.statusHooks.length) {
+      const active = await this.activeModules(tx);
+      for (const hook of this.statusHooks.filter((h) => active.has(h.moduleKey))) await hook.onStatus(tx, { appointmentId: id, resourceId: current.resourceId, status });
+    }
     await this.customers.addTimeline(tx, {
       customerId: current.customerId,
       moduleKey: MODULE,
@@ -774,30 +978,64 @@ export class SchedulingService implements OnModuleInit {
     return this.detailInTx(tx, id);
   }
 
-  addPayment(id: string, input: { amount: number; method: string; accountId: string; paidAt: string }) {
+  /**
+   * Recebimento de um atendimento: um lançamento pago no financeiro, na data informada (padrão hoje,
+   * nunca no futuro). Com caixa escolhido, entra também na sessão aberta dele, só para a conferência
+   * do fechamento: o financeiro já tem o lançamento, e o caixa não lança de novo (ADR-040).
+   */
+  addPayment(id: string, input: { amount: number; method: string; accountId?: string | null; paidAt?: string; registerId?: string | null }) {
     const { tenantId, userId } = requestContext.require();
     return this.tdb.run(async (tx) => {
       const a = await this.findOrFail(tx, id, true);
       if (a.status === 'cancelled' || a.status === 'no_show') throw badRequest('APPOINTMENT_CLOSED', 'Atendimento cancelado não recebe pagamento');
+      const today = localToday();
+      const paidAt = input.paidAt ?? today;
+      if (paidAt > today) throw badRequest('INVALID_DATE', 'A data do pagamento não pode ser no futuro');
       const amount = toCents(input.amount);
       const outstanding = toCents(a.total) - toCents(a.paidAmount);
       if (amount > outstanding) throw badRequest('PAYMENT_EXCEEDS_BALANCE', `O valor passa do saldo em aberto (${brl.format(centsToNumber(outstanding))})`);
+
+      // Mesma regra da venda: a de hoje com o caixa fechado é recusada; a de outro dia só entra se a
+      // sessão daquele dia ainda estiver aberta (o dinheiro dela ainda vai ser conferido).
+      let registerSessionId: string | null = null;
+      const occurredAt = paidAt === today ? new Date() : localToUtc(paidAt, '23:59');
+      if (input.registerId) {
+        if (!(await this.activeModules(tx)).has('shared.sales')) throw badRequest('REGISTER_UNAVAILABLE', 'O caixa (PDV) não está ativo nesta empresa');
+        registerSessionId = await this.registers.sessionForSaleInTx(tx, { registerId: input.registerId, required: false, soldAt: occurredAt });
+      }
+      // O dinheiro que entra na gaveta está na conta Caixa, como nas vendas.
+      const accountId = (registerSessionId && input.method === 'cash' ? null : input.accountId) ?? (await this.finance.defaultAccountId(tx));
+      if (!accountId) throw badRequest('ACCOUNT_REQUIRED', 'Escolha a conta do financeiro');
 
       const entry = await this.finance.recordInTx(tx, {
         kind: 'income',
         status: 'paid',
         amount: input.amount,
         description: `Atendimento de ${formatDate(utcToLocal(a.startsAt).date)}`,
-        dueDate: input.paidAt,
-        paidAt: input.paidAt,
-        accountId: input.accountId,
+        dueDate: paidAt,
+        paidAt,
+        accountId,
         customerId: a.customerId,
         paymentMethod: input.method,
         sourceType: SOURCE,
         sourceId: a.id,
         categoryKey: 'services',
       });
-      await tx.insert(schPayments).values({ tenantId, appointmentId: id, amount: centsToDecimal(amount), method: input.method, paidAt: input.paidAt, finEntryId: entry.id, userId });
+      const [payment] = await tx
+        .insert(schPayments)
+        .values({ tenantId, appointmentId: id, amount: centsToDecimal(amount), method: input.method, paidAt, finEntryId: entry.id, registerSessionId, userId })
+        .returning({ id: schPayments.id });
+      if (registerSessionId) {
+        await this.registers.addServiceReceiptInTx(tx, {
+          sessionId: registerSessionId,
+          method: registerMethod(input.method),
+          amountCents: amount,
+          reason: `Atendimento de ${formatDate(utcToLocal(a.startsAt).date)}`,
+          occurredAt,
+          sourceType: 'sch_payment',
+          sourceId: payment!.id,
+        });
+      }
       const paid = toCents(a.paidAmount) + amount;
       const [updated] = await tx
         .update(schAppointments)
@@ -805,14 +1043,14 @@ export class SchedulingService implements OnModuleInit {
         .where(eq(schAppointments.id, id))
         .returning();
       await this.syncReceivable(tx, updated!);
-      await this.audit.log(tx, { action: 'appointment.payment', entity: 'appointment', entityId: id, data: input });
+      await this.audit.log(tx, { action: 'appointment.payment', entity: 'appointment', entityId: id, data: { ...input, paidAt, accountId, registerSessionId } });
       const detail = await this.detailInTx(tx, id);
       await this.outbox.publish(tx, PAYMENT_RECORDED, {
         appointmentId: id,
         customerId: a.customerId,
         amount: input.amount,
         method: input.method,
-        paidAt: input.paidAt,
+        paidAt,
         status: detail.status,
         paymentStatus: detail.paymentStatus,
         total: detail.total,
@@ -823,6 +1061,14 @@ export class SchedulingService implements OnModuleInit {
       });
       return detail;
     });
+  }
+
+  /** Caixas do PDV com sessão aberta agora, para o pagamento na agenda (vazio sem o módulo de vendas). */
+  async paymentRegisters(): Promise<{ id: string; name: string }[]> {
+    const active = await this.tdb.run((tx) => this.activeModules(tx));
+    if (!active.has('shared.sales')) return [];
+    const { registers } = await this.registers.overview();
+    return registers.filter((r) => r.active && r.openSession).map((r) => ({ id: r.id, name: r.name }));
   }
 
   /** Lembretes: roda no worker a cada 5 min, para todas as empresas com a agenda ativa. */
@@ -1015,8 +1261,8 @@ export class SchedulingService implements OnModuleInit {
     return [...appointments.map((a) => ({ ...a, resourceId: a.resourceId! })), ...timeOff];
   }
 
-  /** Por que uma data da série não cabe (ou null se cabe): expediente, bloqueio, outro horário, sala. */
-  private async conflictReason(tx: Tx, resourceId: string, start: Date, end: Date, roomId: string | null): Promise<string | null> {
+  /** Expediente e folga do profissional no período: o motivo de não caber, ou null. */
+  private async scheduleConflict(tx: Tx, resourceId: string, start: Date, end: Date): Promise<string | null> {
     const local = utcToLocal(start);
     const hours = await tx
       .select()
@@ -1028,7 +1274,27 @@ export class SchedulingService implements OnModuleInit {
       .from(schTimeOff)
       .where(and(eq(schTimeOff.resourceId, resourceId), lt(schTimeOff.startsAt, end), sql`${schTimeOff.endsAt} > ${start}`))
       .limit(1);
-    if (off) return 'Profissional de folga ou com horário bloqueado';
+    return off ? 'Profissional de folga ou com horário bloqueado' : null;
+  }
+
+  /**
+   * Marcação fora do expediente ou em folga é recusada. A exceção é consciente: quem configura a
+   * agenda confirma "marcar mesmo assim", e o motivo fica na auditoria (devolvido para quem grava).
+   */
+  private async guardSchedule(tx: Tx, resourceId: string, start: Date, end: Date, override?: boolean): Promise<string | null> {
+    const reason = await this.scheduleConflict(tx, resourceId, start, end);
+    if (!reason) return null;
+    if (!override) throw new ConflictException({ code: 'OUTSIDE_SCHEDULE', message: `${reason} neste horário` });
+    if (!requestContext.require().permissions?.has('shared.scheduling.manage')) {
+      throw new ForbiddenException({ code: 'MISSING_PERMISSION', message: 'Só quem configura a agenda pode marcar fora do expediente ou em folga', missing: ['shared.scheduling.manage'] });
+    }
+    return reason;
+  }
+
+  /** Por que uma data da série não cabe (ou null se cabe): expediente, bloqueio, outro horário, sala. */
+  private async conflictReason(tx: Tx, resourceId: string, start: Date, end: Date, roomId: string | null): Promise<string | null> {
+    const schedule = await this.scheduleConflict(tx, resourceId, start, end);
+    if (schedule) return schedule;
     const [taken] = await tx
       .select({ id: schAppointments.id })
       .from(schAppointments)
@@ -1183,7 +1449,7 @@ function toAppointmentDto(
     source: a.source,
     notes: a.notes,
     subject: a.subjectType && a.subjectId ? { type: a.subjectType, id: a.subjectId, label: a.subjectLabel ?? '' } : null,
-    services: services.map((s) => ({ serviceId: s.serviceId, name: s.name, durationMin: s.durationMin, price: Number(s.price) })),
+    services: services.map((s) => ({ serviceId: s.serviceId, name: s.name, durationMin: s.durationMin, price: Number(s.price), discount: Number(s.discount), covered: s.covered })),
     total: Number(a.total),
     paidAmount: Number(a.paidAmount),
     paymentStatus: a.paymentStatus,

@@ -4,13 +4,17 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { petAge, speciesLabel, type Pet } from '../contracts';
-import { petsKey, usePets } from './hooks';
+import { petsKey, usePetsPage } from './hooks';
 import { petImportSpec } from './petImport';
 import { PetModal } from './PetModal';
 
+const PAGE = 25;
+
 export function PetsPage() {
   const [q, setQ] = useState('');
-  const pets = usePets({ q: q.trim() || undefined });
+  const [page, setPage] = useState(0);
+  const pets = usePetsPage({ q: q.trim() || undefined, limit: PAGE, offset: page * PAGE });
+  const pages = Math.ceil((pets.data?.total ?? 0) / PAGE);
   const canWrite = useCan('shared.pets.write');
   const queryClient = useQueryClient();
   const [creating, setCreating] = useState(false);
@@ -31,7 +35,10 @@ export function PetsPage() {
         }
       />
       <div className="mb-4 max-w-sm">
-        <Input type="search" aria-label="Buscar pet" placeholder="Nome do pet, raça ou tutor" value={q} onChange={(e) => setQ(e.target.value)} />
+        <Input type="search" aria-label="Buscar pet" placeholder="Nome do pet, raça ou tutor" value={q} onChange={(e) => {
+          setQ(e.target.value);
+          setPage(0);
+        }} />
       </div>
       <Card>
         {pets.isPending ? (
@@ -40,12 +47,23 @@ export function PetsPage() {
           <div className="p-4">
             <Alert>{pets.error.message}</Alert>
           </div>
-        ) : pets.data.length === 0 ? (
+        ) : pets.data.items.length === 0 ? (
           <EmptyState title={q ? 'Nenhum pet encontrado' : 'Nenhum pet cadastrado'} action={canWrite && !q && <Button onClick={() => setCreating(true)}>Cadastrar o primeiro</Button>} />
         ) : (
-          <PetTable pets={pets.data} onOpen={(p) => navigate(`/pets/${p.id}`)} />
+          <PetTable pets={pets.data.items} onOpen={(p) => navigate(`/pets/${p.id}`)} />
         )}
       </Card>
+      {pages > 1 && (
+        <div className="mt-4 flex items-center justify-end gap-2 text-sm text-fg-muted">
+          <Button variant="secondary" size="sm" disabled={page === 0} onClick={() => setPage(page - 1)}>
+            Anterior
+          </Button>
+          Página {page + 1} de {pages}
+          <Button variant="secondary" size="sm" disabled={page + 1 >= pages} onClick={() => setPage(page + 1)}>
+            Próxima
+          </Button>
+        </div>
+      )}
       {creating && <PetModal pet={null} onClose={() => setCreating(false)} onSaved={(p) => navigate(`/pets/${p.id}`)} />}
     </>
   );

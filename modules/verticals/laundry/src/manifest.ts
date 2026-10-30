@@ -19,7 +19,7 @@ export const laundryManifest = defineModule({
   layer: 'vertical',
   description: 'Peça a peça, do recebimento à entrega, com etiquetas e prazos.',
   icon: 'shirt',
-  version: '0.4.0',
+  version: '0.5.0',
   dependsOn: ['core.customers', 'core.finance', 'shared.service-orders', 'shared.notifications', 'shared.sales'],
   optionalDependsOn: ['integration.payments'],
 
@@ -29,6 +29,7 @@ export const laundryManifest = defineModule({
     { key: 'laundry.orders.status', label: 'Alterar status de peças e ordens' },
     { key: 'laundry.logistics.manage', label: 'Gerenciar coletas e entregas (agendar, atribuir motorista, reagendar)' },
     { key: 'laundry.logistics.drive', label: 'Fazer coletas e entregas (só as atribuídas a si)' },
+    { key: 'laundry.logistics.receive', label: 'Receber o saldo da ordem na entrega' },
     { key: 'laundry.catalog.manage', label: 'Gerenciar serviços e preços' },
     { key: 'laundry.reports.read', label: 'Ver relatórios da lavanderia' },
   ],
@@ -79,7 +80,8 @@ export const laundryManifest = defineModule({
       key: 'laundry.driver',
       label: 'Motorista',
       // Só as próprias rotas: os dados do cliente e da ordem de que precisa vêm junto com cada tarefa.
-      permissions: ['laundry.logistics.drive'],
+      // Receber o saldo vale só na conclusão da entrega dele; para tirar, crie um papel sem esta permissão.
+      permissions: ['laundry.logistics.drive', 'laundry.logistics.receive'],
     },
   ],
 

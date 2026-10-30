@@ -10,7 +10,7 @@ import { BadRequestException, Body, Controller, Get, Injectable, Module, NotFoun
 import { and, asc, desc, eq, gte, inArray, isNull, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { aestheticsForms, cancelPackageInput, localToday, packageInput, type PackageInput, type SessionPackage } from '../contracts';
-import { aesPackages, aesPackageSessions } from '../db/schema';
+import { aesCases, aesPackages, aesPackageSessions } from '../db/schema';
 import type { AestheticsSettings } from '../manifest';
 import { SpecialtyClinicalService } from './clinical.service';
 import { SpecialtySetupService } from './setup.service';
@@ -56,7 +56,7 @@ export class AestheticsService implements OnModuleInit {
     });
     for (const form of aestheticsForms) this.records.registerForm(form);
     // Sessão coberta por pacote: R$ 0 na agenda e a sessão fica reservada para o horário.
-    this.scheduling.registerPricer({ moduleKey: MODULE, price: (tx, ctx) => this.reserveSession(tx, ctx) });
+    this.scheduling.registerPricer({ moduleKey: MODULE, price: (tx, ctx) => this.reserveSession(tx, ctx), release: (tx, ctx) => this.releaseSession(tx, ctx) });
     this.handlers.on<AppointmentStatusChanged>(STATUS_CHANGED, 'aesthetics.package-sessions', (e) => this.onStatusChanged(e.payload));
   }
 
@@ -82,6 +82,11 @@ export class AestheticsService implements OnModuleInit {
       const firstDueOn = input.firstDueOn ?? soldOn;
       if (firstDueOn < soldOn) throw badRequest('INVALID_DUE_DATE', 'O primeiro vencimento não pode ser antes da venda');
       if (input.expiresOn && input.expiresOn < firstDueOn) throw badRequest('INVALID_EXPIRY', 'A validade não pode ser antes do primeiro vencimento');
+      if (input.caseId) {
+        const [origin] = await tx.select({ customerId: aesCases.customerId, status: aesCases.status }).from(aesCases).where(eq(aesCases.id, input.caseId));
+        if (!origin || origin.customerId !== customer.id) throw badRequest('CASE_MISMATCH', 'Este tratamento é de outro paciente');
+        if (origin.status === 'cancelled') throw badRequest('CASE_CLOSED', 'Este tratamento foi cancelado');
+      }
 
       const [pkg] = await tx
         .insert(aesPackages)
@@ -94,6 +99,7 @@ export class AestheticsService implements OnModuleInit {
           soldOn,
           expiresOn: input.expiresOn,
           notes: input.notes ?? null,
+          caseId: input.caseId ?? null,
         })
         .returning();
       const parts = splitCents(toCents(input.price), input.installments);
@@ -165,10 +171,24 @@ export class AestheticsService implements OnModuleInit {
     for (const pkg of candidates) {
       const taken = await this.takenSessions(tx, pkg.id);
       if (taken >= pkg.totalSessions) continue;
-      await tx.insert(aesPackageSessions).values({ tenantId: pkg.tenantId, packageId: pkg.id, appointmentId: ctx.appointmentId });
+      // Serviço tirado e posto de novo no mesmo horário: a reserva liberada volta a valer.
+      await tx
+        .insert(aesPackageSessions)
+        .values({ tenantId: pkg.tenantId, packageId: pkg.id, appointmentId: ctx.appointmentId })
+        .onConflictDoUpdate({ target: [aesPackageSessions.packageId, aesPackageSessions.appointmentId], set: { status: 'reserved' } });
       return { price: 0, label: `pacote ${taken + 1}/${pkg.totalSessions}` };
     }
     return null;
+  }
+
+  /** O serviço saiu de um horário marcado: a sessão reservada para ele volta ao pacote. */
+  private async releaseSession(tx: Tx, ctx: { appointmentId: string; serviceId: string }) {
+    const sessions = await tx
+      .select({ id: aesPackageSessions.id })
+      .from(aesPackageSessions)
+      .innerJoin(aesPackages, eq(aesPackages.id, aesPackageSessions.packageId))
+      .where(and(eq(aesPackageSessions.appointmentId, ctx.appointmentId), eq(aesPackageSessions.status, 'reserved'), eq(aesPackages.serviceId, ctx.serviceId)));
+    if (sessions.length) await tx.update(aesPackageSessions).set({ status: 'released' }).where(inArray(aesPackageSessions.id, sessions.map((s) => s.id)));
   }
 
   private onStatusChanged(e: AppointmentStatusChanged) {
@@ -210,16 +230,17 @@ export class AestheticsService implements OnModuleInit {
 
   private query(tx: Tx) {
     return tx
-      .select({ pkg: aesPackages, customer: { id: customers.id, name: customers.name }, service: { id: schServices.id, name: schServices.name } })
+      .select({ pkg: aesPackages, customer: { id: customers.id, name: customers.name }, service: { id: schServices.id, name: schServices.name }, caseTitle: aesCases.title })
       .from(aesPackages)
       .innerJoin(customers, eq(customers.id, aesPackages.customerId))
       .innerJoin(schServices, eq(schServices.id, aesPackages.serviceId))
+      .leftJoin(aesCases, eq(aesCases.id, aesPackages.caseId))
       .$dynamic();
   }
 
   private async toDtos(
     tx: Tx,
-    rows: { pkg: typeof aesPackages.$inferSelect; customer: { id: string; name: string }; service: { id: string; name: string } }[],
+    rows: { pkg: typeof aesPackages.$inferSelect; customer: { id: string; name: string }; service: { id: string; name: string }; caseTitle: string | null }[],
   ): Promise<SessionPackage[]> {
     const ids = rows.map((r) => r.pkg.id);
     const counts = ids.length
@@ -230,7 +251,7 @@ export class AestheticsService implements OnModuleInit {
           .groupBy(aesPackageSessions.packageId, aesPackageSessions.status)
       : [];
     const countOf = (id: string, status: string) => counts.find((c) => c.packageId === id && c.status === status)?.n ?? 0;
-    return rows.map(({ pkg, customer, service }) => ({
+    return rows.map(({ pkg, customer, service, caseTitle }) => ({
       id: pkg.id,
       customer,
       service,
@@ -244,6 +265,7 @@ export class AestheticsService implements OnModuleInit {
       notes: pkg.notes,
       cancelReason: pkg.cancelReason,
       cancelledOn: pkg.cancelledOn,
+      case: pkg.caseId && caseTitle ? { id: pkg.caseId, title: caseTitle } : null,
       createdAt: pkg.createdAt.toISOString(),
     }));
   }

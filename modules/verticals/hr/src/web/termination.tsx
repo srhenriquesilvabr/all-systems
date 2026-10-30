@@ -23,7 +23,8 @@ export function TerminationWizard({ employee, onClose }: { employee: Employee; o
   const queryClient = useQueryClient();
   const [form, setForm] = useState({
     type: 'without_cause' as TerminationType,
-    terminationDate: today(),
+    // Desligado sem termo: já traz a data que foi informada na edição.
+    terminationDate: employee.terminationDate ?? today(),
     notice: 'indemnified' as NoticeType,
     salary: employee.salary.toFixed(2).replace('.', ','),
     variableAverage: '',

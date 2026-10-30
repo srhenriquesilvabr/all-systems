@@ -33,7 +33,7 @@ const PROPERTIES = [
   {
     key: 'belavista', owner: 'p3', purpose: 'rent', type: 'apartment', title: 'Studio mobiliado a duas quadras da Av. Paulista — Bela Vista',
     street: 'Rua Treze de Maio', number: '1500', complement: 'Apto 1203', district: 'Bela Vista', zip: '01327-000',
-    areaM2: 32, bedrooms: 1, suites: 0, bathrooms: 1, parking: 0, rentPrice: 2800, condoFee: 650, iptuYearly: 900, status: 'rented', financeable: false,
+    areaM2: 32, bedrooms: 1, suites: 0, bathrooms: 1, parking: 0, rentPrice: 2800, condoFee: 650, iptuYearly: 900, financeable: false,
     description: 'Mobiliado e equipado. Locação com seguro-fiança.',
   },
   {
@@ -75,7 +75,7 @@ const PROPERTIES = [
   {
     key: 'perdizes', owner: 'p3', purpose: 'rent', type: 'apartment', title: 'Apartamento 2 dormitórios reformado — Perdizes',
     street: 'Rua Cardoso de Almeida', number: '1120', complement: 'Apto 63', district: 'Perdizes', zip: '05013-001',
-    areaM2: 74, bedrooms: 2, suites: 1, bathrooms: 2, parking: 1, rentPrice: 3900, condoFee: 1050, iptuYearly: 1800, status: 'rented',
+    areaM2: 74, bedrooms: 2, suites: 1, bathrooms: 2, parking: 1, rentPrice: 3900, condoFee: 1050, iptuYearly: 1800,
     description: 'Reformado em 2025, armários planejados. Próximo à PUC.',
   },
   {
@@ -217,7 +217,7 @@ async function seedVisits({ api, log, users }, props, who) {
     const startsAt = at(workday(v.day), v.hh);
     const resource = resources[i % resources.length];
     if (existing.some((a) => a.subject?.id === property.id && new Date(a.startsAt).getTime() === new Date(startsAt).getTime())) continue;
-    const appt = await api.post('/scheduling/appointments', {
+    const appt = await api.post('/scheduling/appointments', { overrideSchedule: true,
       customerId: who(v.who).id,
       resourceId: resource.id,
       startsAt,

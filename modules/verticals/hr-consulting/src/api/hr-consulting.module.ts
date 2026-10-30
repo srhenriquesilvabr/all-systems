@@ -1,10 +1,10 @@
 import { AuditService, centsToDecimal, CustomersService, FinanceService, TenantDb, toCents, ZodPipe } from '@all/core';
 import type { Tx } from '@all/db';
-import { HrEmployersRegistry, HrModule, type ClosedEmployerPayroll, type ConfirmedEmployerTermination } from '@all/hr';
+import { HrEmployersRegistry, HrModule, type ClosedEmployerPayroll, type ConfirmedEmployerTermination, type ReopenedEmployerPayroll, type UndoneEmployerTermination } from '@all/hr';
 import { ModuleRoute, RequirePermission, requestContext } from '@all/module-sdk';
-import { BadRequestException, Body, Controller, Get, Injectable, Module, OnModuleInit, Param, ParseUUIDPipe, Put } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, Injectable, Module, OnModuleInit, Param, ParseUUIDPipe, Patch, Post, Put } from '@nestjs/common';
 import { asc, eq } from 'drizzle-orm';
-import { clientFeeInput, FEE_SOURCE, feeFor, type ClientFee, type ClientFeeInput } from '../contracts';
+import { clientFeeInput, feeCancellation, feeCorrection, FEE_SOURCE, feeFor, type ClientFee, type ClientFeeInput, type FeeCorrection } from '../contracts';
 import { hrcClients } from '../db/schema';
 
 export const MODULE = 'hr_consulting';
@@ -49,11 +49,63 @@ export class HrConsultingService implements OnModuleInit {
       moduleKey: MODULE,
       onPayrollClosed: (tx, p) => this.payrollClosed(tx, p),
       onTerminationConfirmed: (tx, t) => this.terminationConfirmed(tx, t),
+      onPayrollReopened: (tx, p) => this.payrollReopened(tx, p),
+      onTerminationUndone: (tx, t) => this.terminationUndone(tx, t),
     });
   }
 
   listFees(): Promise<ClientFee[]> {
     return this.tdb.run(async (tx) => (await tx.select().from(hrcClients).orderBy(asc(hrcClients.createdAt))).map(toFee));
+  }
+
+  /**
+   * Honorários lançados de uma empresa, inclusive os cancelados. Para quem acompanha a carteira sem
+   * acesso ao financeiro (hr.read, como o Analista de DP): mostra só os honorários, não o caixa.
+   */
+  feeEntries(customerId: string) {
+    return this.tdb.run((tx) => this.finance.listBySourceForCustomerInTx(tx, FEE_SOURCE, customerId));
+  }
+
+  /** Corrige honorário em aberto (valor, vencimento ou descrição). Já recebido: estorne a baixa antes. */
+  correctFee(entryId: string, input: FeeCorrection) {
+    return this.tdb.run(async (tx) => {
+      const { reason, ...patch } = input;
+      const { before, after } = await this.finance.correctPendingBySourceInTx(tx, FEE_SOURCE, entryId, patch);
+      await this.audit.log(tx, {
+        action: 'hr_consulting.fee.corrected',
+        entity: 'fin_entry',
+        entityId: entryId,
+        data: { reason, from: { amount: before.amount, dueDate: before.dueDate, description: before.description }, to: { amount: after.amount, dueDate: after.dueDate, description: after.description } },
+      });
+      if (before.customerId) await this.customers.addTimeline(tx, { customerId: before.customerId, moduleKey: MODULE, type: 'hr_consulting.fee_corrected', title: `Honorário corrigido: ${after.description}`, entity: 'fin_entry', entityId: entryId });
+      return after;
+    });
+  }
+
+  /** Cancela honorário lançado errado. O lançamento fica como cancelado, com o motivo na auditoria. */
+  cancelFee(entryId: string, input: { reason: string }) {
+    return this.tdb.run(async (tx) => {
+      const entry = await this.finance.cancelPendingOneBySourceInTx(tx, FEE_SOURCE, entryId);
+      await this.audit.log(tx, { action: 'hr_consulting.fee.cancelled', entity: 'fin_entry', entityId: entryId, data: { reason: input.reason, amount: entry.amount, description: entry.description } });
+      if (entry.customerId) await this.customers.addTimeline(tx, { customerId: entry.customerId, moduleKey: MODULE, type: 'hr_consulting.fee_cancelled', title: `Honorário cancelado: ${entry.description}`, entity: 'fin_entry', entityId: entryId });
+    });
+  }
+
+  /** Reversão de folha ou rescisão: o honorário dela cai junto. Já recebido, a reversão é recusada. */
+  private async cancelFeesOf(tx: Tx, sourceId: string, whatRevert: string) {
+    const entries = await this.finance.listBySourceInTx(tx, FEE_SOURCE, sourceId);
+    if (entries.some((e) => e.status === 'paid')) throw new BadRequestException({ code: 'FEE_PAID', message: `O honorário desta ${whatRevert} já foi recebido. Estorne a baixa no financeiro antes.` });
+    return this.finance.cancelPendingBySourceInTx(tx, FEE_SOURCE, sourceId);
+  }
+
+  private async payrollReopened(tx: Tx, p: ReopenedEmployerPayroll) {
+    const cancelled = await this.cancelFeesOf(tx, p.payrollId, 'folha');
+    await this.customers.addTimeline(tx, { customerId: p.employerCustomerId, moduleKey: MODULE, type: 'hr_consulting.payroll_reopened', title: `Folha ${mmYyyy(p.competence)} reaberta: ${p.reason}${cancelled ? ' (honorário cancelado)' : ''}`, entity: 'hr_payroll', entityId: p.payrollId });
+  }
+
+  private async terminationUndone(tx: Tx, t: UndoneEmployerTermination) {
+    const cancelled = await this.cancelFeesOf(tx, t.terminationId, 'rescisão');
+    await this.customers.addTimeline(tx, { customerId: t.employerCustomerId, moduleKey: MODULE, type: 'hr_consulting.termination_undone', title: `Rescisão de ${t.employeeName} desfeita: ${t.reason}${cancelled ? ' (honorário cancelado)' : ''}`, entity: 'hr_termination', entityId: t.terminationId });
   }
 
   /** Grava (ou cria) os honorários de uma empresa atendida. Vale para as próximas folhas fechadas. */
@@ -147,6 +199,25 @@ export class HrConsultingController {
   @RequirePermission('hr_consulting.fees.manage')
   saveFee(@Param('customerId', ParseUUIDPipe) customerId: string, @Body(new ZodPipe(clientFeeInput)) body: ClientFeeInput) {
     return this.service.saveFee(customerId, body);
+  }
+
+  @Get('clients/:customerId/fee-entries')
+  @RequirePermission('hr.read')
+  feeEntries(@Param('customerId', ParseUUIDPipe) customerId: string) {
+    return this.service.feeEntries(customerId);
+  }
+
+  @Patch('fee-entries/:entryId')
+  @RequirePermission('hr_consulting.fees.manage')
+  correctFee(@Param('entryId', ParseUUIDPipe) entryId: string, @Body(new ZodPipe(feeCorrection)) body: FeeCorrection) {
+    return this.service.correctFee(entryId, body);
+  }
+
+  @Post('fee-entries/:entryId/cancel')
+  @HttpCode(204)
+  @RequirePermission('hr_consulting.fees.manage')
+  cancelFee(@Param('entryId', ParseUUIDPipe) entryId: string, @Body(new ZodPipe(feeCancellation)) body: { reason: string }) {
+    return this.service.cancelFee(entryId, body);
   }
 }
 

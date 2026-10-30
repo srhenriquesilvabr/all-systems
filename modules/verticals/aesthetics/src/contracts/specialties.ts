@@ -179,6 +179,8 @@ export interface LotUsage {
   usedOn: string;
   specialty: SpecialtyKey;
   entryId: string;
+  /** Estorno de uma ficha retificada: a quantidade vem negativa e aponta para o uso corrigido. */
+  reversalOf: string | null;
 }
 
 /** Rastreio de um lote: quem recebeu, quando e quanto (recall da Anvisa). */
@@ -343,6 +345,8 @@ export const surgeryScheduleInput = z.object({
     .array(z.object({ role: z.string().trim().min(2).max(60), name: z.string().trim().min(2).max(120), teamMemberId: z.string().uuid().nullish() }))
     .max(12)
     .default([]),
+  /** "Marcar mesmo assim": fora do expediente ou em folga, só com shared.scheduling.manage. */
+  overrideSchedule: z.boolean().optional(),
 });
 export type SurgeryScheduleInput = z.infer<typeof surgeryScheduleInput>;
 
@@ -376,6 +380,8 @@ export interface AesCase {
   surgery: { appointmentId: string; startsAt: string; status: string; location: string; team: SurgeryTeamMember[] } | null;
   /** Há termo de consentimento aceito ligado a este caso. */
   consentAccepted: boolean;
+  /** Pacotes vendidos a partir deste tratamento (ex.: drenagem do pós-operatório). */
+  packages: { id: string; service: string; totalSessions: number; usedSessions: number; status: 'active' | 'finished' | 'cancelled' }[];
   createdAt: string;
 }
 
@@ -509,6 +515,7 @@ export const specialtyForms: Record<SpecialtyKey | 'common', MedicalForm[]> = {
       { key: 'shadeBefore', label: 'Cor inicial (VITA)', type: 'select', options: VITA },
       { key: 'shadeAfter', label: 'Cor final (VITA)', type: 'select', options: VITA },
       ...lotFields('Gel clareador'),
+      { key: 'amount', label: 'Quantidade de gel', type: 'number', hint: 'Na unidade do produto. Com lote escolhido é obrigatória: entra no rastreio e baixa o estoque' },
       { key: 'concentration', label: 'Concentração', type: 'text', hint: 'Ex.: peróxido de hidrogênio 35%, carbamida 16%' },
       { key: 'exposure', label: 'Tempo de aplicação', type: 'text', hint: 'Ex.: 3 × 15 min' },
       { key: 'barrier', label: 'Barreira gengival', type: 'boolean' },
@@ -701,4 +708,7 @@ export function specialtyOfForm(formKey: string): SpecialtyKey | 'common' | null
 }
 
 /** Fichas que contam como sessão de um caso (para "3 de 10 sessões"). */
+/** Fichas em que o lote escolhido exige quantidade: sem ela, nada entraria no rastreio nem baixaria o estoque. */
+export const lotAmountRequiredForms = ['aesthetics.whitening'];
+
 export const sessionForms = ['aesthetics.whitening', 'aesthetics.laser', 'aesthetics.trichology.session', 'aesthetics.micropigmentation', 'aesthetics.harmonization'];

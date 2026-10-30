@@ -5,6 +5,7 @@ import { useState, type FormEvent } from 'react';
 import { formatQuantity, stockMoveKinds, stockMoveLabel, unitLabel, units, type Product, type StockMove } from '../contracts';
 import { brl, salesKey, useProducts } from './hooks';
 import { productImportSpec } from './productImport';
+import { StockRuleCard } from './SalesSettingsCards';
 
 const money = (n: number | null | undefined) => (n == null ? '' : n.toFixed(2).replace('.', ','));
 
@@ -93,6 +94,7 @@ export function ProductsPage() {
           </Table>
         )}
       </Card>
+      <StockRuleCard />
       {editing && <ProductModal product={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />}
       {moving && <StockModal product={moving} onClose={() => setMoving(null)} />}
     </>

@@ -60,9 +60,8 @@ export default defineModule({
   ],
 
   settings: z.object({
-    pricingMode: z.enum(['per_piece', 'per_kg', 'mixed']).default('mixed'),
     defaultTurnaroundHours: z.number().int().default(48),
-    requirePhotosOnReceive: z.boolean().default(true),
+    requirePiecePhotos: z.boolean().default(false),
   }),
 
   events: {
@@ -106,7 +105,7 @@ stateDiagram-v2
 
 Resolução de dependências:
 - Ao ativar `laundry`, o sistema ativa automaticamente `shared.service-orders` e `shared.notifications`.
-- Um módulo do qual outro módulo ativo depende não pode ser desativado.
+- Um módulo do qual outro módulo ativo depende não pode ser desativado. O dono desativa em Configurações › Módulos contratados (`POST /modules/:key/deactivate`); os dados ficam e voltam ao contratar de novo.
 
 ## Controle de acesso: dois portões
 

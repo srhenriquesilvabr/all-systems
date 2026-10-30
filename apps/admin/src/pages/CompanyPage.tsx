@@ -1,4 +1,4 @@
-import { api, ApiError, apiUpload, formatPhone } from '@all/module-sdk/web';
+import { AddressFields, api, ApiError, apiUpload, formatPhone } from '@all/module-sdk/web';
 import {
   Alert,
   Badge,
@@ -127,11 +127,6 @@ function CompanyForm({ company }: { company: Company }) {
     setForm({ ...form, ...patch });
     setSaved(false);
   };
-  const setAddr = (patch: Partial<Address>) => {
-    setAddress({ ...address, ...patch });
-    setSaved(false);
-  };
-
   function submit(e: FormEvent) {
     e.preventDefault();
     if (check && !check.ok) return;
@@ -183,17 +178,13 @@ function CompanyForm({ company }: { company: Company }) {
         </Section>
 
         <Section icon={MapPin} title="Endereço">
-          <div className="grid gap-3 sm:grid-cols-[8rem_1fr_6rem]">
-            <Input aria-label="CEP" placeholder="CEP" inputMode="numeric" value={address.zip ?? ''} onChange={(e) => setAddr({ zip: e.target.value })} />
-            <Input aria-label="Rua" placeholder="Rua" value={address.street ?? ''} onChange={(e) => setAddr({ street: e.target.value })} />
-            <Input aria-label="Número" placeholder="Nº" value={address.number ?? ''} onChange={(e) => setAddr({ number: e.target.value })} />
-          </div>
-          <div className="grid gap-3 sm:grid-cols-[1fr_1fr_1fr_5rem]">
-            <Input aria-label="Complemento" placeholder="Complemento" value={address.complement ?? ''} onChange={(e) => setAddr({ complement: e.target.value })} />
-            <Input aria-label="Bairro" placeholder="Bairro" value={address.district ?? ''} onChange={(e) => setAddr({ district: e.target.value })} />
-            <Input aria-label="Cidade" placeholder="Cidade" value={address.city ?? ''} onChange={(e) => setAddr({ city: e.target.value })} />
-            <Input aria-label="UF" placeholder="UF" maxLength={2} value={address.state ?? ''} onChange={(e) => setAddr({ state: e.target.value.toUpperCase() })} />
-          </div>
+          <AddressFields
+            value={address}
+            onChange={(next) => {
+              setAddress(next);
+              setSaved(false);
+            }}
+          />
           {errors.fields.address && <p className="text-sm text-danger-600">{errors.fields.address}</p>}
         </Section>
 

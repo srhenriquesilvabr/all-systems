@@ -1,12 +1,12 @@
-import { api, ApiError, apiUpload, AuthImage, CustomerSearch, formatMoney, parseMoney, SpreadsheetImport, useCan, type CustomerOption } from '@all/module-sdk/web';
+import { AddressFields, api, ApiError, apiUpload, AuthImage, CustomerSearch, formatMoney, parseMoney, SpreadsheetImport, useCan, type Address, type CustomerOption } from '@all/module-sdk/web';
 import type { SubjectValue } from '@all/scheduling/web';
-import { Alert, Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Textarea } from '@all/ui';
+import { Alert, Badge, Button, Card, Checkbox, EmptyState, Field, Input, PageHeader, Select, Spinner, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { addressOf, dealStatusLabel, propertyStatuses, propertyStatusLabel, propertyTypeLabel, propertyTypes, purposeLabel, type Deal, type Property } from '../contracts';
-import { DealModal, dealTone } from './deals';
-import { LeaseModal, PropertyLeases } from './leases';
+import { addressOf, dealStatusLabel, manualPropertyStatuses, propertyStatuses, propertyStatusLabel, propertyTypeLabel, propertyTypes, purposeLabel, type Deal, type Property } from '../contracts';
+import { DealForm, dealTone } from './deals';
+import { LeaseForm, PropertyLeases } from './leases';
 import { propertyImportSpec } from './propertyImport';
 
 export const reKey = ['real-estate'] as const;
@@ -30,6 +30,7 @@ export function PropertiesPage() {
     queryKey: [...reKey, 'properties', { q, status, type, bedrooms }],
     queryFn: () => api<Property[]>('/real-estate/properties', { query: { q: q || undefined, status: status || undefined, type: type || undefined, minBedrooms: bedrooms || undefined } }),
   });
+  if (creating) return <PropertyForm property={null} onClose={() => setCreating(false)} onSaved={(p) => navigate(`/imoveis/${p.id}`)} />;
   return (
     <>
       <PageHeader
@@ -104,7 +105,6 @@ export function PropertiesPage() {
           ))}
         </div>
       )}
-      {creating && <PropertyModal property={null} onClose={() => setCreating(false)} onSaved={(p) => navigate(`/imoveis/${p.id}`)} />}
     </>
   );
 }
@@ -123,9 +123,13 @@ export function PropertyPage() {
   const [leasing, setLeasing] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const upload = useMutation({ mutationFn: (f: File) => apiUpload(`/real-estate/properties/${id}/photos`, 'photo', f), onSuccess: () => queryClient.invalidateQueries({ queryKey: reKey }) });
+  const removePhoto = useMutation({ mutationFn: (fileId: string) => api(`/real-estate/properties/${id}/photos/${fileId}`, { method: 'DELETE' }), onSuccess: () => queryClient.invalidateQueries({ queryKey: reKey }) });
   if (p.isPending) return <Spinner />;
   if (p.isError) return <Alert>{p.error.message}</Alert>;
   const prop = p.data;
+  if (editing) return <PropertyForm property={prop} onClose={() => setEditing(false)} />;
+  if (dealing) return <DealForm property={prop} onClose={() => setDealing(false)} onSaved={(d) => navigate(`/imoveis/propostas/${d.id}`)} />;
+  if (leasing) return <LeaseForm property={prop} onClose={() => setLeasing(false)} onSaved={(l) => navigate(`/imoveis/locacoes/${l.id}`)} />;
   return (
     <>
       <PageHeader
@@ -151,13 +155,19 @@ export function PropertyPage() {
         <div className="space-y-4">
           <Card className="p-4">
             {upload.error && <Alert>{upload.error instanceof ApiError ? upload.error.message : 'Erro ao enviar'}</Alert>}
+            {removePhoto.error && <Alert>{removePhoto.error instanceof ApiError ? removePhoto.error.message : 'Erro ao remover a foto'}</Alert>}
             {prop.photos.length === 0 ? (
               <p className="py-10 text-center text-sm text-fg-muted">Nenhuma foto ainda.</p>
             ) : (
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {prop.photos.map((f) => (
-                  <div key={f.id} className="aspect-[4/3] overflow-hidden rounded-xl bg-muted">
+                  <div key={f.id} className="relative aspect-[4/3] overflow-hidden rounded-xl bg-muted">
                     <AuthImage fileId={f.id} alt="" className="h-full w-full object-cover" />
+                    {canWrite && (
+                      <button type="button" className="absolute right-1 top-1 rounded-full bg-ink/70 px-2 text-xs text-white" disabled={removePhoto.isPending} onClick={() => removePhoto.mutate(f.id)}>
+                        Remover
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -224,9 +234,6 @@ export function PropertyPage() {
           </div>
         </Card>
       </div>
-      {editing && <PropertyModal property={prop} onClose={() => setEditing(false)} />}
-      {dealing && <DealModal property={prop} onClose={() => setDealing(false)} onSaved={(d) => navigate(`/imoveis/propostas/${d.id}`)} />}
-      {leasing && <LeaseModal property={prop} onClose={() => setLeasing(false)} onSaved={(l) => navigate(`/imoveis/locacoes/${l.id}`)} />}
     </>
   );
 }
@@ -242,21 +249,27 @@ function Item({ label, children }: { label: string; children: ReactNode }) {
 
 const money = (n: number | null | undefined) => (n == null ? '' : n.toFixed(2).replace('.', ','));
 
-function PropertyModal({ property, onClose, onSaved }: { property: Property | null; onClose: () => void; onSaved?: (p: Property) => void }) {
+/** Captação e edição do imóvel, na própria página. */
+function PropertyForm({ property, onClose, onSaved }: { property: Property | null; onClose: () => void; onSaved?: (p: Property) => void }) {
   const queryClient = useQueryClient();
-  const [owner, setOwner] = useState<{ id: string; name: string } | CustomerOption | null>(property?.owner ?? null);
-  const [form, setForm] = useState({
-    purpose: property?.purpose ?? 'sale',
-    type: property?.type ?? 'apartment',
-    title: property?.title ?? '',
+  // Reservado, Vendido e Alugado vêm da proposta e do contrato: aqui, só quando o imóvel já está assim.
+  const statusLocked = !!property && !(manualPropertyStatuses as readonly string[]).includes(property.status);
+  const [address, setAddress] = useState<Address>({
+    zip: property?.zip ?? '',
     street: property?.street ?? '',
     number: property?.number ?? '',
     complement: property?.complement ?? '',
     district: property?.district ?? '',
     city: property?.city ?? '',
     state: property?.state ?? 'SC',
-    zip: property?.zip ?? '',
+  });
+  const [owner, setOwner] = useState<{ id: string; name: string } | CustomerOption | null>(property?.owner ?? null);
+  const [form, setForm] = useState({
+    purpose: property?.purpose ?? 'sale',
+    type: property?.type ?? 'apartment',
+    title: property?.title ?? '',
     areaM2: property?.areaM2 != null ? String(property.areaM2).replace('.', ',') : '',
+    landM2: property?.landM2 != null ? String(property.landM2).replace('.', ',') : '',
     bedrooms: String(property?.bedrooms ?? 0),
     suites: String(property?.suites ?? 0),
     bathrooms: String(property?.bathrooms ?? 1),
@@ -278,9 +291,15 @@ function PropertyModal({ property, onClose, onSaved }: { property: Property | nu
         body: {
           ...form,
           ownerId: owner?.id,
-          number: form.number || null,
-          complement: form.complement || null,
+          zip: address.zip || null,
+          street: address.street ?? '',
+          number: address.number || null,
+          complement: address.complement || null,
+          district: address.district ?? '',
+          city: address.city ?? '',
+          state: address.state ?? '',
           areaM2: form.areaM2 ? Number(form.areaM2.replace(',', '.')) : null,
+          landM2: form.landM2 ? Number(form.landM2.replace(',', '.')) : null,
           bedrooms: Number(form.bedrooms),
           suites: Number(form.suites),
           bathrooms: Number(form.bathrooms),
@@ -298,94 +317,97 @@ function PropertyModal({ property, onClose, onSaved }: { property: Property | nu
       onClose();
     },
   });
+  const addressMissing = !address.street?.trim() || !address.district?.trim() || !address.city?.trim() || address.state?.trim().length !== 2;
+  const [showMissing, setShowMissing] = useState(false);
   function submit(e: FormEvent) {
     e.preventDefault();
+    if (addressMissing) return setShowMissing(true);
     save.mutate();
   }
   return (
-    <Modal
-      open
-      title={property ? 'Editar imóvel' : 'Captar imóvel'}
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose}>
-            Cancelar
-          </Button>
-          <Button type="submit" form="re-property-form" loading={save.isPending} disabled={!owner}>
-            Salvar
-          </Button>
-        </>
-      }
-    >
-      {!owner ? (
-        <div className="space-y-2">
-          <p className="text-sm text-fg-muted">Quem é o proprietário?</p>
-          <CustomerSearch onSelect={setOwner} />
-        </div>
-      ) : (
-        <form id="re-property-form" onSubmit={submit} className="space-y-4">
-          {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao salvar'}</Alert>}
-          <p className="text-sm">
-            Proprietário: <span className="font-medium">{owner.name}</span>
-          </p>
-          <Field label="Título do anúncio">{(id) => <Input id={id} required value={form.title} onChange={(e) => set({ title: e.target.value })} placeholder="Ex.: Apartamento 3 quartos com vista para o mar" autoFocus />}</Field>
-          <div className="grid gap-4 sm:grid-cols-3">
-            <Field label="Tipo">
-              {(id) => (
-                <Select id={id} value={form.type} onChange={(e) => set({ type: e.target.value as typeof form.type })}>
-                  {propertyTypes.map((t) => (
-                    <option key={t} value={t}>
-                      {propertyTypeLabel[t]}
-                    </option>
-                  ))}
-                </Select>
-              )}
-            </Field>
-            <Field label="Finalidade">
-              {(id) => (
-                <Select id={id} value={form.purpose} onChange={(e) => set({ purpose: e.target.value as typeof form.purpose })}>
-                  {Object.entries(purposeLabel).map(([k, l]) => (
-                    <option key={k} value={k}>
-                      {l}
-                    </option>
-                  ))}
-                </Select>
-              )}
-            </Field>
-            <Field label="Situação">
-              {(id) => (
-                <Select id={id} value={form.status} onChange={(e) => set({ status: e.target.value as typeof form.status })}>
-                  {propertyStatuses.map((s) => (
-                    <option key={s} value={s}>
-                      {propertyStatusLabel[s]}
-                    </option>
-                  ))}
-                </Select>
-              )}
-            </Field>
-            <div className="sm:col-span-2">
-              <Field label="Rua">{(id) => <Input id={id} required value={form.street} onChange={(e) => set({ street: e.target.value })} />}</Field>
-            </div>
-            <Field label="Número">{(id) => <Input id={id} value={form.number} onChange={(e) => set({ number: e.target.value })} />}</Field>
-            <Field label="Bairro">{(id) => <Input id={id} required value={form.district} onChange={(e) => set({ district: e.target.value })} />}</Field>
-            <Field label="Cidade">{(id) => <Input id={id} required value={form.city} onChange={(e) => set({ city: e.target.value })} />}</Field>
-            <Field label="UF">{(id) => <Input id={id} required maxLength={2} value={form.state} onChange={(e) => set({ state: e.target.value.toUpperCase() })} />}</Field>
-            <Field label="Área (m²)">{(id) => <Input id={id} inputMode="decimal" value={form.areaM2} onChange={(e) => set({ areaM2: e.target.value })} />}</Field>
-            <Field label="Quartos">{(id) => <Input id={id} type="number" min={0} value={form.bedrooms} onChange={(e) => set({ bedrooms: e.target.value })} />}</Field>
-            <Field label="Suítes">{(id) => <Input id={id} type="number" min={0} value={form.suites} onChange={(e) => set({ suites: e.target.value })} />}</Field>
-            <Field label="Banheiros">{(id) => <Input id={id} type="number" min={0} value={form.bathrooms} onChange={(e) => set({ bathrooms: e.target.value })} />}</Field>
-            <Field label="Vagas">{(id) => <Input id={id} type="number" min={0} value={form.parking} onChange={(e) => set({ parking: e.target.value })} />}</Field>
-            {form.purpose !== 'rent' && <Field label="Preço de venda (R$)">{(id) => <Input id={id} inputMode="decimal" required value={form.salePrice} onChange={(e) => set({ salePrice: e.target.value })} />}</Field>}
-            {form.purpose !== 'sale' && <Field label="Aluguel (R$/mês)">{(id) => <Input id={id} inputMode="decimal" required value={form.rentPrice} onChange={(e) => set({ rentPrice: e.target.value })} />}</Field>}
-            <Field label="Condomínio (R$)">{(id) => <Input id={id} inputMode="decimal" value={form.condoFee} onChange={(e) => set({ condoFee: e.target.value })} />}</Field>
-            <Field label="IPTU anual (R$)">{(id) => <Input id={id} inputMode="decimal" value={form.iptuYearly} onChange={(e) => set({ iptuYearly: e.target.value })} />}</Field>
+    <>
+      <PageHeader title={property ? 'Editar imóvel' : 'Captar imóvel'} />
+      <Card className="p-5">
+        {!owner ? (
+          <div className="space-y-3">
+            <p className="text-sm text-fg-muted">Quem é o proprietário?</p>
+            <CustomerSearch onSelect={setOwner} />
+            <Button variant="secondary" onClick={onClose}>
+              Cancelar
+            </Button>
           </div>
-          <Checkbox label="Aceita financiamento bancário" checked={form.financeable} onChange={(e) => set({ financeable: e.target.checked })} />
-          <Field label="Descrição">{(id) => <Textarea id={id} rows={4} value={form.description} onChange={(e) => set({ description: e.target.value })} />}</Field>
-        </form>
-      )}
-    </Modal>
+        ) : (
+          <form id="re-property-form" onSubmit={submit} className="space-y-4">
+            {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao salvar'}</Alert>}
+            <p className="text-sm">
+              Proprietário: <span className="font-medium">{owner.name}</span>
+            </p>
+            <Field label="Título do anúncio">{(id) => <Input id={id} required value={form.title} onChange={(e) => set({ title: e.target.value })} placeholder="Ex.: Apartamento 3 quartos com vista para o mar" autoFocus />}</Field>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Field label="Tipo">
+                {(id) => (
+                  <Select id={id} value={form.type} onChange={(e) => set({ type: e.target.value as typeof form.type })}>
+                    {propertyTypes.map((t) => (
+                      <option key={t} value={t}>
+                        {propertyTypeLabel[t]}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+              <Field label="Finalidade">
+                {(id) => (
+                  <Select id={id} value={form.purpose} onChange={(e) => set({ purpose: e.target.value as typeof form.purpose })}>
+                    {Object.entries(purposeLabel).map(([k, l]) => (
+                      <option key={k} value={k}>
+                        {l}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+              <Field label="Situação">
+                {(id) => (
+                  <Select id={id} disabled={statusLocked} value={form.status} onChange={(e) => set({ status: e.target.value as typeof form.status })}>
+                    {(statusLocked ? [property!.status] : manualPropertyStatuses).map((s) => (
+                      <option key={s} value={s}>
+                        {propertyStatusLabel[s]}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+              {statusLocked && <p className="text-xs text-fg-muted sm:col-span-3">Esta situação vem da proposta ou do contrato de locação. Para mudar, marque a proposta como perdida, feche a venda ou encerre o contrato.</p>}
+              <div className="space-y-1 sm:col-span-3">
+                <p className="text-sm font-medium">Endereço</p>
+                {showMissing && addressMissing && <p className="text-xs text-danger-600">Preencha rua, bairro, cidade e UF.</p>}
+                <AddressFields value={address} onChange={setAddress} />
+              </div>
+              <Field label="Área (m²)">{(id) => <Input id={id} inputMode="decimal" value={form.areaM2} onChange={(e) => set({ areaM2: e.target.value })} />}</Field>
+              <Field label="Área do terreno (m²)">{(id) => <Input id={id} inputMode="decimal" value={form.landM2} onChange={(e) => set({ landM2: e.target.value })} />}</Field>
+              <Field label="Quartos">{(id) => <Input id={id} type="number" min={0} value={form.bedrooms} onChange={(e) => set({ bedrooms: e.target.value })} />}</Field>
+              <Field label="Suítes">{(id) => <Input id={id} type="number" min={0} value={form.suites} onChange={(e) => set({ suites: e.target.value })} />}</Field>
+              <Field label="Banheiros">{(id) => <Input id={id} type="number" min={0} value={form.bathrooms} onChange={(e) => set({ bathrooms: e.target.value })} />}</Field>
+              <Field label="Vagas">{(id) => <Input id={id} type="number" min={0} value={form.parking} onChange={(e) => set({ parking: e.target.value })} />}</Field>
+              {form.purpose !== 'rent' && <Field label="Preço de venda (R$)">{(id) => <Input id={id} inputMode="decimal" required value={form.salePrice} onChange={(e) => set({ salePrice: e.target.value })} />}</Field>}
+              {form.purpose !== 'sale' && <Field label="Aluguel (R$/mês)">{(id) => <Input id={id} inputMode="decimal" required value={form.rentPrice} onChange={(e) => set({ rentPrice: e.target.value })} />}</Field>}
+              <Field label="Condomínio (R$)">{(id) => <Input id={id} inputMode="decimal" value={form.condoFee} onChange={(e) => set({ condoFee: e.target.value })} />}</Field>
+              <Field label="IPTU anual (R$)">{(id) => <Input id={id} inputMode="decimal" value={form.iptuYearly} onChange={(e) => set({ iptuYearly: e.target.value })} />}</Field>
+            </div>
+            <Checkbox label="Aceita financiamento bancário" checked={form.financeable} onChange={(e) => set({ financeable: e.target.checked })} />
+            <Field label="Descrição">{(id) => <Textarea id={id} rows={4} value={form.description} onChange={(e) => set({ description: e.target.value })} />}</Field>
+            <div className="flex gap-2">
+              <Button type="submit" loading={save.isPending}>
+                Salvar
+              </Button>
+              <Button type="button" variant="secondary" onClick={onClose}>
+                Cancelar
+              </Button>
+            </div>
+          </form>
+        )}
+      </Card>
+    </>
   );
 }
 

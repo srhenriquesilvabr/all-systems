@@ -3,9 +3,11 @@ import { api, ApiError, formatDate, today, useCan } from '@all/module-sdk/web';
 import { Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, Spinner, Table, Td, Th, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
-import { commonVaccines, type Vaccination } from '../contracts';
+import { matchVaccine, type Vaccination, type VaccineCatalogEntry } from '../contracts';
 
 export const vetKey = ['vet'] as const;
+
+export const useVaccineCatalog = () => useQuery({ queryKey: [...vetKey, 'catalog'], queryFn: () => api<VaccineCatalogEntry[]>('/vet/vaccines'), staleTime: 60_000 });
 
 /** Aba "Vacinas" na ficha do pet: a carteira de vacinação, com impressão. */
 export function VaccinesTab({ pet }: { pet: Pet }) {
@@ -52,8 +54,10 @@ export function VaccinesTab({ pet }: { pet: Pet }) {
               {list.data.map((v) => (
                 <tr key={v.id} className={v.voided ? 'text-fg-subtle line-through' : undefined}>
                   <Td>
-                    <span className="font-medium">{v.vaccine}</span>
+                    <span className="font-medium">{v.vaccineName}</span>
                     {v.dose && <span className="text-fg-muted"> · {v.dose}</span>}
+                    {v.vaccine !== v.vaccineName && <div className="text-xs text-fg-muted">Registrada como “{v.vaccine}”</div>}
+                    {v.notes && <div className="whitespace-pre-line text-xs text-fg-muted">{v.notes}</div>}
                     {v.voided && <div className="text-xs no-underline">Anulada: {v.voided.reason}</div>}
                   </Td>
                   <Td className="whitespace-nowrap tabular-nums">{formatDate(v.appliedOn)}</Td>
@@ -91,6 +95,8 @@ function VaccinationModal({ petId, onClose }: { petId: string; onClose: () => vo
   const queryClient = useQueryClient();
   const [form, setForm] = useState({ vaccine: '', dose: '', batch: '', manufacturer: '', appliedOn: today(), nextDueOn: '', notes: '' });
   const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
+  const catalog = useVaccineCatalog();
+  const matched = form.vaccine.trim() ? matchVaccine(form.vaccine, catalog.data ?? []) : undefined;
   const save = useMutation({
     mutationFn: () =>
       api('/vet/vaccinations', {
@@ -129,14 +135,27 @@ function VaccinationModal({ petId, onClose }: { petId: string; onClose: () => vo
       <form id="vet-vaccination-form" onSubmit={submit} className="space-y-4">
         {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao salvar'}</Alert>}
         <div className="grid gap-4 sm:grid-cols-[1fr_10rem]">
-          <Field label="Vacina">
+          <Field
+            label="Vacina"
+            hint={
+              !form.vaccine.trim()
+                ? 'Escolha da lista. Se digitar, o sistema procura no catálogo.'
+                : matched
+                  ? matched.name === form.vaccine.trim()
+                    ? undefined
+                    : `Conta como ${matched.name}.`
+                  : 'Vacina nova: entra no catálogo com este nome. Confira se não é um nome diferente para uma que já existe.'
+            }
+          >
             {(id) => (
               <>
                 <Input id={id} required list="vet-vaccines" value={form.vaccine} onChange={(e) => set({ vaccine: e.target.value })} autoFocus />
                 <datalist id="vet-vaccines">
-                  {commonVaccines.map((v) => (
-                    <option key={v} value={v} />
-                  ))}
+                  {catalog.data
+                    ?.filter((v) => v.active)
+                    .map((v) => (
+                      <option key={v.id} value={v.name} />
+                    ))}
                 </datalist>
               </>
             )}
@@ -177,7 +196,7 @@ function VoidModal({ vaccination, onClose }: { vaccination: Vaccination; onClose
   return (
     <Modal
       open
-      title={`Anular ${vaccination.vaccine}`}
+      title={`Anular ${vaccination.vaccineName}`}
       onClose={onClose}
       footer={
         <>

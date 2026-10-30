@@ -20,6 +20,7 @@ import { ForgotPasswordPage } from './pages/ForgotPasswordPage';
 import { HomePage } from './pages/HomePage';
 import { LoginPage } from './pages/LoginPage';
 import { ManualPage } from './pages/manual/ManualPage';
+import { ModulesPage } from './pages/ModulesPage';
 import { RolesPage } from './pages/RolesPage';
 import { SetPasswordPage } from './pages/SetPasswordPage';
 import { SignupPage } from './pages/SignupPage';
@@ -149,6 +150,7 @@ export function App() {
           <Route path="configuracoes/usuarios" element={<Guarded permission="core.users.read" Component={UsersPage} />} />
           <Route path="configuracoes/papeis" element={<Guarded permission="core.access.read" Component={RolesPage} />} />
           <Route path="configuracoes/auditoria" element={<Guarded permission="core.audit.read" Component={AuditPage} />} />
+          <Route path="configuracoes/modulos" element={<Guarded permission="core.access.settings" Component={ModulesPage} />} />
           <Route path="configuracoes/campos-de-clientes" element={<Guarded permission="core.customers.fields" Component={CustomFieldsPage} />} />
           <Route path="clientes" element={<Guarded permission="core.customers.read" Component={CustomersPage} />} />
           <Route path="clientes/novo" element={<Guarded permission="core.customers.write" Component={NewCustomerPage} />} />

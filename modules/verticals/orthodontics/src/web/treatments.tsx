@@ -103,10 +103,10 @@ function StartModal({ customer: fixed, onClose, onStarted }: { customer?: { id: 
   const [form, setForm] = useState({ appliance: 'fixed_metal', startedOn: today(), expectedMonths: '24', entryFee: '', monthlyFee: '', dueDay: '10', notes: '' });
   const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
   const save = useMutation({
-    mutationFn: () =>
+    mutationFn: (confirmInstallationCharged: boolean) =>
       api<TreatmentDetail>('/orthodontics/treatments', {
         method: 'POST',
-        body: { ...form, customerId: customer?.id, entryFee: form.entryFee ? parseMoney(form.entryFee) : 0, monthlyFee: parseMoney(form.monthlyFee), notes: form.notes || null },
+        body: { ...form, customerId: customer?.id, entryFee: form.entryFee ? parseMoney(form.entryFee) : 0, monthlyFee: parseMoney(form.monthlyFee), notes: form.notes || null, confirmInstallationCharged: confirmInstallationCharged || undefined },
       }),
     onSuccess: (t) => {
       queryClient.invalidateQueries({ queryKey: key });
@@ -117,8 +117,9 @@ function StartModal({ customer: fixed, onClose, onStarted }: { customer?: { id: 
 
   function submit(e: FormEvent) {
     e.preventDefault();
-    save.mutate();
+    save.mutate(false);
   }
+  const alreadyCharged = save.error instanceof ApiError && save.error.code === 'INSTALLATION_ALREADY_CHARGED';
 
   return (
     <Modal
@@ -141,6 +142,11 @@ function StartModal({ customer: fixed, onClose, onStarted }: { customer?: { id: 
       ) : (
         <form id="ortho-start-form" onSubmit={submit} className="space-y-4">
           {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao salvar'}</Alert>}
+          {alreadyCharged && (
+            <Button size="sm" variant="secondary" loading={save.isPending} onClick={() => save.mutate(true)}>
+              Lançar a taxa mesmo assim
+            </Button>
+          )}
           {'name' in customer && customer.name && (
             <p className="text-sm">
               Paciente: <span className="font-medium">{customer.name}</span>
@@ -162,7 +168,7 @@ function StartModal({ customer: fixed, onClose, onStarted }: { customer?: { id: 
             <Field label="Duração prevista (meses)">{(id) => <Input id={id} type="number" min={1} max={60} required value={form.expectedMonths} onChange={(e) => set({ expectedMonths: e.target.value })} />}</Field>
             <Field label="Dia do vencimento">{(id) => <Input id={id} type="number" min={1} max={28} required value={form.dueDay} onChange={(e) => set({ dueDay: e.target.value })} />}</Field>
             <Field label="Mensalidade (R$)">{(id) => <Input id={id} inputMode="decimal" required value={form.monthlyFee} onChange={(e) => set({ monthlyFee: e.target.value })} placeholder="0,00" />}</Field>
-            <Field label="Documentação e instalação (R$)" hint="Cobrada na data de início.">
+            <Field label="Documentação e instalação (R$)" hint="Cobrada na data de início. Com valor aqui, o serviço Instalação de aparelho sai sem custo na agenda.">
               {(id) => <Input id={id} inputMode="decimal" value={form.entryFee} onChange={(e) => set({ entryFee: e.target.value })} placeholder="0,00" />}
             </Field>
           </div>

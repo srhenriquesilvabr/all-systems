@@ -32,11 +32,15 @@ import {
   addressOf,
   brokerInput,
   dealInput,
+  dealUpdateInput,
   loseInput,
+  manualPropertyStatuses,
   MAX_LTV,
   propertyInput,
+  propertyStatusLabel,
   type Deal,
   type DealInput,
+  type DealUpdateInput,
   type DealsSummary,
   type DealStatus,
   type LoseInput,
@@ -125,16 +129,15 @@ export class RealEstateService implements OnModuleInit {
       const owner = await this.customers.findInTx(tx, input.ownerId);
       if (!owner || owner.anonymizedAt) throw badRequest('OWNER_NOT_FOUND', 'Proprietário não encontrado');
       const values = propertyRow(input);
-      // Com contrato de locação ativo, a situação acompanha o contrato.
-      if (id) {
-        const [lease] = await tx.select({ id: reLeases.id }).from(reLeases).where(and(eq(reLeases.propertyId, id), eq(reLeases.status, 'active')));
-        if (lease) values.status = 'rented';
-      }
       let rowId = id;
       if (id) {
+        const [current] = await tx.select().from(reProperties).where(eq(reProperties.id, id)).for('update');
+        if (!current) throw new NotFoundException({ code: 'PROPERTY_NOT_FOUND', message: 'Imóvel não encontrado' });
+        await this.assertStatusChangeInTx(tx, current, input.status);
         const [row] = await tx.update(reProperties).set(values).where(eq(reProperties.id, id)).returning({ id: reProperties.id });
         if (!row) throw new NotFoundException({ code: 'PROPERTY_NOT_FOUND', message: 'Imóvel não encontrado' });
       } else {
+        if (!isManualStatus(input.status)) throw badRequest('PROPERTY_STATUS_CONTROLLED', `Imóvel novo entra como Disponível ou Fora do mercado: ${propertyStatusLabel[input.status]} vem da proposta ou do contrato de locação`);
         const [row] = await tx
           .insert(reProperties)
           .values({ ...values, tenantId, code: await nextSequence(tx, tenantId, 're_property') })
@@ -146,6 +149,29 @@ export class RealEstateService implements OnModuleInit {
       const [row] = await this.propertyQuery(tx).where(eq(reProperties.id, rowId!));
       return (await this.toProperties(tx, [row!]))[0]!;
     });
+  }
+
+  /**
+   * Reservado, Vendido e Alugado são controlados: a proposta reserva, perder libera, fechar vende (e
+   * lança a comissão) e o contrato aluga. Situação marcada à mão antes desta regra, sem proposta nem
+   * contrato por trás, pode ser corrigida.
+   */
+  private async assertStatusChangeInTx(tx: Tx, current: PropertyRow, next: PropertyRow['status']) {
+    if (next === current.status) return;
+    if (!isManualStatus(next)) {
+      const path = next === 'rented' ? 'crie o contrato de locação pelo botão "Alugar"' : next === 'sold' ? 'registre a proposta e clique em "Fechar venda", para a comissão entrar no financeiro' : 'registre uma proposta de compra';
+      throw badRequest('PROPERTY_STATUS_CONTROLLED', `A situação ${propertyStatusLabel[next]} não é escolhida aqui: ${path}`);
+    }
+    const [lease] = await tx.select({ number: reLeases.number }).from(reLeases).where(and(eq(reLeases.propertyId, current.id), eq(reLeases.status, 'active')));
+    if (lease) throw badRequest('PROPERTY_RENTED', `O imóvel está alugado pelo contrato nº ${lease.number}: encerre o contrato para mudar a situação`);
+    if (current.status === 'reserved') {
+      const [open] = await tx.select({ number: reDeals.number }).from(reDeals).where(and(eq(reDeals.propertyId, current.id), OPEN)).limit(1);
+      if (open) throw badRequest('PROPERTY_RESERVED', `O imóvel está reservado pela proposta nº ${open.number}: marque ela como perdida ou feche a venda`);
+    }
+    if (current.status === 'sold') {
+      const [closed] = await tx.select({ id: reDeals.id }).from(reDeals).where(and(eq(reDeals.propertyId, current.id), eq(reDeals.status, 'closed'))).limit(1);
+      if (closed) throw badRequest('PROPERTY_SOLD', 'Imóvel vendido por uma proposta fechada não volta à carteira por aqui');
+    }
   }
 
   addPhoto(id: string, file: StoredFile) {
@@ -196,6 +222,9 @@ export class RealEstateService implements OnModuleInit {
       const [property] = await tx.select().from(reProperties).where(eq(reProperties.id, input.propertyId)).for('update');
       if (!property) throw new NotFoundException({ code: 'PROPERTY_NOT_FOUND', message: 'Imóvel não encontrado' });
       if (property.status !== 'available' || property.purpose === 'rent') throw new ConflictException({ code: 'PROPERTY_UNAVAILABLE', message: 'Imóvel não está disponível para venda' });
+      // Situação trocada à mão antes da regra atual: um imóvel, uma proposta aberta.
+      const [open] = await tx.select({ number: reDeals.number }).from(reDeals).where(and(eq(reDeals.propertyId, property.id), OPEN)).limit(1);
+      if (open) throw new ConflictException({ code: 'PROPERTY_UNAVAILABLE', message: `Este imóvel já está na proposta nº ${open.number}, ainda aberta` });
       if (property.ownerId === customer.id) throw badRequest('BUYER_IS_OWNER', 'O comprador é o próprio proprietário');
       checkAmounts(input, property.financeable);
       if (input.brokerId) await this.checkBroker(tx, tenantId, input.brokerId);
@@ -219,6 +248,46 @@ export class RealEstateService implements OnModuleInit {
       await this.customers.addTimeline(tx, { customerId: customer.id, moduleKey: MODULE, type: 'deal.created', title: `Proposta de compra: ${property.title}`, entity: 're_deal', entityId: deal!.id });
       await this.audit.log(tx, { action: 'real_estate.deal.created', entity: 're_deal', entityId: deal!.id });
       return this.dealDetail(tx, deal!.id);
+    });
+  }
+
+  /**
+   * Edita a proposta em aberto. Com crédito em análise ou aprovado os valores estão com o banco:
+   * cancele a proposta de financiamento antes. Editar crédito recusado volta para "em negociação".
+   */
+  updateDeal(id: string, input: DealUpdateInput): Promise<Deal> {
+    const { tenantId } = requestContext.requireTenant();
+    return this.tdb.run(async (tx) => {
+      const deal = await this.dealOrFail(tx, id, true);
+      if (deal.status === 'closed' || deal.status === 'lost') throw badRequest('DEAL_CLOSED', 'Proposta já encerrada');
+      if (!['negotiating', 'credit_rejected'].includes(deal.status)) throw badRequest('DEAL_LOCKED', 'Com crédito em análise ou aprovado, os valores não mudam; cancele a proposta de financiamento antes');
+      const [property] = await tx.select().from(reProperties).where(eq(reProperties.id, deal.propertyId));
+      checkAmounts(input, property!.financeable);
+      if (input.brokerId && input.brokerId !== deal.brokerId) await this.checkBroker(tx, tenantId, input.brokerId);
+      await tx
+        .update(reDeals)
+        .set({
+          price: centsToDecimal(toCents(input.price)),
+          paymentType: input.paymentType,
+          downPayment: centsToDecimal(toCents(input.downPayment)),
+          fgtsAmount: centsToDecimal(toCents(input.fgtsAmount)),
+          commissionPercent: input.commissionPercent.toFixed(2),
+          notes: input.notes ?? null,
+          // Sem corretor no corpo, mantém o atual.
+          ...(input.brokerId ? { brokerId: input.brokerId } : {}),
+          status: 'negotiating',
+        })
+        .where(eq(reDeals.id, id));
+      await this.audit.log(tx, {
+        action: 'real_estate.deal.updated',
+        entity: 're_deal',
+        entityId: id,
+        data: {
+          from: { price: Number(deal.price), paymentType: deal.paymentType, downPayment: Number(deal.downPayment), fgtsAmount: Number(deal.fgtsAmount), commissionPercent: Number(deal.commissionPercent) },
+          to: { price: input.price, paymentType: input.paymentType, downPayment: input.downPayment, fgtsAmount: input.fgtsAmount, commissionPercent: input.commissionPercent },
+        },
+      });
+      return this.dealDetail(tx, id);
     });
   }
 
@@ -264,9 +333,9 @@ export class RealEstateService implements OnModuleInit {
     return this.tdb.run(async (tx) => {
       const deal = await this.dealOrFail(tx, id, true);
       if (deal.status === 'closed' || deal.status === 'lost') throw badRequest('DEAL_CLOSED', 'Proposta já encerrada');
-      if ((await this.banking.proposalsForInTx(tx, SOURCE, id)).some((p) => ['submitted', 'under_review', 'approved'].includes(p.status))) {
-        throw badRequest('PROPOSAL_OPEN', 'Cancele a proposta de financiamento em andamento antes');
-      }
+      const proposals = await this.banking.proposalsForInTx(tx, SOURCE, id);
+      if (proposals.some((p) => p.status === 'contracted')) throw badRequest('PROPOSAL_CONTRACTED', 'Há contrato de financiamento assinado: combine o distrato com o banco e clique em "Registrar distrato" na proposta antes de marcar como perdida');
+      if (proposals.some((p) => ['submitted', 'under_review', 'approved'].includes(p.status))) throw badRequest('PROPOSAL_OPEN', 'Cancele a proposta de financiamento em andamento antes');
       await tx.update(reDeals).set({ status: 'lost', lostReasonKey: input.reasonKey, lostReason: reason, lostAt: new Date() }).where(eq(reDeals.id, id));
       await tx.update(reProperties).set({ status: 'available' }).where(and(eq(reProperties.id, deal.propertyId), eq(reProperties.status, 'reserved')));
       await this.audit.log(tx, { action: 'real_estate.deal.lost', entity: 're_deal', entityId: id, data: { reasonKey: input.reasonKey, reason } });
@@ -325,10 +394,17 @@ export class RealEstateService implements OnModuleInit {
   private onCredit(e: ProposalUpdated) {
     if (e.sourceType !== SOURCE) return Promise.resolve();
     return this.tdb.run(async (tx) => {
-      const [deal] = await tx.select().from(reDeals).where(and(eq(reDeals.id, e.sourceId), ne(reDeals.status, 'closed'), ne(reDeals.status, 'lost')));
+      const [deal] = await tx.select().from(reDeals).where(and(eq(reDeals.id, e.sourceId), ne(reDeals.status, 'lost')));
       if (!deal) return;
+      // Venda fechada não muda, mas o distrato depois do fechamento precisa aparecer na ficha do comprador.
+      if (deal.status === 'closed') {
+        if (e.status === 'cancelled') await this.customers.addTimeline(tx, { customerId: deal.customerId, moduleKey: MODULE, type: 'deal.credit_cancelled', title: 'Financiamento cancelado depois da venda fechada: confira a comissão no financeiro', entity: 're_deal', entityId: deal.id });
+        return;
+      }
+      // Cancelada: se outra proposta continua aprovada, o crédito segue aprovado.
+      const stillApproved = e.status === 'cancelled' && (await this.banking.proposalsForInTx(tx, SOURCE, deal.id)).some((p) => p.id !== e.proposalId && (p.status === 'approved' || p.status === 'contracted'));
       const next: DealStatus =
-        e.status === 'approved' || e.status === 'contracted' ? 'credit_approved' : e.status === 'rejected' ? 'credit_rejected' : e.status === 'cancelled' ? 'negotiating' : 'credit_analysis';
+        e.status === 'approved' || e.status === 'contracted' || stillApproved ? 'credit_approved' : e.status === 'rejected' ? 'credit_rejected' : e.status === 'cancelled' ? 'negotiating' : 'credit_analysis';
       if (next === deal.status) return;
       await tx.update(reDeals).set({ status: next }).where(eq(reDeals.id, deal.id));
       const [property] = await tx.select().from(reProperties).where(eq(reProperties.id, deal.propertyId));
@@ -456,8 +532,10 @@ export class RealEstateService implements OnModuleInit {
   }
 }
 
+const isManualStatus = (status: PropertyRow['status']) => (manualPropertyStatuses as readonly string[]).includes(status);
+
 /** Financiamento habitacional: até 80% do valor; entrada + FGTS cobrem o resto. */
-function checkAmounts(input: DealInput, financeable: boolean) {
+function checkAmounts(input: DealUpdateInput, financeable: boolean) {
   const price = toCents(input.price);
   const own = toCents(input.downPayment) + toCents(input.fgtsAmount);
   if (own > price) throw badRequest('INVALID_DOWN_PAYMENT', 'Entrada e FGTS passam do valor da proposta');
@@ -476,7 +554,7 @@ function toDeal(row: { d: DealRow; customer: Deal['customer']; property: Propert
     id: d.id,
     number: d.number,
     customer: row.customer,
-    property: { id: p.id, code: p.code, title: p.title, address: addressOf(p), askingPrice: num(p.salePrice) },
+    property: { id: p.id, code: p.code, title: p.title, address: addressOf(p), askingPrice: num(p.salePrice), financeable: p.financeable },
     price,
     paymentType: d.paymentType,
     downPayment: Number(d.downPayment),
@@ -610,6 +688,12 @@ export class RealEstateController {
   @RequirePermission('real_estate.deals.write')
   createDeal(@Body(new ZodPipe(dealInput)) body: DealInput) {
     return this.re.createDeal(body);
+  }
+
+  @Patch('deals/:id')
+  @RequirePermission('real_estate.deals.write')
+  updateDeal(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(dealUpdateInput)) body: DealUpdateInput) {
+    return this.re.updateDeal(id, body);
   }
 
   @Patch('deals/:id/broker')

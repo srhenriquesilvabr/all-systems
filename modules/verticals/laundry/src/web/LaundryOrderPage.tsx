@@ -1,4 +1,4 @@
-import { api, apiUpload, ApiError, AuthImage, formatDateTime, formatMoney, useCan, formatPhone } from '@all/module-sdk/web';
+import { api, apiUpload, ApiError, AuthImage, formatDateTime, formatMoney, useCan, formatPhone, useSession } from '@all/module-sdk/web';
 import { ordersKey, PaymentBadge, PaymentModal, StatusBadge, Transitions, useWorkflows } from '@all/service-orders/web';
 import { Alert, Badge, Button, Card, Field, Modal, PageHeader, Select, Spinner, Textarea } from '@all/ui';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -14,14 +14,25 @@ export function LaundryOrderPage() {
   const workflows = useWorkflows();
   const detail = useLaundryOrder(id!);
   const canPay = useCan('shared.service-orders.payments');
+  const canEdit = useCan('laundry.orders.write');
+  const canStatus = useCan('shared.service-orders.status');
   const [paying, setPaying] = useState(false);
+  const backToShop = useMutation({
+    mutationFn: () => api(`/service-orders/${id}/transition`, { method: 'POST', body: { to: 'ready', reason: 'Saída para entrega desfeita' } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [...laundryKey, 'orders', id] });
+      queryClient.invalidateQueries({ queryKey: ordersKey });
+    },
+  });
 
   if (detail.isPending) return <Spinner />;
   if (detail.isError) return <Alert>{detail.error.message}</Alert>;
   const { order, pieces } = detail.data;
   const workflow = workflows.data?.find((w) => w.key === order.workflow);
   const balance = Math.round((order.total - order.paidAmount) * 100) / 100;
-  const inProduction = order.status === 'received' || order.status === 'in_process';
+  // Pronta continua na loja: a peça ainda pode voltar para retrabalho e receber ocorrência.
+  const inShop = order.status === 'received' || order.status === 'in_process' || order.status === 'ready';
+  const closed = order.status === 'delivered' || order.status === 'cancelled';
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: [...laundryKey, 'orders', order.id] });
     queryClient.invalidateQueries({ queryKey: ordersKey });
@@ -34,6 +45,11 @@ export function LaundryOrderPage() {
         description={`${order.customer.name} · recebida em ${formatDateTime(order.receivedAt)}${order.dueAt ? ` · previsão ${formatDateTime(order.dueAt)}` : ''}`}
         actions={
           <>
+            {canEdit && !closed && (
+              <Link to={`/lavanderia/ordens/${order.id}/editar`}>
+                <Button variant="secondary">Editar ordem</Button>
+              </Link>
+            )}
             <Link to={`/lavanderia/ordens/${order.id}/comprovante`}>
               <Button variant="secondary">Comprovante</Button>
             </Link>
@@ -47,8 +63,29 @@ export function LaundryOrderPage() {
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <StatusBadge workflows={workflows.data} workflow={order.workflow} status={order.status} />
         {/* A ordem também muda sozinha conforme as peças (ver quadro de produção). */}
-        {workflow && <Transitions order={order} workflow={workflow} onChanged={refresh} hide={['in_process', 'ready']} />}
+        {workflow && (
+          <Transitions
+            order={order}
+            workflow={workflow}
+            onChanged={refresh}
+            hide={['in_process', 'ready']}
+            cancelHint="A entrega agendada desta ordem é cancelada junto, e a taxa ainda não recebida sai do contas a receber."
+          />
+        )}
+        {order.status === 'out_for_delivery' && canStatus && (
+          <Button variant="ghost" loading={backToShop.isPending} onClick={() => backToShop.mutate()}>
+            Voltar para “Pronta” (não saiu)
+          </Button>
+        )}
       </div>
+      {backToShop.error && (
+        <div className="mb-4">
+          <Alert>{backToShop.error instanceof ApiError ? backToShop.error.message : 'Erro ao mudar o status'}</Alert>
+        </div>
+      )}
+      {order.status === 'ready' && (
+        <p className="mb-4 text-sm text-fg-muted">Ordem pronta. Se uma peça precisar de retrabalho, escolha a etapa dela aqui embaixo: a ordem volta para produção sem novo aviso ao cliente.</p>
+      )}
       {order.cancelReason && (
         <div className="mb-4">
           <Alert>Cancelada: {order.cancelReason}</Alert>
@@ -58,7 +95,7 @@ export function LaundryOrderPage() {
       <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
         <div className="space-y-3">
           {pieces.map((p) => (
-            <PieceCard key={p.itemId} piece={p} editable={inProduction} onChanged={refresh} />
+            <PieceCard key={p.itemId} piece={p} editable={inShop} onChanged={refresh} />
           ))}
         </div>
 
@@ -100,6 +137,13 @@ export function LaundryOrderPage() {
             {order.notesCustomer && <p className="whitespace-pre-line pt-2">{order.notesCustomer}</p>}
           </Card>
 
+          {order.notesInternal && (
+            <Card className="space-y-1 p-5 text-sm">
+              <h2 className="mb-2 font-medium">Observação interna</h2>
+              <p className="whitespace-pre-line text-fg-muted">{order.notesInternal}</p>
+            </Card>
+          )}
+
           <Card className="p-5">
             <h2 className="mb-3 font-medium">Histórico</h2>
             <ol className="space-y-2 text-sm">
@@ -108,6 +152,7 @@ export function LaundryOrderPage() {
                   <span className="tabular-nums text-fg-muted">{formatDateTime(h.createdAt)}</span>
                   <StatusBadge workflows={workflows.data} workflow={order.workflow} status={h.to} />
                   {h.userName && <span className="text-fg-muted">por {h.userName}</span>}
+                  {h.reason && <span className="text-fg-muted">— {h.reason}</span>}
                 </li>
               ))}
             </ol>
@@ -251,6 +296,8 @@ function PieceCard({ piece, editable, onChanged }: { piece: Piece; editable: boo
 
 function IncidentModal({ piece, onClose, onSaved }: { piece: Piece; onClose: () => void; onSaved: () => void }) {
   const [notes, setNotes] = useState('');
+  // Mesmos canais do aviso: e-mail e, com o módulo ativo, WhatsApp.
+  const whatsapp = useSession().modules.some((m) => m.key === 'integration.whatsapp');
   const save = useMutation({
     mutationFn: () => api(`/laundry/pieces/${piece.itemId}/incident`, { method: 'POST', body: { notes } }),
     onSuccess: onSaved,
@@ -273,7 +320,7 @@ function IncidentModal({ piece, onClose, onSaved }: { piece: Piece; onClose: () 
     >
       <div className="space-y-3">
         {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro'}</Alert>}
-        <p className="text-sm text-fg-muted">O cliente recebe um e-mail com esta descrição. Se puder, anexe uma foto antes.</p>
+        <p className="text-sm text-fg-muted">O cliente recebe esta descrição por {whatsapp ? 'e-mail e WhatsApp' : 'e-mail'}, conforme o contato cadastrado. Se puder, anexe uma foto antes.</p>
         <Field label="O que aconteceu">{(id) => <Textarea id={id} value={notes} onChange={(e) => setNotes(e.target.value)} autoFocus />}</Field>
       </div>
     </Modal>

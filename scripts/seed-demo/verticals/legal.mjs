@@ -387,7 +387,7 @@ export default async function seed(ctx) {
 
     let created = 0;
     const book = async ({ customerId, resource, n, hh, mm, service, status, paid, notes, subject }) => {
-      const a = await api.post('/scheduling/appointments', { customerId, resourceId: resource.id, startsAt: at(workday(n), hh, mm), serviceIds: [serviceId(service)], notes, subject });
+      const a = await api.post('/scheduling/appointments', { overrideSchedule: true, customerId, resourceId: resource.id, startsAt: at(workday(n), hh, mm), serviceIds: [serviceId(service)], notes, subject });
       created++;
       if (status && status !== 'scheduled') await api.post(`/scheduling/appointments/${a.id}/status`, { status });
       if (paid && a.total > 0 && account) {

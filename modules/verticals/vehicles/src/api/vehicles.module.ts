@@ -5,7 +5,7 @@ import { NotificationsModule } from '@all/notifications';
 import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Module, Param, ParseUUIDPipe, Patch, Post, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { z } from 'zod';
-import { dealInput, loseInput, sellerInput, vehicleInput, type DealInput, type LoseInput, type VehicleInput } from '../contracts';
+import { dealInput, loseInput, sellerInput, tradePlateInput, vehicleInput, type DealInput, type LoseInput, type VehicleInput } from '../contracts';
 import { FipeHttp, VehiclesService } from './vehicles.service';
 
 const stockQuery = z.object({ q: z.string().max(100).optional(), status: z.string().max(20).optional() });
@@ -106,6 +106,12 @@ export class VehiclesController {
   @RequirePermission('vehicles.deals.write')
   assignSeller(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(sellerInput)) body: z.infer<typeof sellerInput>) {
     return this.vehicles.assignSeller(id, body.sellerId);
+  }
+
+  @Patch('deals/:id/trade-plate')
+  @RequirePermission('vehicles.deals.write')
+  tradePlate(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(tradePlateInput)) body: z.infer<typeof tradePlateInput>) {
+    return this.vehicles.setTradePlate(id, body.plate);
   }
 
   @Post('deals/:id/close')

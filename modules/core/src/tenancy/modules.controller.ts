@@ -38,6 +38,25 @@ export class ModulesController {
     return { enabled: await this.tenancy.enableModules(ctx.tenantId, [key], 'addon') };
   }
 
+  /** Ramos e módulos contratados: o que está ativo, de quem cada um depende e o que já foi desativado. */
+  @Get('contracted')
+  @RequirePermission('core.access.settings')
+  contracted() {
+    return this.tenancy.contractedModules(requestContext.requireTenant().tenantId);
+  }
+
+  /**
+   * Desativação pelo dono. Só bloqueia o acesso: os dados ficam guardados e voltam ao contratar de novo.
+   * Recusada quando outro módulo ativo depende deste.
+   */
+  @Post(':key/deactivate')
+  @HttpCode(204)
+  async deactivate(@Param('key') key: string) {
+    const ctx = requestContext.requireTenant();
+    if (!ctx.isOwner) throw new ForbiddenException({ code: 'OWNER_ONLY', message: 'Só o dono da empresa pode desativar' });
+    await this.tenancy.disableModule(ctx.tenantId, key);
+  }
+
   @Get(':key/settings')
   @RequirePermission('core.access.settings')
   get(@Param('key') key: string) {

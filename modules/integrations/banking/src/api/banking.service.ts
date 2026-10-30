@@ -207,13 +207,22 @@ export class BankingService implements OnModuleInit {
     });
   }
 
-  /** Marcar como contratada (assinatura do contrato) ou cancelar, pela equipe. */
+  /**
+   * Marcar como contratada (assinatura do contrato) ou cancelar, pela equipe. Cancelar a contratada
+   * é registrar um distrato já combinado com a instituição: exige o motivo e fica na auditoria. O
+   * sistema não desfaz o contrato no banco. Adesão de consórcio contratada se cancela pela cota.
+   */
   setStatus(id: string, status: 'contracted' | 'cancelled', message?: string | null): Promise<Proposal> {
     return this.tdb.run(async (tx) => {
       const p = await this.proposalOrFail(tx, id);
-      const allowed: Record<string, ProposalStatus[]> = { contracted: ['approved'], cancelled: ['submitted', 'under_review', 'approved'] };
+      const allowed: Record<string, ProposalStatus[]> = { contracted: ['approved'], cancelled: ['submitted', 'under_review', 'approved', 'contracted'] };
       if (!allowed[status]!.includes(p.status)) throw new BadRequestException({ code: 'INVALID_STATUS', message: 'Esta proposta não pode mudar para este status' });
+      if (status === 'cancelled' && p.status === 'contracted') {
+        if (p.product === 'consortium') throw new BadRequestException({ code: 'INVALID_STATUS', message: 'Adesão de consórcio contratada é cancelada pela cota' });
+        if ((message?.trim().length ?? 0) < 3) throw new BadRequestException({ code: 'REASON_REQUIRED', message: 'Informe o motivo do distrato combinado com a instituição' });
+      }
       await this.applyStatus(tx, p, { status, message: message ?? null }, 'manual');
+      await this.audit.log(tx, { action: 'banking.proposal.status', entity: 'bank_proposal', entityId: id, data: { from: p.status, to: status, message: message ?? null } });
       return this.detailInTx(tx, id);
     });
   }

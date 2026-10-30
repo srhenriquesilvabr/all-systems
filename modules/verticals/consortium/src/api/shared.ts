@@ -2,7 +2,8 @@ import { consortiumInstallment } from '@all/banking';
 import { addMonths, toCents } from '@all/core';
 import type { Tx } from '@all/db';
 import { BadRequestException } from '@nestjs/common';
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql, type AnyColumn } from 'drizzle-orm';
+import { normalizeCode, sameCode } from '../contracts';
 import { consAdministrators, consAssemblies, consBids, consCredits, consGroups, consInstallments, consPlans, consQuotas } from '../db/schema';
 
 export const MODULE = 'consortium';
@@ -10,6 +11,14 @@ export const MODULE = 'consortium';
 export const SOURCE = 'consortium_quota';
 /** Origem do estorno de comissão no financeiro (despesa: a administradora desconta o que já pagou). */
 export const REVERSAL_SOURCE = 'consortium_commission_reversal';
+/**
+ * Recompensa da indicação no financeiro. source_id = id do lead. Despesa: o que a corretora paga a
+ * quem indicou. Receita: a recompensa já paga e estornada, a recuperar de quem indicou.
+ */
+export const REWARD_SOURCE = 'consortium_lead';
+
+/** O mesmo que `normalizeCode`, no banco: precisam dar o mesmo resultado. */
+export const normCode = (col: AnyColumn) => sql<string>`regexp_replace(upper(regexp_replace(coalesce(${col}, ''), '\\s+', '', 'g')), '^0+(?=.)', '')`;
 
 export const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 export const badRequest = (code: string, message: string) => new BadRequestException({ code, message });
@@ -71,6 +80,9 @@ export async function generateInstallmentsInTx(tx: Tx, tenantId: string, quota: 
 
 /** Cadastra o grupo da cota (administradora + código) se ainda não existir. */
 export async function ensureGroupInTx(tx: Tx, tenantId: string, plan: PlanRow, groupCode: string) {
+  // "012" e "12" são o mesmo grupo: vale o cadastro que já existe, como foi digitado.
+  const [same] = await tx.select({ id: consGroups.id }).from(consGroups).where(and(eq(consGroups.connectionId, plan.connectionId), eq(normCode(consGroups.groupCode), normalizeCode(groupCode))));
+  if (same) return;
   await tx.insert(consGroups).values({ tenantId, connectionId: plan.connectionId, planId: plan.id, groupCode }).onConflictDoNothing({ target: [consGroups.tenantId, consGroups.connectionId, consGroups.groupCode] });
 }
 
@@ -83,14 +95,36 @@ export async function ensureAdministratorInTx(tx: Tx, tenantId: string, connecti
 }
 
 /**
- * Depois do resultado: lances da assembleia viram vencedor (cota contemplada por lance), sem efeito
- * (contemplada por sorteio) ou perdedor. Devolve os lances vencedores por cota.
+ * Administradora de um código de grupo: a informada ou, sem informar, a única que tem esse código
+ * (nos grupos cadastrados ou nas cotas). Código em mais de uma: precisa escolher. Sem nenhuma: null.
  */
-export async function settleBidsInTx(tx: Tx, assemblyId: string, winners: { quotaIds: Set<string>; bidQuotaIds: Set<string> }) {
+export async function resolveConnectionInTx(tx: Tx, groupCode: string, given?: string | null): Promise<string | null> {
+  if (given) {
+    const [admin] = await tx.select({ id: consAdministrators.id }).from(consAdministrators).where(eq(consAdministrators.connectionId, given));
+    const [plan] = admin ? [admin] : await tx.select({ id: consPlans.id }).from(consPlans).where(eq(consPlans.connectionId, given)).limit(1);
+    if (!plan) throw badRequest('ADMINISTRATOR_NOT_FOUND', 'Administradora não encontrada');
+    return given;
+  }
+  const code = normalizeCode(groupCode);
+  const [groups, quotas] = [
+    await tx.selectDistinct({ id: consGroups.connectionId }).from(consGroups).where(eq(normCode(consGroups.groupCode), code)),
+    await tx.selectDistinct({ id: consPlans.connectionId }).from(consQuotas).innerJoin(consPlans, eq(consPlans.id, consQuotas.planId)).where(eq(normCode(consQuotas.groupCode), code)),
+  ];
+  const ids = [...new Set([...groups, ...quotas].map((r) => r.id))];
+  if (ids.length > 1) throw badRequest('ADMINISTRATOR_REQUIRED', `O grupo ${groupCode} existe em mais de uma administradora: escolha qual`);
+  return ids[0] ?? null;
+}
+
+/**
+ * Depois do resultado: lances da assembleia viram vencedor (cota contemplada por lance), sem efeito
+ * (contemplada por sorteio) ou perdedor. Devolve os lances vencedores por cota. Na correção do
+ * resultado (`all`), refaz também os que já tinham sido acertados.
+ */
+export async function settleBidsInTx(tx: Tx, assemblyId: string, winners: { quotaIds: Set<string>; bidQuotaIds: Set<string> }, opts: { all?: boolean } = {}) {
   const bids = await tx
     .select()
     .from(consBids)
-    .where(and(eq(consBids.assemblyId, assemblyId), inArray(consBids.status, ['registered', 'sent'])))
+    .where(and(eq(consBids.assemblyId, assemblyId), opts.all ? undefined : inArray(consBids.status, ['registered', 'sent'])))
     .orderBy(asc(consBids.createdAt));
   const won = new Map<string, typeof consBids.$inferSelect>();
   for (const b of bids) {
@@ -110,11 +144,11 @@ export async function openCreditInTx(tx: Tx, tenantId: string, quotaId: string, 
     .onConflictDoNothing({ target: consCredits.quotaId });
 }
 
-/** Assembleia da cota: tem de ser do mesmo grupo e ainda sem resultado. */
-export async function scheduledAssemblyInTx(tx: Tx, assemblyId: string, groupCode: string | null) {
+/** Assembleia da cota: tem de ser do mesmo grupo e da mesma administradora, e ainda sem resultado. */
+export async function scheduledAssemblyInTx(tx: Tx, assemblyId: string, groupCode: string | null, connectionId: string) {
   const [a] = await tx.select().from(consAssemblies).where(eq(consAssemblies.id, assemblyId));
   if (!a) throw badRequest('ASSEMBLY_NOT_FOUND', 'Assembleia não encontrada');
-  if (a.groupCode !== groupCode) throw badRequest('ASSEMBLY_OTHER_GROUP', 'A assembleia é de outro grupo');
+  if (!sameCode(a.groupCode, groupCode) || (a.connectionId && a.connectionId !== connectionId)) throw badRequest('ASSEMBLY_OTHER_GROUP', 'A assembleia é de outro grupo');
   if (a.status !== 'scheduled') throw badRequest('ASSEMBLY_HELD', 'Esta assembleia já tem resultado');
   return a;
 }

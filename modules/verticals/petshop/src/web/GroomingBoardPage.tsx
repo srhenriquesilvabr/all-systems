@@ -1,7 +1,8 @@
-import { api, ApiError, formatPhone, useCan } from '@all/module-sdk/web';
-import { AppointmentDetails, localToUtc, localTime, schedulingKey, todayLocal, useAppointments } from '@all/scheduling/web';
+import { api, ApiError, formatDate, formatDateTime, formatPhone, useCan } from '@all/module-sdk/web';
+import { PetPicker } from '@all/pets/web';
+import { AppointmentDetails, localToUtc, localTime, schedulingKey, shiftDate, todayLocal, useAppointments, type SubjectValue } from '@all/scheduling/web';
 import type { Appointment, AppointmentStatus } from '@all/scheduling';
-import { Alert, Button, Card, Checkbox, PageHeader, Spinner } from '@all/ui';
+import { Alert, Badge, Button, Card, Checkbox, Input, PageHeader, Spinner } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
@@ -11,24 +12,53 @@ const columns: { key: string; label: string; statuses: AppointmentStatus[]; next
   { key: 'arrived', label: 'Na loja', statuses: ['arrived'], next: { status: 'in_service', label: 'Iniciar' } },
   { key: 'service', label: 'No banho / tosa', statuses: ['in_service'], next: { status: 'done', label: 'Pronto' } },
   { key: 'done', label: 'Pronto para buscar', statuses: ['done'] },
+  { key: 'gone', label: 'Já buscado', statuses: ['done'] },
 ];
 
-/** Quadro do dia do banho e tosa: cada pet anda da chegada até "pronto" (que avisa o tutor). */
+const pickupsKey = ['petshop', 'pickups'];
+interface Pickup {
+  appointmentId: string;
+  pickedUpAt: string;
+  userName: string | null;
+}
+
+/** Quadro do banho e tosa: cada pet anda da chegada até "pronto" (que avisa o tutor) e a saída com o tutor. */
 export function GroomingBoardPage() {
   const today = todayLocal();
-  const [from, to] = useMemo(() => [localToUtc(today, '00:00'), localToUtc(today, '23:59')], [today]);
+  const [day, setDay] = useState(today);
+  const [from, to] = useMemo(() => [localToUtc(day, '00:00'), localToUtc(day, '23:59')], [day]);
   const appointments = useAppointments(from, to);
+  const pickups = useQuery({
+    queryKey: [...pickupsKey, day],
+    queryFn: () => api<Pickup[]>('/petshop/pickups', { query: { from: from.toISOString(), to: to.toISOString() } }),
+    refetchInterval: 30_000,
+  });
+  const pickupOf = (id: string) => pickups.data?.find((p) => p.appointmentId === id);
   const [openId, setOpenId] = useState<string | null>(null);
 
   return (
     <>
       <PageHeader
-        title="Banho e tosa — hoje"
-        description="Marque a chegada, o início e quando o pet ficar pronto. Ao marcar pronto, o tutor recebe o aviso."
+        title={day === today ? 'Banho e tosa — hoje' : `Banho e tosa — ${formatDate(day)}`}
+        description="Marque a chegada, o início e quando o pet ficar pronto. Ao marcar pronto, o tutor recebe o aviso. Quando ele buscar, registre a saída."
         actions={
-          <Link to="/agenda">
-            <Button variant="secondary">Abrir agenda</Button>
-          </Link>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="secondary" aria-label="Dia anterior" onClick={() => setDay(shiftDate(day, -1))}>
+              ‹
+            </Button>
+            <Input type="date" aria-label="Dia" className="w-40" value={day} onChange={(e) => e.target.value && setDay(e.target.value)} />
+            <Button variant="secondary" aria-label="Próximo dia" onClick={() => setDay(shiftDate(day, 1))}>
+              ›
+            </Button>
+            {day !== today && (
+              <Button variant="ghost" onClick={() => setDay(today)}>
+                Hoje
+              </Button>
+            )}
+            <Link to="/agenda">
+              <Button variant="secondary">Abrir agenda</Button>
+            </Link>
+          </div>
         }
       />
       {appointments.isPending ? (
@@ -36,9 +66,9 @@ export function GroomingBoardPage() {
       ) : appointments.isError ? (
         <Alert>{appointments.error.message}</Alert>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           {columns.map((col) => {
-            const items = appointments.data.filter((a) => col.statuses.includes(a.status));
+            const items = appointments.data.filter((a) => col.statuses.includes(a.status) && (col.key === 'done' ? !pickupOf(a.id) : col.key === 'gone' ? !!pickupOf(a.id) : true));
             return (
               <section key={col.key} className="rounded-2xl bg-muted/60 p-3">
                 <h2 className="mb-3 flex items-center justify-between px-1 text-sm font-medium">
@@ -47,7 +77,7 @@ export function GroomingBoardPage() {
                 </h2>
                 <div className="space-y-2">
                   {items.map((a) => (
-                    <PetCard key={a.id} appointment={a} next={col.next} onOpen={() => setOpenId(a.id)} />
+                    <PetCard key={a.id} appointment={a} next={col.next} pickup={pickupOf(a.id)} column={col.key} onOpen={() => setOpenId(a.id)} />
                   ))}
                   {items.length === 0 && <p className="px-1 py-4 text-center text-xs text-fg-subtle">Nenhum</p>}
                 </div>
@@ -62,13 +92,37 @@ export function GroomingBoardPage() {
   );
 }
 
-function PetCard({ appointment: a, next, onOpen }: { appointment: Appointment; next?: { status: AppointmentStatus; label: string }; onOpen: () => void }) {
+function PetCard({
+  appointment: a,
+  next,
+  pickup,
+  column,
+  onOpen,
+}: {
+  appointment: Appointment;
+  next?: { status: AppointmentStatus; label: string };
+  pickup?: Pickup;
+  column: string;
+  onOpen: () => void;
+}) {
   const queryClient = useQueryClient();
   const canMove = useCan('shared.scheduling.status');
+  const canWrite = useCan('shared.scheduling.write');
+  const canSetPet = canMove || canWrite;
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: schedulingKey });
+    queryClient.invalidateQueries({ queryKey: pickupsKey });
+  };
   const move = useMutation({
     mutationFn: (status: AppointmentStatus) => api(`/scheduling/appointments/${a.id}/status`, { method: 'POST', body: { status } }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: schedulingKey }),
+    onSuccess: refresh,
   });
+  const pickUp = useMutation({ mutationFn: () => api(`/petshop/appointments/${a.id}/pickup`, { method: 'POST' }), onSuccess: refresh });
+  const undo = useMutation({ mutationFn: () => api(`/petshop/appointments/${a.id}/pickup`, { method: 'DELETE' }), onSuccess: refresh });
+  const setPet = useMutation({ mutationFn: (petId: string) => api(`/petshop/appointments/${a.id}/pet`, { method: 'POST', body: { petId } }), onSuccess: refresh });
+  const [choosing, setChoosing] = useState(false);
+  const error = move.error ?? pickUp.error ?? undo.error ?? setPet.error;
+  const open = !['done', 'no_show', 'cancelled'].includes(a.status);
 
   return (
     <Card className="p-3 text-sm">
@@ -85,15 +139,42 @@ function PetCard({ appointment: a, next, onOpen }: { appointment: Appointment; n
         )}
         <div className="mt-1 text-xs text-fg-muted">{a.services.map((s) => s.name).join(', ')}</div>
       </button>
-      {move.error && (
+      {error && (
         <div className="mt-2">
-          <Alert>{move.error instanceof ApiError ? move.error.message : 'Erro ao atualizar'}</Alert>
+          <Alert>{error instanceof ApiError ? error.message : 'Erro ao atualizar'}</Alert>
+        </div>
+      )}
+      {!a.subject && (
+        <div className="mt-2 space-y-1.5">
+          <Badge tone="warning">Sem pet: o aviso de pronto não sai</Badge>
+          {open && canSetPet && !choosing && (
+            <Button size="sm" variant="secondary" className="w-full" onClick={() => setChoosing(true)}>
+              Escolher o pet
+            </Button>
+          )}
+          {choosing && <PetPicker customerId={a.customer.id} value={null} onChange={(v: SubjectValue | null) => v && setPet.mutate(v.id)} />}
         </div>
       )}
       {next && canMove && (
         <Button size="sm" className="mt-2 w-full" loading={move.isPending} onClick={() => move.mutate(next.status)}>
           {next.label}
         </Button>
+      )}
+      {column === 'done' && canMove && (
+        <Button size="sm" variant="secondary" className="mt-2 w-full" loading={pickUp.isPending} onClick={() => pickUp.mutate()}>
+          Tutor buscou
+        </Button>
+      )}
+      {column === 'gone' && pickup && (
+        <div className="mt-2 text-xs text-fg-muted">
+          Saiu em {formatDateTime(pickup.pickedUpAt)}
+          {pickup.userName && ` · ${pickup.userName}`}
+          {canMove && (
+            <button type="button" className="ml-2 text-brand-700 hover:underline" onClick={() => undo.mutate()}>
+              desfazer
+            </button>
+          )}
+        </div>
       )}
     </Card>
   );

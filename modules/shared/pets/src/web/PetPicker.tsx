@@ -18,35 +18,39 @@ export function PetPicker({ customerId, value, onChange }: { customerId: string;
   }, [pets.data]);
 
   return (
-    <div className="flex gap-2">
-      <Select
-        aria-label="Pet"
-        className="flex-1"
-        value={value?.id ?? ''}
-        onChange={(e) => {
-          const p = alive.find((x) => x.id === e.target.value);
-          onChange(p ? { type: 'pet', id: p.id, label: p.name } : null);
-        }}
-      >
-        <option value="">{pets.isPending ? 'Carregando…' : alive.length ? 'Escolha o pet' : 'Nenhum pet cadastrado'}</option>
-        {alive.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.name} ({speciesLabel[p.species]}
-            {p.breed ? `, ${p.breed}` : ''})
-          </option>
-        ))}
-      </Select>
-      <Button type="button" variant="secondary" size="sm" onClick={() => setCreating(true)}>
-        Novo
-      </Button>
-      {creating && (
-        <PetModal
-          pet={null}
-          tutor={{ id: customerId }}
-          onClose={() => setCreating(false)}
-          onSaved={(p) => onChange({ type: 'pet', id: p.id, label: p.name })}
-        />
-      )}
+    <div className="space-y-1.5">
+      <div className="flex gap-2">
+        <Select
+          aria-label="Pet"
+          className="flex-1"
+          value={value?.id ?? ''}
+          onChange={(e) => {
+            const p = alive.find((x) => x.id === e.target.value);
+            onChange(p ? { type: 'pet', id: p.id, label: p.name } : null);
+          }}
+        >
+          <option value="">{pets.isPending ? 'Carregando…' : alive.length ? 'Escolha o pet' : 'Nenhum pet cadastrado'}</option>
+          {alive.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name} ({speciesLabel[p.species]}
+              {p.breed ? `, ${p.breed}` : ''})
+            </option>
+          ))}
+        </Select>
+        <Button type="button" variant="secondary" size="sm" onClick={() => setCreating(true)}>
+          Novo
+        </Button>
+        {creating && (
+          <PetModal
+            pet={null}
+            tutor={{ id: customerId }}
+            onClose={() => setCreating(false)}
+            onSaved={(p) => onChange({ type: 'pet', id: p.id, label: p.name })}
+          />
+        )}
+      </div>
+      {/* A agenda deixa marcar sem pet (nem todo horário é de um animal), mas quem esquece perde o aviso. */}
+      {!value && !pets.isPending && <p className="text-sm text-warning-700">Escolha o pet: sem ele, o horário fica só no nome do tutor, a ficha não registra o atendimento e o aviso de pet pronto não é enviado.</p>}
     </div>
   );
 }

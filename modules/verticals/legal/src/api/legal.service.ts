@@ -11,6 +11,7 @@ import {
   type CaseUpdate,
   type Deadline,
   type DeadlineInput,
+  type DeadlineUpdateInput,
   type Fee,
   type FeeInput,
   type LegalCase,
@@ -146,24 +147,58 @@ export class LegalService implements OnModuleInit {
         .select({ u: legalUpdates, author: coreSchema.users.name })
         .from(legalUpdates)
         .leftJoin(coreSchema.users, eq(coreSchema.users.id, legalUpdates.authorId))
-        .where(eq(legalUpdates.caseId, caseId))
+        .where(and(eq(legalUpdates.caseId, caseId), isNull(legalUpdates.deletedAt)))
         .orderBy(desc(legalUpdates.occurredOn), desc(legalUpdates.createdAt));
-      return rows.map(({ u, author }) => ({ id: u.id, occurredOn: u.occurredOn, description: u.description, author, createdAt: u.createdAt.toISOString() }));
+      return rows.map(({ u, author }) => ({ id: u.id, occurredOn: u.occurredOn, description: u.description, author, auto: u.auto, editedAt: u.editedAt?.toISOString() ?? null, createdAt: u.createdAt.toISOString() }));
     });
   }
 
   addUpdate(caseId: string, input: { occurredOn: string; description: string }) {
     return this.tdb.run(async (tx) => {
       await this.caseOrFail(tx, caseId);
-      const row = await this.addUpdateRow(tx, caseId, input.occurredOn, input.description);
+      const row = await this.addUpdateRow(tx, caseId, input.occurredOn, input.description, { auto: false });
       await tx.update(legalCases).set({ updatedAt: new Date() }).where(eq(legalCases.id, caseId));
       return { id: row.id };
     });
   }
 
+  /** Correção de andamento lançado à mão; o texto anterior fica na auditoria. */
+  editUpdate(id: string, input: { occurredOn: string; description: string }) {
+    const { userId } = requestContext.requireTenant();
+    return this.tdb.run(async (tx) => {
+      const current = await this.manualUpdateOrFail(tx, id);
+      await tx.update(legalUpdates).set({ occurredOn: input.occurredOn, description: input.description, editedAt: new Date(), editedBy: userId ?? null }).where(eq(legalUpdates.id, id));
+      await this.audit.log(tx, {
+        action: 'legal.update.edited',
+        entity: 'legal_update',
+        entityId: id,
+        data: { caseId: current.caseId, before: { occurredOn: current.occurredOn, description: current.description }, after: input },
+      });
+      return { id };
+    });
+  }
+
+  /** Exclusão com motivo: sai das telas, o registro fica no banco e o texto na auditoria. */
+  deleteUpdate(id: string, reason: string) {
+    const { userId } = requestContext.requireTenant();
+    return this.tdb.run(async (tx) => {
+      const current = await this.manualUpdateOrFail(tx, id);
+      await tx.update(legalUpdates).set({ deletedAt: new Date(), deletedBy: userId ?? null, deleteReason: reason }).where(eq(legalUpdates.id, id));
+      await this.audit.log(tx, { action: 'legal.update.deleted', entity: 'legal_update', entityId: id, data: { caseId: current.caseId, reason, occurredOn: current.occurredOn, description: current.description } });
+    });
+  }
+
+  private async manualUpdateOrFail(tx: Tx, id: string) {
+    const [row] = await tx.select().from(legalUpdates).where(and(eq(legalUpdates.id, id), isNull(legalUpdates.deletedAt))).for('update');
+    if (!row) throw new NotFoundException({ code: 'UPDATE_NOT_FOUND', message: 'Andamento não encontrado' });
+    if (row.auto) throw badRequest('UPDATE_AUTOMATIC', 'Este andamento foi gerado pelo sistema e não pode ser alterado à mão. Corrija a origem (o prazo, a situação ou o honorário)');
+    return row;
+  }
+
   // ---- Prazos ---------------------------------------------------------------------------------
 
-  deadlines(opts: { caseId?: string; until?: string; assignedUserId?: string; status?: 'open' | 'done' }): Promise<Deadline[]> {
+  deadlines(opts: { caseId?: string; until?: string; assignedUserId?: string; mine?: boolean; status?: 'open' | 'done' }): Promise<Deadline[]> {
+    const { userId } = requestContext.require();
     return this.tdb.run(async (tx) => {
       const assigned = aliasedTable(coreSchema.users, 'assigned');
       const rows = await tx
@@ -173,9 +208,11 @@ export class LegalService implements OnModuleInit {
         .leftJoin(assigned, eq(assigned.id, legalDeadlines.assignedUserId))
         .where(
           and(
+            isNull(legalDeadlines.deletedAt),
             opts.caseId ? eq(legalDeadlines.caseId, opts.caseId) : undefined,
             opts.until ? lte(legalDeadlines.dueOn, opts.until) : undefined,
             opts.assignedUserId ? eq(legalDeadlines.assignedUserId, opts.assignedUserId) : undefined,
+            opts.mine ? or(eq(legalDeadlines.assignedUserId, userId!), eq(legalCases.responsibleUserId, userId!)) : undefined,
             opts.status ? eq(legalDeadlines.status, opts.status) : undefined,
           ),
         )
@@ -209,20 +246,81 @@ export class LegalService implements OnModuleInit {
     });
   }
 
-  /** `doneOn`: dia em que foi cumprido (padrão hoje); o andamento "Prazo cumprido" sai com essa data. */
+  /**
+   * Corrige um prazo em aberto. Mudar data, antecedência ou quem cuida reabre o aviso por e-mail. Prazo
+   * cumprido precisa ser reaberto antes: assim o andamento "Prazo cumprido" não fica falando de outra data.
+   */
+  updateDeadline(id: string, input: DeadlineUpdateInput) {
+    return this.tdb.run(async (tx) => {
+      const current = await this.openDeadlineOrFail(tx, id);
+      await this.checkMember(tx, input.assignedUserId);
+      const next = {
+        title: input.title ?? current.title,
+        dueOn: input.dueOn ?? current.dueOn,
+        alertDays: input.alertDays ?? current.alertDays,
+        assignedUserId: input.assignedUserId === undefined ? current.assignedUserId : input.assignedUserId,
+        notes: input.notes === undefined ? current.notes : input.notes,
+      };
+      const alertChanged = next.dueOn !== current.dueOn || next.alertDays !== current.alertDays || next.assignedUserId !== current.assignedUserId;
+      await tx
+        .update(legalDeadlines)
+        .set({ ...next, ...(alertChanged ? { alertedAt: null } : {}) })
+        .where(eq(legalDeadlines.id, id));
+      await this.audit.log(tx, {
+        action: 'legal.deadline.updated',
+        entity: 'legal_deadline',
+        entityId: id,
+        data: { caseId: current.caseId, before: { title: current.title, dueOn: current.dueOn, alertDays: current.alertDays, assignedUserId: current.assignedUserId, notes: current.notes }, after: next, alertReset: alertChanged },
+      });
+      return { id };
+    });
+  }
+
+  /** Prazo errado se exclui, com motivo; não precisa virar "cumprido". Cumprido, só depois de reabrir. */
+  deleteDeadline(id: string, reason: string) {
+    const { userId } = requestContext.requireTenant();
+    return this.tdb.run(async (tx) => {
+      const current = await this.openDeadlineOrFail(tx, id);
+      await tx.update(legalDeadlines).set({ deletedAt: new Date(), deletedBy: userId ?? null, deleteReason: reason }).where(eq(legalDeadlines.id, id));
+      await this.audit.log(tx, { action: 'legal.deadline.deleted', entity: 'legal_deadline', entityId: id, data: { caseId: current.caseId, reason, title: current.title, dueOn: current.dueOn, assignedUserId: current.assignedUserId } });
+    });
+  }
+
+  private async openDeadlineOrFail(tx: Tx, id: string) {
+    const [row] = await tx.select().from(legalDeadlines).where(and(eq(legalDeadlines.id, id), isNull(legalDeadlines.deletedAt))).for('update');
+    if (!row) throw new NotFoundException({ code: 'DEADLINE_NOT_FOUND', message: 'Prazo não encontrado' });
+    if (row.status !== 'open') throw badRequest('DEADLINE_DONE', 'Este prazo já foi cumprido: reabra antes de alterar ou excluir');
+    return row;
+  }
+
+  /**
+   * `doneOn`: dia em que foi cumprido (padrão hoje); o andamento "Prazo cumprido" sai com essa data
+   * e fica ligado ao prazo. Reabrir retira esse andamento (fica o registro de que foi reaberto) e
+   * libera o aviso de novo, conforme a antecedência.
+   */
   completeDeadline(id: string, done: boolean, doneOn = localToday()) {
     if (done && doneOn > localToday()) throw badRequest('INVALID_DATE', 'A data de cumprimento não pode ser no futuro');
+    const { userId } = requestContext.requireTenant();
     // Dia passado vira meio-dia no fuso do escritório (o horário real não é conhecido).
     const doneAt = doneOn === localToday() ? new Date() : new Date(`${doneOn}T12:00:00-03:00`);
     return this.tdb.run(async (tx) => {
-      const [row] = await tx
-        .update(legalDeadlines)
-        .set(done ? { status: 'done', doneAt } : { status: 'open', doneAt: null })
-        .where(eq(legalDeadlines.id, id))
-        .returning();
-      if (!row) throw new NotFoundException({ code: 'DEADLINE_NOT_FOUND', message: 'Prazo não encontrado' });
-      if (done) await this.addUpdateRow(tx, row.caseId, doneOn, `Prazo cumprido: ${row.title}`);
-      await this.audit.log(tx, { action: done ? 'legal.deadline.done' : 'legal.deadline.reopened', entity: 'legal_deadline', entityId: id });
+      const [current] = await tx.select().from(legalDeadlines).where(and(eq(legalDeadlines.id, id), isNull(legalDeadlines.deletedAt))).for('update');
+      if (!current) throw new NotFoundException({ code: 'DEADLINE_NOT_FOUND', message: 'Prazo não encontrado' });
+      if (current.status === (done ? 'done' : 'open')) throw new ConflictException({ code: 'DEADLINE_SAME_STATUS', message: done ? 'Este prazo já está cumprido' : 'Este prazo já está em aberto' });
+      if (done) {
+        await tx.update(legalDeadlines).set({ status: 'done', doneAt }).where(eq(legalDeadlines.id, id));
+        await this.addUpdateRow(tx, current.caseId, doneOn, `Prazo cumprido: ${current.title}`, { deadlineId: id });
+        await this.audit.log(tx, { action: 'legal.deadline.done', entity: 'legal_deadline', entityId: id, data: { doneOn } });
+        return;
+      }
+      await tx.update(legalDeadlines).set({ status: 'open', doneAt: null, alertedAt: null }).where(eq(legalDeadlines.id, id));
+      const retracted = await tx
+        .update(legalUpdates)
+        .set({ deletedAt: new Date(), deletedBy: userId ?? null, deleteReason: 'Prazo reaberto' })
+        .where(and(eq(legalUpdates.deadlineId, id), isNull(legalUpdates.deletedAt)))
+        .returning({ id: legalUpdates.id, occurredOn: legalUpdates.occurredOn });
+      await this.addUpdateRow(tx, current.caseId, localToday(), `Prazo reaberto: ${current.title}`);
+      await this.audit.log(tx, { action: 'legal.deadline.reopened', entity: 'legal_deadline', entityId: id, data: { doneAt: current.doneAt, retractedUpdates: retracted.map((r) => r.id), alertReset: true } });
     });
   }
 
@@ -239,7 +337,7 @@ export class LegalService implements OnModuleInit {
             .select({ d: legalDeadlines, c: legalCases })
             .from(legalDeadlines)
             .innerJoin(legalCases, eq(legalCases.id, legalDeadlines.caseId))
-            .where(and(eq(legalDeadlines.status, 'open'), isNull(legalDeadlines.alertedAt), lte(sql`${legalDeadlines.dueOn} - ${legalDeadlines.alertDays}`, today)));
+            .where(and(eq(legalDeadlines.status, 'open'), isNull(legalDeadlines.deletedAt), isNull(legalDeadlines.alertedAt), lte(sql`${legalDeadlines.dueOn} - ${legalDeadlines.alertDays}`, today)));
           if (!due.length) return [];
           const team = await tx
             .select({ id: coreSchema.users.id, email: coreSchema.users.email })
@@ -371,9 +469,10 @@ export class LegalService implements OnModuleInit {
 
   // ---- internos -------------------------------------------------------------------------------
 
-  private async addUpdateRow(tx: Tx, caseId: string, occurredOn: string, description: string) {
+  /** Por padrão, andamento gerado pelo sistema; o lançado à mão passa `auto: false`. */
+  private async addUpdateRow(tx: Tx, caseId: string, occurredOn: string, description: string, opts: { auto?: boolean; deadlineId?: string } = {}) {
     const { tenantId, userId } = requestContext.requireTenant();
-    const [row] = await tx.insert(legalUpdates).values({ tenantId, caseId, occurredOn, description, authorId: userId ?? null }).returning();
+    const [row] = await tx.insert(legalUpdates).values({ tenantId, caseId, occurredOn, description, authorId: userId ?? null, auto: opts.auto ?? true, deadlineId: opts.deadlineId ?? null }).returning();
     return row!;
   }
 
@@ -398,7 +497,7 @@ export class LegalService implements OnModuleInit {
       ? await tx
           .selectDistinctOn([legalDeadlines.caseId], { caseId: legalDeadlines.caseId, id: legalDeadlines.id, title: legalDeadlines.title, dueOn: legalDeadlines.dueOn })
           .from(legalDeadlines)
-          .where(and(inArray(legalDeadlines.caseId, ids), eq(legalDeadlines.status, 'open')))
+          .where(and(inArray(legalDeadlines.caseId, ids), eq(legalDeadlines.status, 'open'), isNull(legalDeadlines.deletedAt)))
           .orderBy(legalDeadlines.caseId, asc(legalDeadlines.dueOn))
       : [];
     return rows.map(({ c, customer, responsible }) => {

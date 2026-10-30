@@ -2,12 +2,12 @@ import { AuditService, centsToDecimal, FinanceService, ModuleSettingsService, Te
 import type { Tx } from '@all/db';
 import { requestContext } from '@all/module-sdk';
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { and, eq, inArray } from 'drizzle-orm';
-import { computeTermination, round2, terminationTypeLabel, type Payslip, type TaxTables, type TerminationDetail, type TerminationInput, type TerminationStatement } from '../contracts';
+import { and, eq, gte, inArray, isNull, ne } from 'drizzle-orm';
+import { computeTermination, round2, terminationTypeLabel, type Payslip, type ReversalInput, type TaxTables, type TerminationDetail, type TerminationInput, type TerminationStatement } from '../contracts';
 import { hrEmployees, hrLeaves, hrPayrollItems, hrPayrolls, hrTerminations, hrVacations } from '../db/schema';
 import type { HrSettings } from '../manifest';
 import { HrEmployersRegistry } from './employers';
-import { addCompetence, badRequest, closedItem, employeeOrFail, fgtsEstimate, findPayroll, MODULE, nextMonth, pgCode, TERMINATION_SOURCE, variableAverage, type EmployeeRow } from './shared';
+import { addCompetence, badRequest, closedItem, employeeOrFail, fgtsEstimate, findPayroll, MODULE, nextMonth, pgCode, sameEmployer, TERMINATION_SOURCE, variableAverage, type EmployeeRow } from './shared';
 
 /**
  * Rescisão: prévia (sem gravar) e confirmação. Ao confirmar, o termo entra na folha de
@@ -36,7 +36,7 @@ export class TerminationService {
   get(employeeId: string): Promise<TerminationDetail> {
     return this.tdb.run(async (tx) => {
       const emp = await employeeOrFail(tx, employeeId);
-      const [row] = await tx.select().from(hrTerminations).where(eq(hrTerminations.employeeId, employeeId));
+      const [row] = await tx.select().from(hrTerminations).where(and(eq(hrTerminations.employeeId, employeeId), isNull(hrTerminations.cancelledAt)));
       if (!row) throw new NotFoundException({ code: 'TERMINATION_NOT_FOUND', message: 'Colaborador sem rescisão registrada' });
       const stored = row.result as TerminationStatement & { cancelledVacations?: TerminationDetail['cancelledVacations'] };
       return { ...stored, id: row.id, employee: employeeInfo(emp), cancelledVacations: stored.cancelledVacations ?? [], notes: row.notes, createdAt: row.createdAt.toISOString() };
@@ -180,10 +180,71 @@ export class TerminationService {
     });
   }
 
+  /**
+   * Desfaz uma rescisão confirmada por engano. Regra (ADR-039): vale só enquanto nada foi pago e
+   * nenhuma folha fechou sem o colaborador.
+   * - Recusa com lançamento do termo já baixado: estorne a baixa antes, porque o dinheiro pode ter saído.
+   * - Recusa se uma folha fechada depois da saída deixou o colaborador de fora: reabra essa folha
+   *   antes (ela tem as próprias regras), senão ele ficaria sem aquele mês.
+   * O termo não é apagado: fica como desfeito, com quem desfez e o motivo. Os lançamentos em aberto são
+   * cancelados, e o resumo sai da folha de rescisões.
+   * Não volta sozinho o que a rescisão desligou: as férias canceladas são remarcadas à mão, o colaborador
+   * entra de novo nas folhas abertas por "Incluir" e o profissional da agenda é reativado no cadastro.
+   */
+  undo(employeeId: string, input: ReversalInput) {
+    const { userId, modules } = requestContext.requireTenant();
+    return this.tdb.run(async (tx) => {
+      const emp = await employeeOrFail(tx, employeeId);
+      const [term] = await tx.select().from(hrTerminations).where(and(eq(hrTerminations.employeeId, employeeId), isNull(hrTerminations.cancelledAt)));
+      if (!term) throw new NotFoundException({ code: 'TERMINATION_NOT_FOUND', message: 'Colaborador sem rescisão registrada' });
+
+      const entries = await this.finance.listBySourceInTx(tx, TERMINATION_SOURCE, term.id);
+      if (entries.some((e) => e.status === 'paid')) {
+        throw badRequest('TERMINATION_HAS_PAID_ENTRIES', 'Há pagamento registrado desta rescisão. Estorne a baixa dos lançamentos no financeiro antes de desfazer.');
+      }
+
+      const employerId = emp.employerCustomerId;
+      const competence = term.terminationDate.slice(0, 7);
+      const closed = (await tx.select().from(hrPayrolls).where(and(eq(hrPayrolls.status, 'closed'), ne(hrPayrolls.type, 'termination'), gte(hrPayrolls.competence, competence), sameEmployer(hrPayrolls.employerCustomerId, employerId))));
+      if (closed.length) {
+        const withEmployee = new Set(
+          (await tx.select({ id: hrPayrollItems.payrollId }).from(hrPayrollItems).where(and(eq(hrPayrollItems.employeeId, employeeId), inArray(hrPayrollItems.payrollId, closed.map((p) => p.id))))).map((r) => r.id),
+        );
+        const hole = closed.find((p) => !withEmployee.has(p.id));
+        if (hole) throw badRequest('LATER_PAYROLL_CLOSED', `A folha ${hole.competence.slice(5)}/${hole.competence.slice(0, 4)} foi fechada sem este colaborador. Reabra essa folha antes de desfazer a rescisão.`);
+      }
+
+      if (employerId) {
+        const extensions = this.employers.active(modules);
+        if (!extensions.length) throw badRequest('EMPLOYERS_DISABLED', 'Rescisão de empresa atendida: ative o ramo Consultoria de RH para desfazer');
+        for (const ext of extensions) await ext.onTerminationUndone?.(tx, { terminationId: term.id, employerCustomerId: employerId, employeeName: emp.name, reason: input.reason });
+      }
+
+      const cancelledEntries = await this.finance.cancelPendingBySourceInTx(tx, TERMINATION_SOURCE, term.id);
+      await tx.update(hrTerminations).set({ cancelledAt: new Date(), cancelledById: userId ?? null, cancelReason: input.reason }).where(eq(hrTerminations.id, term.id));
+      await tx.delete(hrPayrollItems).where(and(eq(hrPayrollItems.payrollId, term.payrollId), eq(hrPayrollItems.employeeId, employeeId)));
+      await tx.update(hrEmployees).set({ status: 'active', terminationDate: null }).where(eq(hrEmployees.id, employeeId));
+      if (!employerId) {
+        const person = await this.team.findOrFailInTx(tx, emp.teamMemberId);
+        if (person.endedOn === term.terminationDate) await this.team.saveInTx(tx, emp.teamMemberId, { endedOn: null });
+      }
+
+      const statement = term.result as TerminationStatement & { cancelledVacations?: TerminationDetail['cancelledVacations'] };
+      const cancelledVacations = statement.cancelledVacations ?? [];
+      await this.audit.log(tx, {
+        action: 'hr.termination.undone',
+        entity: 'hr_employee',
+        entityId: employeeId,
+        data: { reason: input.reason, terminationId: term.id, type: term.type, terminationDate: term.terminationDate, net: statement.net, cancelledEntries, employerCustomerId: employerId },
+      });
+      return { terminationId: term.id, cancelledEntries, cancelledVacations };
+    });
+  }
+
   /** Junta o que está registrado (férias, afastamentos, folhas pagas) e calcula o termo. */
   private async build(tx: Tx, employeeId: string, input: TerminationInput): Promise<{ emp: EmployeeRow; detail: TerminationDetail; tables: TaxTables }> {
     const emp = await employeeOrFail(tx, employeeId);
-    const [existing] = await tx.select({ id: hrTerminations.id }).from(hrTerminations).where(eq(hrTerminations.employeeId, employeeId));
+    const [existing] = await tx.select({ id: hrTerminations.id }).from(hrTerminations).where(and(eq(hrTerminations.employeeId, employeeId), isNull(hrTerminations.cancelledAt)));
     if (existing) throw new ConflictException({ code: 'ALREADY_TERMINATED', message: 'Este colaborador já tem rescisão registrada' });
     if (input.terminationDate < emp.admissionDate) throw badRequest('TERMINATION_BEFORE_ADMISSION', 'A saída é antes da admissão');
     const { tables } = await this.settings.getInTx<HrSettings>(tx, MODULE);

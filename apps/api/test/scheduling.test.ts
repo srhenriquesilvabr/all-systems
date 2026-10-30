@@ -96,7 +96,9 @@ describe('agenda, WhatsApp e salão', () => {
   it('atendimento concluído vira "a receber" e o pagamento baixa', async () => {
     const s = await salon();
     const day = nextWeekday();
-    const { body: a } = await s.book({ startsAt: at(day, '11:00'), serviceIds: [s.service('Corte feminino').id, s.service('Escova').id] }).expect(201);
+    // Das 9h às 10h45: os dois serviços juntos levam 1h45 e, às 11h, invadiriam o almoço (recusado).
+    await s.book({ startsAt: at(day, '11:00'), serviceIds: [s.service('Corte feminino').id, s.service('Escova').id] }).expect(409);
+    const { body: a } = await s.book({ startsAt: at(day, '09:00'), serviceIds: [s.service('Corte feminino').id, s.service('Escova').id] }).expect(201);
     expect(a.total).toBe(150);
     for (const status of ['arrived', 'in_service', 'done']) await s.as('post', `/scheduling/appointments/${a.id}/status`).send({ status }).expect(200);
 
@@ -104,7 +106,7 @@ describe('agenda, WhatsApp e salão', () => {
     expect(await entries()).toEqual([expect.objectContaining({ status: 'pending', amount: 150 })]);
 
     const { body: accounts } = await s.as('get', '/scheduling/payment-accounts').expect(200);
-    const paid = await s.as('post', `/scheduling/appointments/${a.id}/payments`).send({ amount: 150, method: 'pix', accountId: accounts[0].id, paidAt: day }).expect(201);
+    const paid = await s.as('post', `/scheduling/appointments/${a.id}/payments`).send({ amount: 150, method: 'pix', accountId: accounts[0].id }).expect(201);
     expect(paid.body.paymentStatus).toBe('paid');
     expect((await entries()).map((e: { status: string }) => e.status).sort()).toEqual(['cancelled', 'paid']);
   });
@@ -141,7 +143,8 @@ describe('agenda, WhatsApp e salão', () => {
 
       await s.as('put', '/modules/shared.scheduling/settings').send({ reminderHours: 24 }).expect(204);
       const startsAt = new Date(Date.now() + 3 * 3600_000);
-      const { body: a } = await s.book({ startsAt: startsAt.toISOString() }).expect(201);
+      // Daqui a 3 horas pode cair fora do expediente: exceção consciente do dono.
+      const { body: a } = await s.book({ startsAt: startsAt.toISOString(), overrideSchedule: true }).expect(201);
       // Marcado "há dois dias": cai na janela do lembrete.
       await admin.query(`update sch_appointments set created_at = now() - interval '2 days' where id = $1`, [a.id]);
 
@@ -207,6 +210,8 @@ describe('agenda, WhatsApp e salão', () => {
 
       await t.http().get(pub()).expect(404); // desligado por padrão
       await s.as('put', '/modules/shared.scheduling/settings').send({ onlineBooking: true, onlineMinNoticeHours: 0 }).expect(204);
+      // Serviço nasce fora do link: a empresa libera o que o visitante pode marcar.
+      await s.as('put', '/scheduling/services/online').send({ serviceIds: [s.service('Corte masculino').id] }).expect(204);
 
       const { body: info } = await t.http().get(pub()).expect(200);
       expect(info.services.map((x: { name: string }) => x.name)).toContain('Corte masculino');

@@ -128,6 +128,16 @@ function SpecialtiesSettings() {
           {(id) => <Input id={id} type="number" min={1} max={180} value={form.micropigmentationRetouchDays} onChange={(e) => setForm({ ...form, micropigmentationRetouchDays: Number(e.target.value) })} />}
         </Field>
       </div>
+      <Checkbox
+        checked={form.noShowConsumesSession}
+        onChange={(e) => setForm({ ...form, noShowConsumesSession: e.target.checked })}
+        label={
+          <>
+            <span className="font-medium">Falta consome sessão do pacote</span>
+            <span className="block text-fg-muted">Ligado: quem faltar perde a sessão reservada. Desligado: a sessão volta para o pacote. Vale para as faltas registradas daqui em diante.</span>
+          </>
+        }
+      />
       <p className="text-xs text-fg-muted">Desligar não apaga nada: as fichas continuam no prontuário e os serviços na agenda.</p>
       <div className="flex justify-end">
         <Button loading={save.isPending} onClick={() => save.mutate()}>
@@ -422,7 +432,7 @@ function LotTraceView({ lotId, onClose }: { lotId: string; onClose: () => void }
                     <Td>{u.customer.name}</Td>
                     <Td>{specialtyLabel[u.specialty]}</Td>
                     <Td className="text-right tabular-nums">
-                      {String(u.amount).replace('.', ',')} {u.unit}
+                      {u.reversalOf && <Badge>Estorno</Badge>} {String(u.amount).replace('.', ',')} {u.unit}
                     </Td>
                   </tr>
                 ))}

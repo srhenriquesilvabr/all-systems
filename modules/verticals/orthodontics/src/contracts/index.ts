@@ -24,8 +24,10 @@ export const treatmentInput = z.object({
   appliance: z.enum(appliances),
   startedOn: isoDate,
   expectedMonths: z.coerce.number().int().min(1).max(60),
-  /** Documentação / instalação, cobrada na data de início. */
+  /** Documentação / instalação, cobrada na data de início. Com valor, a instalação sai sem custo na agenda. */
   entryFee: money.default(0),
+  /** A instalação já foi cobrada na agenda e a taxa vai ser lançada assim mesmo: decisão consciente. */
+  confirmInstallationCharged: z.boolean().optional(),
   monthlyFee: money,
   /** Dia do vencimento das mensalidades (até 28, para existir em todo mês). */
   dueDay: z.coerce.number().int().min(1).max(28),
@@ -79,6 +81,8 @@ export interface TreatmentDetail extends Treatment {
 
 /** Serviços desta categoria ficam sem custo na agenda para quem tem tratamento ativo (já pagos na mensalidade). */
 export const COVERED_CATEGORY = 'Manutenção';
+/** Serviços desta categoria são cobertos uma vez pela taxa de instalação do tratamento ativo (não se cobra duas vezes). */
+export const INSTALLATION_CATEGORY = 'Instalação';
 
 export const orthoForms: MedicalForm[] = [
   {

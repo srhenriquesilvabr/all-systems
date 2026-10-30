@@ -42,9 +42,9 @@ export const contactBasisLabel: Record<ContactBasis, string> = {
 
 export const lostReasons = ['Sem interesse no momento', 'Parcela não cabe no orçamento', 'Fechou com outra empresa', 'Não atende / contato inválido', 'Crédito reprovado', 'Prefere financiamento'];
 
-export const rewardStatuses = ['none', 'waiting', 'due', 'paid', 'cancelled'] as const;
+export const rewardStatuses = ['none', 'waiting', 'due', 'paid', 'cancelled', 'reversed'] as const;
 export type RewardStatus = (typeof rewardStatuses)[number];
-export const rewardStatusLabel: Record<RewardStatus, string> = { none: '—', waiting: 'Aguardando a venda', due: 'A pagar', paid: 'Paga', cancelled: 'Cancelada' };
+export const rewardStatusLabel: Record<RewardStatus, string> = { none: '—', waiting: 'Aguardando a venda', due: 'A pagar', paid: 'Paga', cancelled: 'Cancelada', reversed: 'Estornada' };
 
 /** Aviso exibido nas telas de captação sobre o uso legal (LGPD) dos dados e das plataformas. */
 export const LEGAL_NOTICE =
@@ -136,6 +136,8 @@ export type LeadTaskInput = z.infer<typeof leadTaskInput>;
 export const rewardInput = z.object({
   status: z.enum(['due', 'paid', 'cancelled']),
   amount: z.coerce.number().min(0).max(1_000_000).nullish(),
+  /** Conta da baixa ao marcar paga; sem informar, a conta padrão do financeiro. */
+  accountId: z.string().uuid().nullish(),
 });
 
 export const referrerInput = z

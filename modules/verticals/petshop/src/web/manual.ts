@@ -53,7 +53,7 @@ export const manual: ManualGuide = {
         { warn: 'Não há como apagar um pet nem trocar o tutor. Se o pet faleceu, abra a ficha, clique em Editar e marque Falecido(a). Ele some da lista de marcação.' },
       ],
       technical: [
-        { list: ['Permissões: shared.pets.read e shared.pets.write. Tutor exige core.customers.write para ser cadastrado.', 'Espécies: Cachorro, Gato, Ave, Roedor, Réptil, Outro. Porte: Pequeno, Médio, Grande, Gigante.', 'A lista mostra até 100 pets: use a busca por nome, raça ou tutor.', 'Importar planilha: o tutor precisa já existir e é achado por CPF/CNPJ ou telefone.'] },
+        { list: ['Permissões: shared.pets.read e shared.pets.write. Tutor exige core.customers.write para ser cadastrado.', 'Espécies: Cachorro, Gato, Ave, Roedor, Réptil, Outro. Porte: Pequeno, Médio, Grande, Gigante.', 'A lista é paginada, 25 por página. A busca é por nome, raça ou tutor.', 'Importar planilha: o tutor precisa já existir e é achado por CPF/CNPJ ou telefone.'] },
         { text: 'O porte não escolhe o serviço nem o preço. Como a tabela tem um serviço para cada porte, quem marca escolhe o serviço certo. O histórico de atendimentos fica na ficha do tutor, aba Agendamentos.' },
       ],
     },
@@ -73,10 +73,10 @@ export const manual: ManualGuide = {
             'Clique em Marcar.',
           ],
         },
-        { warn: 'Escolha sempre o pet. Sem ele, o quadro mostra só o nome do tutor e o aviso de pet pronto não é enviado.' },
+        { warn: 'Escolha sempre o pet. A tela avisa enquanto ele não estiver escolhido. Sem ele, o quadro mostra só o nome do tutor e o aviso de pet pronto não é enviado. Esqueceu? No quadro, clique em Escolher o pet antes de marcar Pronto.' },
       ],
       technical: [
-        { list: ['Permissão: shared.scheduling.write.', 'Duração: soma da duração e do intervalo de cada serviço. Total: soma dos preços.', 'Conflito no mesmo profissional: “Este horário já está ocupado para este profissional”.', 'Outro horário permite marcar fora da lista de livres, inclusive fora do expediente, com um alerta na tela.', 'Repetir: de 2 a 52 vezes. Datas que não cabem são puladas e listadas no fim, e o cliente recebe uma mensagem só.'] },
+        { list: ['Permissão: shared.scheduling.write.', 'Duração: soma da duração e do intervalo de cada serviço. Total: soma dos preços.', 'Conflito no mesmo profissional: “Este horário já está ocupado para este profissional”.', 'Outro horário confere expediente e folga. Para uma exceção, quem tem shared.scheduling.manage clica em Marcar mesmo assim, e isso fica na auditoria.', 'Repetir: de 2 a 52 vezes. Datas que não cabem são puladas e listadas no fim, e o cliente recebe uma mensagem só.'] },
         { text: 'Aviso: Horário marcado, por e-mail e, com o módulo de WhatsApp ativo, também por WhatsApp. Marcar não lança nada no financeiro: o valor a receber nasce ao concluir ou no primeiro pagamento.' },
       ],
     },
@@ -114,13 +114,13 @@ export const manual: ManualGuide = {
             'No cartão Lembretes e agendamento online, marque Receber agendamentos online.',
             'Defina a Antecedência mínima e Até quantos dias à frente.',
             'Clique em Salvar configurações e use Copiar para pegar o link.',
-            'Em cada serviço, deixe marcada a opção Pode ser marcado online pelo cliente só nos que fizer sentido.',
+            'Em Serviços liberados no link, marque só os que fizerem sentido. Serviço novo vem desligado.',
           ],
         },
         { warn: 'O tutor informa só o nome e a espécie do pet. Se o nome for novo, o sistema cria a ficha com esses dados. Complete depois.' },
       ],
       technical: [
-        { list: ['Configuração: core.access.settings (Configurar os módulos contratados). Sem ela, o cartão não aparece.', 'A página mostra até 14 dias, respeitando o limite configurado, e no máximo 5 serviços por marcação.', 'Padrão: 2 horas de antecedência e 30 dias à frente. Sem a opção ligada: “Agendamento online indisponível para esta empresa”.'] },
+        { list: ['Configuração: core.access.settings (Configurar os módulos contratados). Sem ela, o cartão não aparece.', 'A página mostra os dias até o limite configurado (até 180) e no máximo 5 serviços por marcação.', 'Padrão: 2 horas de antecedência e 30 dias à frente. Sem a opção ligada: “Agendamento online indisponível para esta empresa”.'] },
         { text: 'O cliente é procurado pelo telefone e, sem cadastro, é criado. O pet é procurado entre os do tutor, pelo nome, sem diferenciar acento e maiúscula. O horário entra na agenda com o selo Marcado online. Pagamento online não faz parte desta página.' },
       ],
     },
@@ -129,20 +129,21 @@ export const manual: ManualGuide = {
       title: 'Tocar o dia no quadro de banho e tosa',
       path: '/petshop/hoje',
       simple: [
-        { text: 'O quadro mostra cada pet de hoje, da chegada até ficar pronto. Quem está no banho enxerga o próximo sem abrir a agenda.' },
+        { text: 'O quadro mostra cada pet do dia, da chegada até o tutor buscar. Quem está no banho enxerga o próximo sem abrir a agenda.' },
         {
           steps: [
             'Abra Banho e tosa.',
             'Quando o pet chegar, clique em Chegou. Ele vai para Na loja.',
             'Ao começar, clique em Iniciar. Ele vai para No banho / tosa.',
             'Ao terminar, clique em Pronto. Ele vai para Pronto para buscar e o tutor é avisado.',
+            'Quando o tutor buscar, clique em Tutor buscou. Ele vai para Já buscado.',
+            'Para ver outro dia, use as setas ou escolha a data no alto da tela.',
           ],
         },
         { tip: 'Clique no nome do pet para ver detalhes, marcar falta ou registrar o pagamento.' },
-        { warn: 'O quadro é só de hoje e não registra que o tutor buscou o pet. Ele fica em Pronto para buscar até o fim do dia. Para outros dias, use Abrir agenda.' },
       ],
       technical: [
-        { list: ['Permissão da tela: shared.scheduling.read. Botões: shared.scheduling.status. O quadro atualiza a cada 30 segundos.', 'A chegar: Agendado e Confirmado. Na loja: Chegou. No banho / tosa: Em atendimento. Pronto para buscar: Concluído. Cancelados e faltas não aparecem.', 'O quadro mostra todos os atendimentos da agenda do dia.'] },
+        { list: ['Permissão da tela: shared.scheduling.read. Botões: shared.scheduling.status. O quadro atualiza a cada 30 segundos.', 'A chegar: Agendado e Confirmado. Na loja: Chegou. No banho / tosa: Em atendimento. Pronto para buscar: Concluído. Já buscado: Concluído com a saída registrada. Cancelados e faltas não aparecem.', 'Tutor buscou: só depois de Concluído (“O pet ainda não está pronto para ser buscado”) e uma vez por horário. Pede shared.scheduling.status. O link desfazer apaga a marca e deixa o registro na auditoria.', 'Escolher o pet: só antes de concluir e com um pet do mesmo tutor. Pede shared.scheduling.write ou shared.scheduling.status.', 'O quadro mostra todos os atendimentos da agenda do dia.'] },
         { text: 'Aviso Pet pronto para buscar: enviado ao concluir, se o horário tiver um pet e a opção “Avisar o tutor (WhatsApp ou e-mail) quando o pet ficar pronto” estiver ligada. A opção fica no fim desta tela, para quem tem core.access.settings. Vale também ao concluir pelos detalhes do horário. Pode levar alguns instantes.' },
       ],
     },
@@ -185,7 +186,7 @@ export const manual: ManualGuide = {
       ],
       technical: [
         { list: ['Permissão: shared.sales.sell. Abrir caixa: shared.sales.register.', 'Até 5 formas por venda. Troco só em dinheiro. Fiado exige cliente.', 'Só kg e l aceitam fração. As demais: “X é vendido em quantidade inteira”.', 'O cupom traz “Não é documento fiscal”.'] },
-        { text: 'Cada forma vira uma receita paga da categoria de produtos. Fiado vira um valor a receber. Com controle ligado, a venda baixa o estoque, e o saldo pode ficar negativo. Lançar venda anterior usa a data informada em relatórios, estoque e financeiro.' },
+        { text: 'Cada forma vira uma receita paga da categoria de produtos. Fiado vira um valor a receber. Com controle ligado, a venda baixa o estoque. O saldo pode ficar negativo, a não ser com Bloquear a venda de produto sem estoque ligado, em Produtos e estoque (core.access.settings). A conta de Pix e cartões e o rodapé do cupom ficam em Caixas. Lançar venda anterior usa a data informada em relatórios, estoque e financeiro.' },
       ],
     },
     {

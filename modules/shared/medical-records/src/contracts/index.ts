@@ -73,6 +73,8 @@ export interface EntryAttachment {
   filename: string;
   mime: string;
   size: number;
+  /** Anexo de um registro anterior que esta retificação corrige: é referência, o arquivo continua lá. */
+  inheritedFrom?: { entryId: string; occurredOn: string };
 }
 
 export interface MedicalEntry {

@@ -15,4 +15,4 @@ export const salesWeb = defineWebModule({
   ],
 });
 
-export { useProducts, salesKey, brl } from './hooks';
+export { useDeviceRegister, useProducts, useRegisters, registersKey, salesKey, brl } from './hooks';

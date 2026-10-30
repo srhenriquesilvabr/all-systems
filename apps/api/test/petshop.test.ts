@@ -112,6 +112,7 @@ describe('pets e pet shop', () => {
     const { body: me } = await s.as('get', '/me').expect(200);
     const pub = `/api/public/booking/${me.tenant.slug}`;
     await s.as('put', '/modules/shared.scheduling/settings').send({ onlineBooking: true, onlineMinNoticeHours: 0 }).expect(204);
+    await s.as('put', '/scheduling/services/online').send({ serviceIds: [s.service('Banho — porte pequeno').id] }).expect(204);
 
     const { body: info } = await t.http().get(pub).expect(200);
     expect(info.subject.label).toBe('Pet');

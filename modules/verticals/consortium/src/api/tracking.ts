@@ -14,6 +14,7 @@ import {
   groupInput,
   installmentPayInput,
   installmentsGenerateInput,
+  normalizeCode,
   type Bid,
   type BidInput,
   type CommissionTable,
@@ -30,7 +31,7 @@ import {
 } from '../contracts';
 import { consAdministrators, consAssemblies, consBids, consCredits, consGroups, consInstallments, consPlans, consQuotas } from '../db/schema';
 import type { ConsortiumSettings } from '../manifest';
-import { badRequest, brDate, brl, daysBetween, effectiveCommission, generateInstallmentsInTx, installmentOf, localToday, MODULE, monthsBetween, scheduledAssemblyInTx, type PlanRow, type QuotaRow } from './shared';
+import { badRequest, brDate, brl, daysBetween, effectiveCommission, generateInstallmentsInTx, installmentOf, localToday, MODULE, monthsBetween, normCode, scheduledAssemblyInTx, type PlanRow, type QuotaRow } from './shared';
 
 type InstallmentRow = typeof consInstallments.$inferSelect;
 type BidRow = typeof consBids.$inferSelect;
@@ -234,7 +235,7 @@ export class TrackingService implements OnModuleInit {
     return this.tdb.run(async (tx) => {
       const { q, plan } = await this.quotaOrFail(tx, quotaId, true);
       if (q.status !== 'active') throw badRequest('QUOTA_NOT_ACTIVE', 'Só cotas ativas (não contempladas) dão lance');
-      const assembly = await scheduledAssemblyInTx(tx, input.assemblyId, q.groupCode);
+      const assembly = await scheduledAssemblyInTx(tx, input.assemblyId, q.groupCode, plan.connectionId);
       const creditCents = toCents(plan.creditValue);
       const amountCents = input.amount != null ? toCents(input.amount) : Math.round((creditCents * input.percent!) / 100);
       const percent = input.percent ?? Math.round((amountCents / creditCents) * 10_000) / 100;
@@ -324,7 +325,7 @@ export class TrackingService implements OnModuleInit {
         .leftJoin(consAdministrators, eq(consAdministrators.connectionId, consGroups.connectionId))
         .orderBy(asc(consGroups.groupCode))
         .limit(1000);
-      const stats = await this.groupStats(tx, rows.map((r) => r.g.groupCode));
+      const stats = await this.groupStats(tx, rows.map((r) => r.g));
       return rows.map((r) => toGroup(r.g, r.plan, r.institution ?? r.plan?.institution ?? '', stats));
     });
   }
@@ -334,8 +335,8 @@ export class TrackingService implements OnModuleInit {
     return this.tdb.run(async (tx) => {
       const { q, plan } = await this.quotaOrFail(tx, quotaId);
       if (!q.groupCode) return null;
-      const [g] = await tx.select().from(consGroups).where(and(eq(consGroups.connectionId, plan.connectionId), eq(consGroups.groupCode, q.groupCode)));
-      const stats = await this.groupStats(tx, [q.groupCode]);
+      const [g] = await tx.select().from(consGroups).where(and(eq(consGroups.connectionId, plan.connectionId), eq(normCode(consGroups.groupCode), normalizeCode(q.groupCode))));
+      const stats = await this.groupStats(tx, [{ connectionId: plan.connectionId, groupCode: q.groupCode }]);
       const groupPlan = g?.planId && g.planId !== plan.id ? (await tx.select().from(consPlans).where(eq(consPlans.id, g.planId)))[0] : plan;
       return toGroup(g ?? { id: null, connectionId: plan.connectionId, groupCode: q.groupCode, members: null, monthsRemaining: null, monthsRemainingOn: null, notes: null }, groupPlan ?? plan, plan.institution, stats);
     });
@@ -355,40 +356,51 @@ export class TrackingService implements OnModuleInit {
         notes: input.notes ?? null,
         updatedAt: new Date(),
       };
-      const [g] = await tx
-        .insert(consGroups)
-        .values({ tenantId, connectionId: plan.connectionId, groupCode: input.groupCode, ...values })
-        .onConflictDoUpdate({ target: [consGroups.tenantId, consGroups.connectionId, consGroups.groupCode], set: values })
-        .returning();
+      // "012" e "12" são o mesmo grupo: atualiza o cadastro que já existe, sem reescrever o código.
+      const [same] = await tx.select({ id: consGroups.id }).from(consGroups).where(and(eq(consGroups.connectionId, plan.connectionId), eq(normCode(consGroups.groupCode), normalizeCode(input.groupCode))));
+      const [g] = same
+        ? await tx.update(consGroups).set(values).where(eq(consGroups.id, same.id)).returning()
+        : await tx.insert(consGroups).values({ tenantId, connectionId: plan.connectionId, groupCode: input.groupCode, ...values }).returning();
       await this.audit.log(tx, { action: 'consortium.group.saved', entity: 'cons_group', entityId: g!.id, data: input });
-      return toGroup(g!, plan, plan.institution, await this.groupStats(tx, [g!.groupCode]));
+      return toGroup(g!, plan, plan.institution, await this.groupStats(tx, [g!]));
     });
   }
 
-  /** Assembleias realizadas (lances vencedores), próxima agendada e cotas da carteira, por código de grupo. */
-  private async groupStats(tx: Tx, codes: string[]): Promise<Map<string, GroupStats>> {
+  /**
+   * Assembleias realizadas (lances vencedores), próxima agendada e cotas da carteira, por grupo:
+   * administradora + código normalizado. Assembleia antiga sem administradora conta nos grupos com o código.
+   */
+  private async groupStats(tx: Tx, groups: { connectionId: string; groupCode: string }[]): Promise<Map<string, GroupStats>> {
     const map = new Map<string, GroupStats>();
-    const unique = [...new Set(codes)];
-    if (!unique.length) return map;
-    for (const c of unique) map.set(c, { held: 0, bids: [], next: null, ourQuotas: 0 });
+    if (!groups.length) return map;
+    for (const g of groups) map.set(groupKey(g.connectionId, g.groupCode), { held: 0, bids: [], next: null, ourQuotas: 0 });
+    const codes = [...new Set(groups.map((g) => normalizeCode(g.groupCode)))];
+    const connections = [...new Set(groups.map((g) => g.connectionId))];
     const assemblies = await tx
-      .select({ id: consAssemblies.id, groupCode: consAssemblies.groupCode, heldOn: consAssemblies.heldOn, status: consAssemblies.status, bids: consAssemblies.bids })
+      .select({ id: consAssemblies.id, connectionId: consAssemblies.connectionId, groupCode: consAssemblies.groupCode, heldOn: consAssemblies.heldOn, status: consAssemblies.status, bids: consAssemblies.bids })
       .from(consAssemblies)
-      .where(and(inArray(consAssemblies.groupCode, unique), sql`(${consAssemblies.status} = 'held' or ${consAssemblies.heldOn} >= ${localToday()})`))
+      .where(and(inArray(normCode(consAssemblies.groupCode), codes), sql`(${consAssemblies.status} = 'held' or ${consAssemblies.heldOn} >= ${localToday()})`))
       .orderBy(asc(consAssemblies.heldOn));
     for (const a of assemblies) {
-      const s = map.get(a.groupCode)!;
-      if (a.status === 'held') {
-        s.held++;
-        s.bids.push(...a.bids.map((b) => Number(b.percent)));
-      } else if (!s.next) s.next = { id: a.id, heldOn: a.heldOn };
+      for (const c of a.connectionId ? [a.connectionId] : connections) {
+        const s = map.get(groupKey(c, a.groupCode));
+        if (!s) continue;
+        if (a.status === 'held') {
+          s.held++;
+          s.bids.push(...a.bids.map((b) => Number(b.percent)));
+        } else if (!s.next) s.next = { id: a.id, heldOn: a.heldOn };
+      }
     }
     const quotas = await tx
-      .select({ groupCode: consQuotas.groupCode, n: sql<number>`count(*)`.mapWith(Number) })
+      .select({ connectionId: consPlans.connectionId, code: normCode(consQuotas.groupCode), n: sql<number>`count(*)`.mapWith(Number) })
       .from(consQuotas)
-      .where(and(inArray(consQuotas.groupCode, unique), inArray(consQuotas.status, OPEN_QUOTA)))
-      .groupBy(consQuotas.groupCode);
-    for (const q of quotas) map.get(q.groupCode!)!.ourQuotas = q.n;
+      .innerJoin(consPlans, eq(consPlans.id, consQuotas.planId))
+      .where(and(inArray(normCode(consQuotas.groupCode), codes), inArray(consQuotas.status, OPEN_QUOTA)))
+      .groupBy(consPlans.connectionId, normCode(consQuotas.groupCode));
+    for (const q of quotas) {
+      const s = map.get(groupKey(q.connectionId, q.code));
+      if (s) s.ourQuotas = q.n;
+    }
     return map;
   }
 
@@ -483,6 +495,8 @@ interface GroupStats {
   ourQuotas: number;
 }
 
+const groupKey = (connectionId: string, groupCode: string) => `${connectionId}|${normalizeCode(groupCode)}`;
+
 function groupBy<T>(list: T[], key: (t: T) => string): Map<string, T[]> {
   const map = new Map<string, T[]>();
   for (const item of list) map.set(key(item), [...(map.get(key(item)) ?? []), item]);
@@ -540,7 +554,7 @@ function toGroup(
   institution: string,
   stats: Map<string, GroupStats>,
 ): Group {
-  const s = stats.get(g.groupCode) ?? { held: 0, bids: [], next: null, ourQuotas: 0 };
+  const s = stats.get(groupKey(g.connectionId, g.groupCode)) ?? { held: 0, bids: [], next: null, ourQuotas: 0 };
   const elapsed = g.monthsRemainingOn ? Math.max(0, monthsBetween(g.monthsRemainingOn, localToday())) : 0;
   return {
     id: g.id,

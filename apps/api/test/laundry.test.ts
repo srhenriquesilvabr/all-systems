@@ -200,8 +200,8 @@ describe('lavanderia — balcão e produção', () => {
     expect(r.incidents).toBe(1);
     expect(r.byService).toEqual(
       expect.arrayContaining([
-        { serviceName: 'Lavagem por quilo', quantity: 5.5, revenue: 109.45 },
-        { serviceName: 'Lavar e passar', quantity: 2, revenue: 29.8 },
+        { serviceName: 'Lavagem por quilo', unit: 'kg', quantity: 5.5, contracted: 109.45 },
+        { serviceName: 'Lavar e passar', unit: 'piece', quantity: 2, contracted: 29.8 },
       ]),
     );
     expect(r.byOperator[0].moves).toBe(5);
@@ -226,7 +226,7 @@ describe('lavanderia — balcão e produção', () => {
 
     // Receita por serviço entra no dia da entrada.
     const { body: then } = await s.as('get', `/laundry/reports?from=${day}&to=${day}`).expect(200);
-    expect(then.byService).toEqual([{ serviceName: 'Lavagem por quilo', quantity: 5.5, revenue: 109.45 }]);
+    expect(then.byService).toEqual([{ serviceName: 'Lavagem por quilo', unit: 'kg', quantity: 5.5, contracted: 109.45 }]);
     const today = spDay(0);
     const { body: before } = await s.as('get', `/laundry/reports?from=${today}&to=${today}`).expect(200);
     expect(before.byService).toEqual([]);

@@ -24,7 +24,7 @@ export class MailService {
     if (this.config.resendApiKey) return this.sendViaResend(message);
     // Produção sem provedor de e-mail: não há SMTP no Workers, então tentar só gera erro e
     // reenvio em loop no outbox. O e-mail é descartado com um aviso até a chave ser configurada.
-    if (this.config.isProduction) {
+    if (!this.config.emailEnabled) {
       if (!this.warnedDisabled) this.logger.warn('E-mail desligado: configure RESEND_API_KEY para enviar.');
       this.warnedDisabled = true;
       return;

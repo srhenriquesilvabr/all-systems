@@ -21,13 +21,13 @@ export const commonGuide: ManualGuide = {
             'Abra o guia do seu ramo neste manual e siga os primeiros passos dele.',
           ],
         },
-        { warn: 'Enquanto o envio de e-mail não estiver ligado, os convites e os links de senha não chegam. Veja o assunto Entrar no sistema.' },
+        { warn: 'Enquanto o envio de e-mail não estiver ligado, os convites e os links de senha não chegam. A tela de Usuários avisa quando isso acontece, e você dá o acesso com Copiar link de convite.' },
         { tip: 'Só o que a empresa contratou aparece no menu. Se um item citado aqui não aparece para você, seu papel pode não dar acesso a ele.' },
       ],
       technical: [
         { text: 'Toda empresa nasce com os módulos do core: login, manual, dados da empresa, usuários, permissões, auditoria, clientes, financeiro, segmentação e equipe. Ao ativar o financeiro, o sistema cria a conta Caixa e as categorias padrão.' },
         { text: 'Quem cria a conta recebe o papel Dono, com todas as permissões dos módulos ativos. Permissão efetiva = permissões dos papéis ∩ permissões dos módulos ativos. O item de menu e a rota dependem da permissão indicada em cada assunto.' },
-        { text: 'Em produção, o envio de e-mail depende da chave do Resend (RESEND_API_KEY). Sem ela, a mensagem é descartada com um aviso no log e a tela não mostra erro.' },
+        { text: 'Em produção, o envio de e-mail depende da chave do Resend (RESEND_API_KEY). Sem ela, a mensagem é descartada com um aviso no log; a tela de Usuários avisa e oferece o link de convite.' },
       ],
     },
     {
@@ -39,7 +39,7 @@ export const commonGuide: ManualGuide = {
         {
           steps: ['Esqueceu a senha? Na tela de login, clique em Esqueci minha senha.', 'Informe o e-mail e clique em Enviar link.', 'Abra o link recebido e crie a senha nova. O link vale por 30 minutos.'],
         },
-        { warn: 'Se o e-mail não chegar, procure quem administra o sistema: o envio pode estar desligado. Sem o e-mail, não há como criar nem recuperar a senha pela tela.' },
+        { warn: 'Se o e-mail não chegar, procure quem administra o sistema: o envio pode estar desligado. Para o primeiro acesso, ele pode copiar o link de convite em Usuários. Para recuperar uma senha já criada, ainda é preciso o e-mail.' },
         { tip: 'Tem acesso a mais de uma empresa? O sistema pergunta qual abrir. Depois, troque pela lista no alto do menu. No fim do menu ficam o tema (Claro, Escuro ou Automático) e o botão Sair.' },
       ],
       technical: [
@@ -53,7 +53,7 @@ export const commonGuide: ManualGuide = {
             'Empresa suspensa fica só para leitura (Empresa suspensa: acesso somente leitura).',
           ],
         },
-        { text: 'O cadastro pelo site não depende de e-mail, porque o dono define a senha na hora. Convites e redefinição dependem do envio, que em produção fica desligado enquanto não houver a chave do Resend.' },
+        { text: 'O cadastro pelo site não depende de e-mail, porque o dono define a senha na hora. Redefinição de senha depende do envio, que em produção fica desligado enquanto não houver a chave do Resend. Convite tem também o link copiado em Usuários (ver Dar acesso e definir o que cada um pode fazer).' },
       ],
     },
     {
@@ -65,7 +65,7 @@ export const commonGuide: ManualGuide = {
         {
           steps: [
             'Em Logo, clique em Enviar logo. Ele é gravado na hora.',
-            'Preencha Identificação, Contato e Endereço.',
+            'Preencha Identificação, Contato e Endereço. Ao completar o CEP, o endereço é preenchido sozinho.',
             'Em Cor do painel, escolha uma sugestão ou outra cor. Veja a prévia nos temas claro e escuro.',
             'Clique em Salvar.',
           ],
@@ -75,7 +75,7 @@ export const commonGuide: ManualGuide = {
       ],
       technical: [
         { text: 'Permissão: core.company.manage (Editar dados da empresa, logo e cor do painel). Nome fantasia entre 2 e 120 caracteres. O CNPJ ou CPF, o site, o Instagram e o telefone são validados, com a mensagem ao lado de cada campo.' },
-        { text: 'Cor em #rrggbb, com contraste mínimo de 4,5:1 para o texto dos botões. Voltar ao padrão Palmer limpa a cor. Sem logo, o menu mostra a marca Palmer. O endereço público da empresa não aparece nesta tela. O endereço daqui não tem a busca pelo CEP.' },
+        { text: 'Cor em #rrggbb, com contraste mínimo de 4,5:1 para o texto dos botões. Voltar ao padrão Palmer limpa a cor. Sem logo, o menu mostra a marca Palmer. O endereço público da empresa não aparece nesta tela. O CEP é consultado pelo servidor (GET /cep/:cep).' },
         { text: 'Logo e Remover agem na hora; os demais campos, ao clicar em Salvar. Nome, cor e logo vêm da sessão, por isso o menu muda em seguida.' },
       ],
     },
@@ -94,7 +94,8 @@ export const commonGuide: ManualGuide = {
           ],
         },
         { text: 'Se nenhum papel padrão servir, crie o seu: em Papéis, clique em Novo papel, dê um nome, marque as permissões e clique em Salvar.' },
-        { warn: 'Não existe botão para reenviar convite. Se o e-mail não chegar, procure quem administra o sistema.' },
+        { text: 'A pessoa não recebeu o convite? Clique em Convite na linha dela. Reenviar convite manda um novo e-mail. Copiar link de convite gera um link para você entregar por outro canal, como o WhatsApp.' },
+        { warn: 'Quem tem o link define a senha da conta: entregue só à própria pessoa. Se o envio de e-mail estiver desligado, a tela avisa e o convite por e-mail não sai.' },
         { tip: 'Desative o acesso de quem saiu da empresa. Isso também encerra as sessões abertas dessa pessoa na empresa.' },
       ],
       technical: [
@@ -108,7 +109,7 @@ export const commonGuide: ManualGuide = {
             'Papéis padrão vêm dos módulos, ficam como Ver e não podem ser alterados (Papéis padrão não podem ser alterados. Crie um papel novo). O papel Dono não abre.',
           ],
         },
-        { text: 'Convite vale 7 dias e não há rota para reenviar; o e-mail também não pode ser reconvidado, porque o vínculo já existe. Não há exclusão de usuário nem de vínculo: só desativar. Excluir um papel tira as permissões de quem o usa. As permissões oferecidas são só as dos módulos ativos.' },
+        { text: 'Convite vale 7 dias. Rotas, com core.users.manage: POST /users/:id/resend-invite e POST /users/:id/invite-link, só para quem ainda não criou a senha e com o acesso ativo (Esta pessoa já criou a senha). GET /users/email-status diz se o e-mail está ligado. O link recusa quem também foi convidado por outra empresa, porque a senha é da conta e daria entrada lá também (Esta pessoa também foi convidada por outra empresa); nesse caso, só por e-mail. Só um dono gera o link de outro dono. Gerar outro link invalida os anteriores. A auditoria registra quem gerou, sem o link. Não há exclusão de usuário nem de vínculo: só desativar. Excluir um papel tira as permissões de quem o usa. As permissões oferecidas são só as dos módulos ativos.' },
       ],
     },
     {
@@ -217,12 +218,14 @@ export const commonGuide: ManualGuide = {
             'Faça o mesmo em Nova categoria, escolhendo Despesa ou Receita.',
           ],
         },
-        { warn: 'Depois de criada, a conta não pode ser renomeada e o saldo inicial não pode ser corrigido pela tela. Confira antes de clicar em Criar.' },
+        { text: 'Para renomear uma conta ou corrigir o saldo inicial, clique em Editar na linha dela. A correção do saldo pede o motivo.' },
+        { warn: 'Corrigir o saldo inicial muda o saldo da conta, mas não entra como receita nem despesa. O valor anterior e o motivo ficam no histórico da conta.' },
         { tip: 'A empresa já começa com a conta Caixa e com as categorias mais comuns. Em vez de excluir, use Desativar.' },
       ],
       technical: [
         { text: 'Permissão: core.finance.manage (Gerenciar contas e categorias). A leitura usa core.finance.read. Saldo da conta = saldo inicial + recebidos − pagos na conta.' },
-        { text: 'Categorias do sistema: Serviços, Venda de produtos, Outras receitas, Aluguel, Salários e encargos, Insumos e materiais, Taxas e tarifas, Impostos e Outras despesas. Elas não têm o botão Desativar, porque os módulos as usam. As rotas aceitam renomear, mas a tela só oferece Desativar e Reativar. Não há exclusão.' },
+        { text: 'Categorias do sistema: Serviços, Venda de produtos, Outras receitas, Aluguel, Salários e encargos, Insumos e materiais, Taxas e tarifas, Impostos e Outras despesas. Elas não têm o botão Desativar, porque os módulos as usam. A tela de categorias só oferece Desativar e Reativar. Não há exclusão.' },
+        { text: 'POST /finance/accounts/:id/initial-balance exige o motivo e recusa o mesmo valor (O saldo inicial já é esse valor). GET /finance/accounts/:id/history mostra as mudanças. A correção é no campo, e não por lançamento de ajuste, para não sujar o resultado com dinheiro que não entrou nem saiu.' },
       ],
     },
     {
@@ -241,22 +244,26 @@ export const commonGuide: ManualGuide = {
           ],
         },
         { text: 'Em Visão geral, veja o que foi recebido e pago, o resultado, os vencidos, o saldo das contas e o que está previsto por mês.' },
-        { warn: 'Depois de salvo, o lançamento não pode ser editado na tela, e a baixa não pode ser desfeita. Lançamento errado em aberto: clique em Cancelar e crie outro.' },
+        { text: 'Errou? Clique em Editar para corrigir. Baixa dada por engano: clique em Estornar baixa e informe o motivo; o lançamento volta a ficar em aberto. Histórico mostra tudo o que aconteceu com o lançamento.' },
+        { warn: 'Lançamento pago não muda de valor nem de conta: estorne a baixa antes. Lançamento gerado por um módulo só muda a categoria e as observações, e a conta enquanto está em aberto. O resto se corrige na tela de origem.' },
         { tip: 'Para receita de um cliente entrar nos Segmentos, ela precisa estar ligada a ele: preencha o campo Cliente ao lançar. A lista mostra o cliente de cada lançamento, e a busca encontra pelo nome dele.' },
       ],
       technical: [
         {
           list: [
             'core.finance.read: Ver financeiro e relatórios (Visão geral, Lançamentos, Exportar CSV).',
-            'core.finance.write: Lançar, dar baixa e cancelar lançamentos.',
+            'core.finance.write: Lançar, editar, dar baixa, estornar e cancelar lançamentos.',
             'Situações: Em aberto, Pago, Cancelado. Vencido é um filtro: em aberto com vencimento antes de hoje, no fuso de São Paulo.',
-            'Lançamento de módulo: o botão Baixar só aparece quando o módulo deixa a baixa com o financeiro. Cancelar só aparece nos manuais (Este valor é controlado por outro módulo).',
+            'Lançamento de módulo: Baixar e Estornar baixa só aparecem quando o módulo deixa a baixa com o financeiro. Cancelar só aparece nos manuais (Este valor é controlado por outro módulo).',
+            'Estorno: POST /finance/entries/:id/reverse, com motivo. Volta para em aberto, sem conta nem data. A data, a conta e a forma do pagamento desfeito ficam na auditoria. Só pago (Só lançamentos pagos podem ter a baixa estornada).',
+            'Edição: PATCH /finance/entries/:id. Pago recusa valor e conta (Lançamento pago: estorne a baixa antes). De módulo recusa valor, descrição, datas e cliente. Cancelado não edita. Categoria precisa ser do mesmo tipo.',
+            'Cancelar pago é recusado (Estorne a baixa antes de cancelar este lançamento).',
             'Valor maior que zero, até 100 milhões; Pago exige data e conta.',
             'Exportar CSV respeita os filtros, até 10.000 linhas, com ; e vírgula decimal.',
           ],
         },
-        { text: 'Visão geral: Realizado usa a data de pagamento; Previsto, os lançamentos em aberto pelo vencimento. Períodos de 1, 3, 6 ou 12 meses. O rodapé Receitas e Despesas soma tudo o que está no filtro; sem filtro de situação, entram também os cancelados. A origem aparece como Manual, Ordem de serviço ou o código do módulo.' },
-        { text: 'A rota de edição existe, com limite de campos nos lançamentos de módulo, mas não há botão na tela. Tudo é registrado na auditoria.' },
+        { text: 'Visão geral: Realizado usa a data de pagamento; Previsto, os lançamentos em aberto pelo vencimento. Períodos de 1, 3, 6 ou 12 meses. O rodapé Receitas e Despesas soma o que está no filtro, sem os cancelados; eles só entram com o filtro Cancelados. A origem aparece pelo nome, na tela e no CSV (Manual, Ordem de serviço, Folha de pagamento, Honorários da consultoria de RH etc.).' },
+        { text: 'Tudo é registrado na auditoria, com o valor anterior e o novo de cada campo editado. GET /finance/entries/:id/history (core.finance.read) traz o histórico do lançamento. Na planilha, Boleto e Transferência gravam valores diferentes (boleto e transfer); o que foi importado antes como Boleto continua como transfer.' },
       ],
     },
     {
@@ -270,10 +277,10 @@ export const commonGuide: ManualGuide = {
             'Abra Segmentos.',
             'Clique num grupo: Campeões, Leais, Promissores, Novos, Em risco, Hibernando ou Perdidos.',
             'Leia a ação sugerida e veja a lista de clientes.',
-            'Clique em Exportar planilha se quiser trabalhar a lista fora do sistema.',
+            'Escolha quem entra na planilha: todos do segmento, só quem autorizou ofertas por e-mail ou só quem autorizou por WhatsApp. Clique em Exportar planilha.',
           ],
         },
-        { warn: 'A lista não considera as autorizações do cliente. Antes de enviar ofertas, confira a aba Privacidade da ficha.' },
+        { warn: 'A planilha respeita as autorizações da aba Privacidade: o e-mail só sai de quem autorizou ofertas por e-mail, e o telefone só de quem autorizou por WhatsApp. Quem não autorizou fica na lista sem o contato. A tela mostra o cadastro e, ao lado, o que cada cliente autorizou.' },
         { tip: 'Cliente sem nenhum recebimento ligado a ele aparece só na conta de Sem compras. Na ficha de cada cliente também aparecem o segmento e a sugestão.' },
       ],
       technical: [
@@ -290,7 +297,7 @@ export const commonGuide: ManualGuide = {
             'Perdidos: os demais.',
           ],
         },
-        { text: 'A regra é aplicada de cima para baixo. A tela mostra até 500 clientes por segmento; o arquivo exportado, até 5.000.' },
+        { text: 'A regra é aplicada de cima para baixo. A tela mostra até 500 clientes por segmento; o arquivo exportado, até 5.000. A exportação (GET /segmentation/customers.csv, opção consent=marketing_email ou marketing_whatsapp) vai para a auditoria e traz as colunas Autoriza ofertas por e-mail e por WhatsApp; sem registro de autorização, conta como Não.' },
       ],
     },
     {
@@ -306,12 +313,13 @@ export const commonGuide: ManualGuide = {
             'Confirme em Confirmar. As telas novas entram no menu na hora.',
           ],
         },
-        { warn: 'A ativação é imediata. Não há botão para desfazer no painel: para desativar, procure quem administra a plataforma.' },
-        { tip: 'Os dados continuam guardados se um módulo for desativado depois: só o acesso é bloqueado.' },
+        { text: 'Para desativar, abra Módulos contratados, no grupo Configurações (ou clique em Gerenciar na página inicial), clique em Desativar e confirme.' },
+        { warn: 'A ativação e a desativação são imediatas, para todos da empresa. Módulo do qual outro depende não pode ser desativado: desative antes o que depende dele.' },
+        { tip: 'Os dados não são apagados ao desativar: só o acesso é bloqueado. Contratando de novo, tudo volta.' },
       ],
       technical: [
         { text: 'Só o dono contrata (Só o dono da empresa pode contratar). Camadas contratáveis: vertical, shared e integration; o core já vem em toda empresa. A ativação inclui as dependências, cria os papéis padrão e fica na auditoria como Módulos ativados.' },
-        { text: 'A tela não mostra preço nem gera cobrança. A desativação é uma operação da plataforma (cli module:disable) e é recusada se outro módulo ativo depender daquele. Depois de contratar, o manual do ramo aparece aqui como um novo guia.' },
+        { text: 'A tela não mostra preço nem gera cobrança. Só o dono desativa (Só o dono da empresa pode desativar), em POST /modules/:key/deactivate; a lista vem de GET /modules/contracted (core.access.settings). Recusas: outro módulo ativo depende daquele (… é usado por …) e módulo do core. Fica na auditoria como Módulo desativado. A plataforma também desativa pelo comando cli module:disable. Depois de contratar, o manual do ramo aparece aqui como um novo guia.' },
         { text: 'As configurações dos módulos usam a permissão core.access.settings (Configurar os módulos contratados), em telas próprias de cada módulo.' },
       ],
     },
@@ -322,14 +330,13 @@ export const commonGuide: ManualGuide = {
       simple: [
         { text: 'A Auditoria é o histórico da empresa: quem fez cada ação, quando e de onde. Use quando precisar entender uma mudança.' },
         {
-          steps: ['Abra Auditoria, no grupo Configurações.', 'Leia de cima para baixo: os registros mais novos vêm primeiro.', 'Clique em Carregar mais para ver os anteriores.'],
+          steps: ['Abra Auditoria, no grupo Configurações.', 'Filtre por período, usuário ou ação. Em Busca, digite um nome ou um motivo: ela procura também nos detalhes.', 'Os registros mais novos vêm primeiro. Clique em Carregar mais para ver os anteriores.', 'Clique em Detalhes para ver o que foi gravado, como o motivo de um estorno.'],
         },
-        { warn: 'A tela não tem busca nem filtro. Para achar algo antigo, é preciso ir carregando.' },
         { tip: 'Quando aparece Sistema no lugar do nome, a ação foi automática.' },
       ],
       technical: [
-        { text: 'Permissão: core.audit.read (Ver trilha de auditoria). Colunas: Quando, Quem, Ação e IP, 50 registros por vez. Os detalhes gravados em cada registro não aparecem na tela.' },
-        { text: 'As ações sem tradução aparecem pelo código, como hr.payroll.closed ou team_member.viewed. A leitura de dados sensíveis também é registrada, como abrir uma pessoa da equipe e exportar um cliente.' },
+        { text: 'Permissão: core.audit.read (Ver trilha de auditoria). Colunas: Quando, Quem, Ação e IP, 50 registros por vez. Filtros em GET /audit: from e to (dias no fuso de São Paulo), userId (ou system, para as automáticas), action e q. GET /audit/filters lista as ações e as pessoas que já aparecem.' },
+        { text: 'As ações aparecem pelo nome em português (apps/admin/src/pages/auditLabels.ts). Uma ação sem nome cadastrado aparece com um texto montado a partir do código. A leitura de dados sensíveis também é registrada, como abrir uma pessoa da equipe e exportar um cliente.' },
       ],
     },
   ],

@@ -74,6 +74,8 @@ export function vaccinationImportSpec(): ImportSpec {
         body: {
           petId: await findPet(text(row, 'tutor')!, text(row, 'pet')!),
           vaccine: text(row, 'vaccine'),
+          // Importar a mesma planilha de novo não duplica: a mesma vacina na mesma data é ignorada.
+          skipDuplicate: true,
           dose: text(row, 'dose') ?? null,
           appliedOn: row.appliedOn,
           nextDueOn: row.nextDueOn,

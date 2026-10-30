@@ -3,18 +3,22 @@ import { customers } from '@all/core/schema';
 import type { Tx } from '@all/db';
 import { ModuleRoute, RequirePermission, requestContext } from '@all/module-sdk';
 import { NotificationsService } from '@all/notifications';
-import { BadRequestException, Body, ConflictException, Controller, Get, HttpCode, Injectable, Logger, NotFoundException, OnModuleInit, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Get, HttpCode, Injectable, Logger, NotFoundException, OnModuleInit, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { aliasedTable, and, asc, desc, eq, gt, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   addressOf,
   adjustmentIndexLabel,
   applyAdjustmentInput,
+  depositLimitMessage,
   extendLeaseInput,
   extraKindLabel,
   leaseExtraInput,
   leaseInput,
   leaseStatuses,
+  leaseUpdateInput,
+  MAX_DEPOSIT_RENTS,
+  payoutInput,
   skipAdjustmentInput,
   terminateLeaseInput,
   type AdjustmentIndex,
@@ -26,14 +30,17 @@ import {
   type LeaseExtra,
   type LeaseExtraInput,
   type LeaseInput,
+  type LeaseUpdateInput,
+  type LeaseUpdateResult,
   type OwnerStatement,
   type OwnerStatementLine,
+  type PayoutInput,
   type PayoutStatus,
   type RealEstateSettings,
   type ReceiptStatus,
   type TerminateLeaseInput,
 } from '../contracts';
-import { reLeaseAdjustments, reLeaseCharges, reLeaseExtras, reLeases, reProperties } from '../db/schema';
+import { reDeals, reLeaseAdjustments, reLeaseCharges, reLeaseExtras, reLeases, reProperties } from '../db/schema';
 
 const MODULE = 'real_estate';
 /** Mensalidade (aluguel + condomínio + IPTU a receber; repasse a pagar). source_id = re_lease_charges.id */
@@ -43,7 +50,7 @@ export const LEASE_EXTRA_SOURCE = 'real_estate_lease_extra';
 /** Quantos meses à frente as mensalidades dos contratos ativos ficam lançadas. */
 const HORIZON_MONTHS = 12;
 
-const { finEntries } = financeSchema;
+const { finAccounts, finEntries } = financeSchema;
 const renter = aliasedTable(customers, 'renter');
 const owner = aliasedTable(customers, 'owner');
 
@@ -193,6 +200,9 @@ export class LeasesService implements OnModuleInit {
       if (property.status !== 'available') throw new ConflictException({ code: 'PROPERTY_UNAVAILABLE', message: 'Imóvel não está disponível para locação' });
       if (property.ownerId === tenantCustomer.id) throw badRequest('RENTER_IS_OWNER', 'O inquilino é o próprio proprietário');
       if (input.startDate < '2000-01-01') throw badRequest('INVALID_DATE', 'Data de início inválida');
+      // Situação trocada à mão antes da regra atual: com proposta de compra aberta, o imóvel segue reservado.
+      const [openDeal] = await tx.select({ number: reDeals.number }).from(reDeals).where(and(eq(reDeals.propertyId, property.id), sql`${reDeals.status} not in ('closed', 'lost')`)).limit(1);
+      if (openDeal) throw new ConflictException({ code: 'PROPERTY_UNAVAILABLE', message: `Este imóvel está na proposta de compra nº ${openDeal.number}, ainda aberta` });
 
       const [lease] = await tx
         .insert(reLeases)
@@ -265,6 +275,121 @@ export class LeasesService implements OnModuleInit {
       await this.audit.log(tx, { action: 'real_estate.lease.created', entity: 're_lease', entityId: lease!.id, data: { propertyId: property.id, rent: input.rent, termMonths: input.termMonths } });
       return this.detail(tx, lease!.id);
     });
+  }
+
+  /**
+   * Edita o contrato ativo: condomínio, IPTU, garantia e observações. Condomínio e IPTU valem daqui
+   * para a frente: as mensalidades a partir de `applyFrom` são relançadas (a anterior fica cancelada
+   * no financeiro), menos as que já têm recebimento ou repasse baixado, que continuam como estão.
+   */
+  update(id: string, input: LeaseUpdateInput): Promise<LeaseUpdateResult> {
+    return this.tdb.run(async (tx) => {
+      const lease = await this.activeLeaseOrFail(tx, id);
+      if (input.guaranteeType === 'deposit' && input.guaranteeAmount && input.guaranteeAmount > (toCents(lease.rent) * MAX_DEPOSIT_RENTS) / 100) throw badRequest('DEPOSIT_TOO_HIGH', depositLimitMessage);
+      const condo = toCents(input.condoFee);
+      const iptu = toCents(input.iptuMonthly);
+      const amountsChanged = condo !== toCents(lease.condoFee) || iptu !== toCents(lease.iptuMonthly);
+      const [updated] = await tx
+        .update(reLeases)
+        .set({
+          condoFee: centsToDecimal(condo),
+          iptuMonthly: centsToDecimal(iptu),
+          guaranteeType: input.guaranteeType,
+          guaranteeAmount: (input.guaranteeType === 'deposit' || input.guaranteeType === 'capitalization') && input.guaranteeAmount ? centsToDecimal(toCents(input.guaranteeAmount)) : null,
+          guarantorName: input.guaranteeType === 'guarantor' ? input.guarantorName : null,
+          guarantorDocument: input.guaranteeType === 'guarantor' ? input.guarantorDocument : null,
+          guaranteeProvider: input.guaranteeType === 'insurance' || input.guaranteeType === 'capitalization' ? input.guaranteeProvider : null,
+          guaranteeNumber: input.guaranteeType === 'insurance' || input.guaranteeType === 'capitalization' ? input.guaranteeNumber : null,
+          notes: input.notes,
+        })
+        .where(eq(reLeases.id, id))
+        .returning();
+
+      let applied: LeaseUpdateResult['applied'] = null;
+      if (amountsChanged) {
+        const from = input.applyFrom ?? localToday();
+        const charges = await tx
+          .select()
+          .from(reLeaseCharges)
+          .where(and(eq(reLeaseCharges.leaseId, id), eq(reLeaseCharges.status, 'active')))
+          .orderBy(asc(reLeaseCharges.seq));
+        // As mensalidades que ainda vão ser lançadas usam o valor novo: "a partir de" não pode ficar depois delas.
+        const last = charges.at(-1);
+        if (last && from > last.periodStart) throw badRequest('APPLY_FROM_TOO_FAR', `Os valores só podem valer a partir de um mês já lançado (até ${monthLabel(last.periodStart)})`);
+        const ctx = await this.ctxOf(tx, updated!);
+        const target = charges.filter((ch) => ch.periodStart >= from && (toCents(ch.condoFee) !== condo || toCents(ch.iptu) !== iptu));
+        let rebilled = 0;
+        for (const ch of target) {
+          if (await this.rebill(tx, ctx, ch, amountsOf(updated!, toCents(ch.rent), condo, iptu), ch.payoutDate)) rebilled++;
+        }
+        applied = { from, rebilled, kept: target.length - rebilled };
+        for (const customerId of [lease.renterId, lease.ownerId]) {
+          await this.customers.addTimeline(tx, {
+            customerId,
+            moduleKey: MODULE,
+            type: 'lease.updated',
+            title: `Contrato de locação nº ${lease.number}: condomínio ${brl(condo)} e IPTU ${brl(iptu)} a partir de ${brDate(from)}`,
+            entity: 're_lease',
+            entityId: id,
+          });
+        }
+      }
+      await this.audit.log(tx, {
+        action: 'real_estate.lease.updated',
+        entity: 're_lease',
+        entityId: id,
+        data: {
+          condoFee: { from: Number(lease.condoFee), to: condo / 100 },
+          iptuMonthly: { from: Number(lease.iptuMonthly), to: iptu / 100 },
+          guaranteeType: { from: lease.guaranteeType, to: input.guaranteeType },
+          guarantorChanged: lease.guarantorDocument !== (input.guaranteeType === 'guarantor' ? input.guarantorDocument : null),
+          applied,
+        },
+      });
+      return { ...(await this.detail(tx, id)), applied };
+    });
+  }
+
+  // ---- Repasse --------------------------------------------------------------------------------
+
+  /**
+   * Baixa do repasse da mensalidade ou da cobrança extra. O repasse sai por aqui (e não pela tela do
+   * financeiro) para que pagar antes de receber o aluguel exija uma confirmação explícita, que fica
+   * na auditoria. Quem confirma está adiantando o dinheiro do próprio caixa da imobiliária.
+   */
+  payout(id: string, kind: 'charge' | 'extra', sourceId: string, input: PayoutInput): Promise<LeaseDetail> {
+    return this.tdb.run(async (tx) => {
+      const [lease] = await tx.select().from(reLeases).where(eq(reLeases.id, id));
+      if (!lease) throw notFound();
+      const sourceType = kind === 'charge' ? LEASE_CHARGE_SOURCE : LEASE_EXTRA_SOURCE;
+      const [source] =
+        kind === 'charge'
+          ? await tx.select({ id: reLeaseCharges.id, status: reLeaseCharges.status }).from(reLeaseCharges).where(and(eq(reLeaseCharges.id, sourceId), eq(reLeaseCharges.leaseId, id))).for('update')
+          : await tx.select({ id: reLeaseExtras.id, status: reLeaseExtras.status }).from(reLeaseExtras).where(and(eq(reLeaseExtras.id, sourceId), eq(reLeaseExtras.leaseId, id))).for('update');
+      if (!source || source.status !== 'active') throw new NotFoundException({ code: 'PAYOUT_NOT_FOUND', message: 'Repasse não encontrado' });
+      const entries = live(await this.finance.listBySourceInTx(tx, sourceType, sourceId), sourceId);
+      const payout = entries.find((e) => e.kind === 'expense');
+      if (!payout) throw badRequest('NO_PAYOUT', 'Esta cobrança não tem repasse ao proprietário');
+      if (payout.status === 'paid') throw badRequest('PAYOUT_ALREADY_PAID', 'Este repasse já foi pago');
+      if (input.paidAt > localToday()) throw badRequest('PAID_IN_FUTURE', 'A data do repasse não pode ser futura');
+      const received = entries.find((e) => e.kind === 'income')?.status === 'paid';
+      if (!received && !input.acknowledgeUnreceived) {
+        throw new ConflictException({ code: 'RENT_NOT_RECEIVED', message: 'O valor ainda não foi recebido do inquilino. Se repassar agora, a imobiliária adianta do próprio caixa: confirme para continuar' });
+      }
+      const [account] = await tx.select({ id: finAccounts.id }).from(finAccounts).where(and(eq(finAccounts.id, input.accountId), eq(finAccounts.active, true)));
+      if (!account) throw badRequest('ACCOUNT_NOT_FOUND', 'Conta não encontrada ou inativa');
+      await tx
+        .update(finEntries)
+        .set({ status: 'paid', paidAt: input.paidAt, accountId: input.accountId, paymentMethod: input.paymentMethod })
+        .where(and(eq(finEntries.id, payout.id), eq(finEntries.status, 'pending')));
+      await this.audit.log(tx, { action: 'real_estate.lease.payout_paid', entity: 're_lease', entityId: id, data: { entryId: payout.id, kind, sourceId, amount: payout.amount, paidAt: input.paidAt, beforeReceiving: !received } });
+      return this.detail(tx, id);
+    });
+  }
+
+  /** Contas para a baixa do repasse, sem saldo. */
+  payoutAccounts() {
+    return this.finance.listAccountsBasic();
   }
 
   /** Prorroga o prazo e lança as mensalidades que faltarem até 12 meses à frente. */
@@ -366,6 +491,7 @@ export class LeasesService implements OnModuleInit {
     return this.tdb.run(async (tx) => {
       const [lease] = await tx.select().from(reLeases).where(eq(reLeases.id, id));
       if (!lease) throw notFound();
+      if (lease.status !== 'active') throw badRequest('LEASE_CLOSED', 'Contrato encerrado não recebe cobrança extra: lance o acerto final no financeiro');
       const extra = await this.insertExtra(tx, await this.ctxOf(tx, lease), await this.settingsOf(tx), tenantId, {
         ...input,
         description: input.description ?? extraKindLabel[input.kind],
@@ -656,10 +782,11 @@ export class LeasesService implements OnModuleInit {
     const month = monthLabel(ch.periodStart);
     const total = toCents(ch.rent) + toCents(ch.condoFee) + toCents(ch.iptu);
     const parts = [toCents(ch.condoFee) > 0 ? 'condomínio' : null, toCents(ch.iptu) > 0 ? 'IPTU' : null].filter(Boolean);
-    const base = { status: 'pending' as const, competenceDate: ch.periodStart, sourceType: LEASE_CHARGE_SOURCE, sourceId: ch.id, settleInFinance: true };
+    const base = { status: 'pending' as const, competenceDate: ch.periodStart, sourceType: LEASE_CHARGE_SOURCE, sourceId: ch.id };
     if (total > 0) {
       await this.finance.recordInTx(tx, {
         ...base,
+        settleInFinance: true,
         kind: 'income',
         description: `Aluguel ${month}${parts.length ? ` + ${parts.join(' + ')}` : ''} — ${ref}`,
         amount: total / 100,
@@ -671,6 +798,8 @@ export class LeasesService implements OnModuleInit {
     if (toCents(ch.payout) > 0) {
       await this.finance.recordInTx(tx, {
         ...base,
+        // A baixa do repasse é no contrato, que avisa quando o aluguel não foi recebido.
+        settleInFinance: false,
         kind: 'expense',
         description: `Repasse ao proprietário ${month} — ${ref}`,
         amount: Number(ch.payout),
@@ -719,11 +848,12 @@ export class LeasesService implements OnModuleInit {
       .values({ tenantId, leaseId: lease.id, kind: input.kind, description: input.description, amount: centsToDecimal(cents), dueDate: input.dueDate, passToOwner: input.passToOwner })
       .returning();
     const ref = `contrato ${lease.number}, imóvel ${ctx.code}`;
-    const base = { status: 'pending' as const, sourceType: LEASE_EXTRA_SOURCE, sourceId: extra!.id, settleInFinance: true, amount: cents / 100 };
-    await this.finance.recordInTx(tx, { ...base, kind: 'income', description: `${input.description} — ${ref}`, dueDate: input.dueDate, customerId: lease.renterId, categoryKey: 'other_income' });
+    const base = { status: 'pending' as const, sourceType: LEASE_EXTRA_SOURCE, sourceId: extra!.id, amount: cents / 100 };
+    await this.finance.recordInTx(tx, { ...base, settleInFinance: true, kind: 'income', description: `${input.description} — ${ref}`, dueDate: input.dueDate, customerId: lease.renterId, categoryKey: 'other_income' });
     if (input.passToOwner) {
       await this.finance.recordInTx(tx, {
         ...base,
+        settleInFinance: false,
         kind: 'expense',
         description: `Repasse ao proprietário: ${input.description} — ${ref}`,
         dueDate: addDays(input.dueDate, s.payoutDelayDays),
@@ -890,6 +1020,7 @@ export class LeasesService implements OnModuleInit {
       }),
       extras: extras.map((e): LeaseExtra => {
         const income = live(extraEntries, e.id).find((x) => x.kind === 'income');
+        const payout = live(extraEntries, e.id).find((x) => x.kind === 'expense');
         return {
           id: e.id,
           kind: e.kind,
@@ -899,6 +1030,7 @@ export class LeasesService implements OnModuleInit {
           passToOwner: e.passToOwner,
           status: e.status,
           receipt: e.status === 'cancelled' ? 'cancelled' : receiptOf(income, today),
+          payoutStatus: (payout?.status as PayoutStatus | undefined) ?? null,
         };
       }),
       adjustments: adjustments.map(toAdjustment),
@@ -980,6 +1112,13 @@ export class LeasesController {
     return this.leases.statement(q.ownerId, q.month);
   }
 
+  /** A baixa do repasse movimenta dinheiro: exige a mesma permissão da baixa no financeiro. */
+  @Get('payout-accounts')
+  @RequirePermission('core.finance.write')
+  payoutAccounts() {
+    return this.leases.payoutAccounts();
+  }
+
   @Post('adjustments/:id/apply')
   @HttpCode(200)
   @RequirePermission('real_estate.leases.write')
@@ -1004,6 +1143,26 @@ export class LeasesController {
   @RequirePermission('real_estate.leases.write')
   create(@Body(new ZodPipe(leaseInput)) body: LeaseInput) {
     return this.leases.create(body);
+  }
+
+  @Patch(':id')
+  @RequirePermission('real_estate.leases.write')
+  update(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(leaseUpdateInput)) body: LeaseUpdateInput) {
+    return this.leases.update(id, body);
+  }
+
+  @Post(':id/charges/:chargeId/payout')
+  @HttpCode(200)
+  @RequirePermission('core.finance.write')
+  payCharge(@Param('id', ParseUUIDPipe) id: string, @Param('chargeId', ParseUUIDPipe) chargeId: string, @Body(new ZodPipe(payoutInput)) body: PayoutInput) {
+    return this.leases.payout(id, 'charge', chargeId, body);
+  }
+
+  @Post(':id/extras/:extraId/payout')
+  @HttpCode(200)
+  @RequirePermission('core.finance.write')
+  payExtra(@Param('id', ParseUUIDPipe) id: string, @Param('extraId', ParseUUIDPipe) extraId: string, @Body(new ZodPipe(payoutInput)) body: PayoutInput) {
+    return this.leases.payout(id, 'extra', extraId, body);
   }
 
   @Post(':id/extras')

@@ -1,7 +1,7 @@
 import { type Tx } from '@all/db';
 import { requestContext } from '@all/module-sdk';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { and, asc, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, ne } from 'drizzle-orm';
 import { AccessService } from '../access/access.service';
 import { AuditService } from '../audit/audit.service';
 import { hashToken, newToken } from '../common/crypto';
@@ -110,10 +110,88 @@ export class UsersService {
 
     this.mail.sendInBackground(
       result.token
-        ? inviteMail(email, result.tenantName, `${this.config.adminUrl}/definir-senha?token=${result.token}`)
+        ? inviteMail(email, result.tenantName, this.inviteUrl(result.token))
         : addedToTenantMail(email, result.tenantName, `${this.config.adminUrl}/entrar`),
     );
-    return { membershipId: result.membershipId };
+    return { membershipId: result.membershipId, pendingInvite: !!result.token, emailEnabled: this.config.emailEnabled };
+  }
+
+  emailStatus() {
+    return { emailEnabled: this.config.emailEnabled };
+  }
+
+  /** Novo convite por e-mail. Os anteriores continuam valendo até o prazo: foram para a mesma caixa de entrada. */
+  async resendInvite(membershipId: string) {
+    const ctx = requestContext.require();
+    const result = await this.tdb.run(async (tx) => {
+      const target = await this.pendingInvitee(tx, membershipId);
+      const token = await this.issueInviteToken(tx, target.userId);
+      const [tenant] = await tx.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, ctx.tenantId));
+      await this.audit.log(tx, { action: 'user.invite_resent', entity: 'membership', entityId: membershipId, data: { email: target.email, emailEnabled: this.config.emailEnabled } });
+      return { token, email: target.email, tenantName: tenant!.name };
+    });
+    this.mail.sendInBackground(inviteMail(result.email, result.tenantName, this.inviteUrl(result.token)));
+    return { emailEnabled: this.config.emailEnabled };
+  }
+
+  /**
+   * Link de convite para o dono dar acesso mesmo sem e-mail. Quem tem o link define a senha da conta,
+   * que vale para todas as empresas daquele e-mail. Por isso: só de quem ainda não tem senha, só o
+   * dono gera para outro dono, e nunca de quem também foi convidado por outra empresa (lá a pessoa
+   * passaria a entrar pelas mãos de quem gerou o link). Gerar outro invalida os anteriores. A auditoria
+   * registra quem gerou, sem guardar o token.
+   */
+  async inviteLink(membershipId: string) {
+    const ctx = requestContext.require();
+    const { userId } = await this.tdb.run((tx) => this.pendingInvitee(tx, membershipId));
+    // Com o usuário-alvo no escopo, o RLS mostra os vínculos dele nas outras empresas.
+    const token = await this.tdb.withScope({ tenantId: ctx.tenantId, userId }, async (tx) => {
+      const target = await this.pendingInvitee(tx, membershipId);
+      const other = await tx
+        .select({ id: memberships.id })
+        .from(memberships)
+        .where(and(eq(memberships.userId, userId), ne(memberships.tenantId, ctx.tenantId)))
+        .limit(1);
+      if (other.length) throw new ConflictException({ code: 'INVITED_ELSEWHERE', message: 'Esta pessoa também foi convidada por outra empresa. Por segurança, o convite só pode ir para o e-mail dela.' });
+      if (!ctx.isOwner) {
+        const isOwnerTarget = await tx
+          .select({ id: roles.id })
+          .from(membershipRoles)
+          .innerJoin(roles, eq(roles.id, membershipRoles.roleId))
+          .where(and(eq(membershipRoles.membershipId, membershipId), eq(roles.key, OWNER_ROLE)))
+          .limit(1);
+        if (isOwnerTarget.length) throw new ForbiddenException({ code: 'OWNER_ONLY', message: 'Só um dono pode gerar o link de convite de outro dono' });
+      }
+      await tx.update(userTokens).set({ usedAt: new Date() }).where(and(eq(userTokens.userId, userId), eq(userTokens.purpose, 'invite'), isNull(userTokens.usedAt)));
+      const issued = await this.issueInviteToken(tx, userId);
+      await this.audit.log(tx, { action: 'user.invite_link_created', entity: 'membership', entityId: membershipId, data: { email: target.email } });
+      return issued;
+    });
+    return { url: this.inviteUrl(token), expiresAt: new Date(Date.now() + INVITE_TTL_MS).toISOString(), emailEnabled: this.config.emailEnabled };
+  }
+
+  private inviteUrl(token: string) {
+    return `${this.config.adminUrl}/definir-senha?token=${token}`;
+  }
+
+  private async issueInviteToken(tx: Tx, userId: string) {
+    const token = newToken();
+    await tx.insert(userTokens).values({ userId, purpose: 'invite', tokenHash: hashToken(token), expiresAt: new Date(Date.now() + INVITE_TTL_MS) });
+    return token;
+  }
+
+  /** Vínculo ativo desta empresa de quem ainda não criou a senha. */
+  private async pendingInvitee(tx: Tx, membershipId: string) {
+    const { tenantId } = requestContext.require();
+    const [row] = await tx
+      .select({ status: memberships.status, userId: users.id, email: users.email, passwordHash: users.passwordHash })
+      .from(memberships)
+      .innerJoin(users, eq(users.id, memberships.userId))
+      .where(and(eq(memberships.id, membershipId), eq(memberships.tenantId, tenantId)));
+    if (!row) throw new NotFoundException({ code: 'MEMBERSHIP_NOT_FOUND', message: 'Usuário não encontrado' });
+    if (row.status !== 'active') throw new BadRequestException({ code: 'MEMBERSHIP_DISABLED', message: 'O acesso desta pessoa está desativado. Reative antes de convidar de novo.' });
+    if (row.passwordHash) throw new BadRequestException({ code: 'NOT_PENDING', message: 'Esta pessoa já criou a senha. Se esqueceu, ela pode usar Esqueci minha senha na tela de entrada.' });
+    return row;
   }
 
   async update(membershipId: string, input: { status?: 'active' | 'disabled'; roleIds?: string[] }) {

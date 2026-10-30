@@ -239,7 +239,7 @@ function GroupModal({ group, onClose }: { group: Group | null; onClose: () => vo
               </Select>
             )}
           </Field>
-          <Field label="Grupo">{(id) => <Input id={id} required disabled={!!group} value={form.groupCode} onChange={(e) => set({ groupCode: e.target.value.toUpperCase() })} />}</Field>
+          <Field label="Grupo">{(id) => <Input id={id} required disabled={!!group} value={form.groupCode} onChange={(e) => set({ groupCode: e.target.value })} />}</Field>
           <Field label="Participantes">{(id) => <Input id={id} type="number" min={1} value={form.members} onChange={(e) => set({ members: e.target.value })} />}</Field>
           <Field label="Meses restantes" hint="Hoje; a tela desconta os meses que passarem">
             {(id) => <Input id={id} type="number" min={0} value={form.monthsRemaining} onChange={(e) => set({ monthsRemaining: e.target.value })} />}

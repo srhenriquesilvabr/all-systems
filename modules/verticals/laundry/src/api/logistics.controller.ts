@@ -57,6 +57,13 @@ export class LaundryLogisticsController {
     return this.logistics.defaults();
   }
 
+  /** Só quem pode dirigir: a lista de escolha do motorista. */
+  @Get('logistics/drivers')
+  @RequirePermission(MANAGE)
+  drivers() {
+    return this.logistics.drivers();
+  }
+
   @Get('logistics/jobs')
   @RequirePermission(MANAGE)
   list(@Query(new ZodPipe(jobsQuery)) q: JobsQuery) {

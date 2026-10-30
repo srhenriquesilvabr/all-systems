@@ -149,7 +149,7 @@ export interface ApplicationDetail {
   createdAt: string;
   consent: { version: string; acceptedAt: string; text: string } | null;
   candidate: Candidate;
-  job: { id: string; title: string; stages: JobStage[]; status: JobStatus; requirements: string[]; niceToHave: string[] };
+  job: { id: string; title: string; stages: JobStage[]; status: JobStatus; requirements: string[]; niceToHave: string[]; customerId: string | null };
   resume: ResumeFile | null;
   analyses: Analysis[];
   events: RecEvent[];

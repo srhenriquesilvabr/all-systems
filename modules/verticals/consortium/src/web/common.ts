@@ -1,6 +1,6 @@
 import { ApiError, api } from '@all/module-sdk/web';
 import { useQuery } from '@tanstack/react-query';
-import type { BidStatus, CreditStatus, InstallmentStatus, QuotaStatus } from '../contracts';
+import type { Administrator, BidStatus, CreditStatus, InstallmentStatus, QuotaStatus } from '../contracts';
 
 export const key = ['consortium'] as const;
 export type Tone = 'brand' | 'success' | 'warning' | 'danger' | 'neutral';
@@ -14,6 +14,10 @@ export const quotaTone: Record<QuotaStatus, Tone> = { proposal: 'warning', activ
 export const installmentTone: Record<InstallmentStatus, Tone> = { upcoming: 'neutral', paid: 'success', late: 'danger', cancelled: 'neutral' };
 export const bidTone: Record<BidStatus, Tone> = { registered: 'neutral', sent: 'brand', won: 'success', lost: 'danger', void: 'neutral' };
 export const creditTone: Record<CreditStatus, Tone> = { awaiting_docs: 'warning', released: 'brand', acquired: 'success' };
+
+export function useAdministrators() {
+  return useQuery({ queryKey: [...key, 'administrators'], queryFn: () => api<Administrator[]>('/consortium/administrators'), staleTime: 5 * 60_000 });
+}
 
 export function useTeam() {
   return useQuery({ queryKey: [...key, 'team'], queryFn: () => api<{ id: string; name: string }[]>('/users/team'), staleTime: 5 * 60_000 });

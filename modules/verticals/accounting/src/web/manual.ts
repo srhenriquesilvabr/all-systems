@@ -50,7 +50,7 @@ export const manual: ManualGuide = {
           ],
         },
         { tip: 'Exemplo: uma padaria do Simples Nacional com dois funcionários recebe, por mês, DAS, DCTFWeb, eSocial e FGTS Digital. Sem marcar "Tem funcionários", o único mensal é o DAS. A DEFIS, anual, vale nos dois casos.' },
-        { warn: 'Se a empresa mudar de regime, edite aqui. As obrigações novas passam a ser geradas, mas as que já estavam a fazer continuam na lista. Use "Dispensar" nas que não valem mais.' },
+        { warn: 'Se a empresa mudar de regime ou de situação de funcionários, edite aqui. A tela lista as obrigações em aberto que deixam de valer: marque as que devem ser dispensadas antes de salvar. As vencidas vêm desmarcadas, porque eram devidas no regime antigo.' },
       ],
       technical: [
         { text: 'Permissão: accounting.manage. A empresa precisa existir em Clientes e não pode estar anonimizada. Cada cliente entra uma vez só na carteira; repetir devolve "Esta empresa já está na carteira". O vínculo com o cliente não muda depois de criado.' },
@@ -60,7 +60,7 @@ export const manual: ManualGuide = {
             'Honorário igual a zero: sem cobrança recorrente.',
             'Salvar gera na hora as obrigações do período atual dessa empresa. O honorário não: ele sai na rotina diária ou em "Gerar agora".',
             'Desmarcar "Ativa na carteira" interrompe novas obrigações e honorários. O que já foi gerado permanece.',
-            'Mudar o regime não apaga obrigações em aberto.',
+            'Mudar o regime ou os funcionários não apaga nada. As escolhidas ficam Dispensadas, com o nome de quem salvou; as outras continuam a fazer. Todas ganham uma observação com o motivo, e a dispensa pode ser desfeita com "Reabrir". A mudança fica na auditoria e na linha do tempo do cliente. Sem a escolha pela tela (API), vale a mesma sugestão: dispensa o que não venceu e mantém o vencido.',
           ],
         },
       ],
@@ -103,14 +103,14 @@ export const manual: ManualGuide = {
         {
           steps: [
             'Em Obrigações, clique em "Catálogo".',
-            'Altere o dia ao lado da obrigação e clique fora do campo para salvar.',
-            'Desmarque "Ativa" no que não deve mais ser gerado.',
+            'Para mudar uma obrigação, clique em "Editar", ajuste e clique em "Salvar". Desmarque "Ativa" no que não deve mais ser gerado.',
+            'Para criar uma, clique em "Nova obrigação". Preencha Código, Nome, Regimes, Periodicidade e Dia do vencimento e clique em "Salvar".',
           ],
         },
         { warn: 'A mudança vale só para as próximas gerações. O que já foi gerado continua com o prazo antigo.' },
       ],
       technical: [
-        { text: 'Permissão: accounting.manage. A tela edita o dia e a situação ativa. Criar obrigação nova, mudar regimes, periodicidade ou o mês de vencimento das anuais não tem tela hoje. Dia maior que o último do mês cai no último dia.' },
+        { text: 'Permissão: accounting.manage. A tela cria e edita tudo: código, nome, regimes, se exige funcionários, periodicidade, dia, mês das anuais e situação. Código repetido: "Já existe uma obrigação com este código". Dia maior que o último do mês cai no último dia. Obrigação do catálogo não é apagada: desligue. A geração cria a obrigação nova para as empresas em que ela se aplica.' },
         { text: 'Catálogo padrão. Os prazos são referência do sistema, não orientação fiscal:' },
         {
           list: [
@@ -143,6 +143,7 @@ export const manual: ManualGuide = {
             'Quando entregar a obrigação ao órgão, clique em "Entregue".',
             'Se ela não se aplica naquele mês, clique em "Dispensar".',
             'Errou? Mude o filtro para "Entregues" ou "Dispensadas" e clique em "Reabrir".',
+            'Para guardar a guia, o recibo ou uma observação, clique em "Detalhes" na obrigação.',
           ],
         },
         { warn: '"Entregue" é só uma anotação interna. O sistema não envia nada ao governo: a entrega é feita por você no sistema do órgão.' },
@@ -155,7 +156,8 @@ export const manual: ManualGuide = {
             'Entregue e Dispensada gravam quem fez e quando. A tela mostra "por" e o nome da pessoa. Cada mudança vai para a auditoria.',
             'O filtro de mês usa a data de vencimento, não a competência.',
             'Competência: "2026-09" (mensal), "2026-T3" (trimestral) e "2026" (anual).',
-            'A obrigação não tem campo para anexar comprovante, guia ou recibo. Lista limitada a 2000 linhas.',
+            'Detalhes: observação de até 2000 caracteres e anexos em JPEG, PNG, WebP ou PDF, até 15 MB, para quem tem accounting.work. Quem só tem accounting.read vê e abre. Os anexos não saem pelo download genérico de arquivos.',
+            'Lista limitada a 2000 linhas.',
           ],
         },
       ],
@@ -206,7 +208,7 @@ export const manual: ManualGuide = {
         {
           list: [
             'Só para empresa ativa com honorário maior que zero.',
-            'A competência é o mês corrente e o vencimento é o dia informado nesse mês. Empresa adicionada depois do dia de vencimento recebe um lançamento já vencido no primeiro mês.',
+            'A competência é o mês corrente e o vencimento é o dia informado nesse mês. Se esse dia já passou quando o honorário é lançado (empresa adicionada ou reativada depois dele), o honorário não nasce vencido: fica para o mesmo dia do mês seguinte, com o motivo na observação do lançamento. A tela avisa ao adicionar a empresa e em "Gerar agora".',
             'Desativar a empresa não cancela lançamentos já feitos.',
             'Não há reajuste automático de honorário, emissão de boleto ou de nota fiscal por este módulo, nem aviso de cobrança ao cliente.',
           ],

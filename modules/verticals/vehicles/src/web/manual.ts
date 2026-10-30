@@ -43,7 +43,7 @@ export const manual: ManualGuide = {
           steps: [
             'Em Bancos e financeiras, clique em "Nova conexão".',
             'Escolha a instituição no catálogo ou clique em "Outra instituição".',
-            'Confira o "Nome na tela" e marque o produto "Financiamento de veículo".',
+            'Confira o "Nome na tela" e os produtos. Os bancos do catálogo já vêm com os três marcados; desmarque o que a loja não vai usar.',
             'Escolha o Modo. Sem acesso direto ao banco, use "Manual (sem API)".',
             'Informe a taxa de referência em "Veículo (% a.m.)" e a "Tarifa de cadastro (R$)".',
             'Clique em "Salvar".',
@@ -51,7 +51,7 @@ export const manual: ManualGuide = {
           ],
         },
         { tip: 'No modo manual, a equipe envia a proposta pelo portal do banco e depois anota a resposta no sistema. O acompanhamento funciona igual.' },
-        { warn: 'Ao escolher um banco do catálogo, só "Consórcio" vem marcado. Lembre de marcar "Financiamento de veículo", ou ele não aparece na simulação.' },
+        { warn: 'Só aparece na simulação a instituição com o produto "Financiamento de veículo" marcado. Administradoras só de consórcio vêm sem ele.' },
       ],
       technical: [
         { text: 'Permissão: core.access.settings. Toda integração real depende de contrato com a instituição. O catálogo é material de referência, marcado "A confirmar", e não foi validado com as administradoras.' },
@@ -90,16 +90,17 @@ export const manual: ManualGuide = {
         { text: 'Para cadastrar: vehicles.stock.write. Para ver: vehicles.stock.read. O custo e a margem só aparecem com vehicles.costs.read. Custo não é obrigatório.' },
         {
           list: [
-            'Situações: Disponível, Reservado, Vendido e Fora de venda.',
+            'Situações: Disponível, Reservado, Vendido e Fora de venda. No cadastro, só Disponível e Fora de venda podem ser escolhidas.',
+            'Reservado e Vendido vêm da negociação. Marcar à mão é recusado, com a explicação do caminho certo: abrir a negociação ou fechar a venda, para o valor entrar no financeiro.',
+            'Com negociação aberta, a situação não muda: "marque ela como perdida ou feche a venda". Veículo marcado à mão antes desta regra, sem negociação, pode ser corrigido.',
             'Ano modelo igual ou um a mais que o de fabricação. Anos de 1950 a 2100.',
             'Placa nos formatos ABC1D23 ou ABC-1234, única na empresa: "Já existe um veículo com esta placa".',
             'Fotos: JPEG, PNG ou WebP, até 8 MB, uma por vez. "Remover" aparece ao passar o mouse.',
             'Dias em estoque contam a partir do cadastro. A lista mostra até 300 veículos.',
-            'Veículo vendido não volta: "Veículo vendido não volta ao estoque por aqui".',
+            'Veículo vendido por negociação não volta: "Veículo vendido não volta ao estoque por aqui".',
+            'Quem edita sem vehicles.costs.read não vê o campo Custo, e o servidor mantém o valor gravado.',
           ],
         },
-        { warn: 'A Situação pode ser trocada à mão no formulário. Tirar um carro de Reservado com negociação aberta permite abrir uma segunda negociação para ele. Marcar Vendido à mão não lança nada no financeiro.' },
-        { warn: 'Quem pode editar o veículo mas não tem vehicles.costs.read vê o Custo vazio e, ao salvar, apaga o custo gravado. Os papéis padrão não têm essa combinação; cuidado ao criar papéis próprios.' },
       ],
     },
     {
@@ -151,7 +152,7 @@ export const manual: ManualGuide = {
       ],
       technical: [
         { text: 'Permissão: vehicles.stock.write. Cada linha segue as regras do cadastro manual. Obrigatórias: Marca, Modelo, Ano fabricação, Ano modelo e Preço de venda.' },
-        { text: 'Vazios assumem Carro, Flex, Manual, quilometragem 0 e situação Disponível. Fotos não entram pela planilha. Placa repetida recusa a linha; a importação não atualiza veículos existentes.' },
+        { text: 'Situação na planilha: só Disponível ou Fora de venda. Vazios assumem Carro, Flex, Manual, quilometragem 0 e situação Disponível. Fotos não entram pela planilha. Placa repetida recusa a linha; a importação não atualiza veículos existentes.' },
       ],
     },
     {
@@ -212,8 +213,8 @@ export const manual: ManualGuide = {
           list: [
             'A troca não gera lançamento no financeiro: ela só reduz o valor a receber.',
             'O formulário da negociação não pede quilometragem do carro de troca.',
-            'A placa da troca não tem a validação de formato do cadastro normal.',
-            'Se a placa já existir no estoque, o fechamento falha, possivelmente com uma mensagem genérica. Confira a placa antes.',
+            'A placa da troca segue o formato do cadastro normal: ABC1D23 ou ABC-1234.',
+            'Placa que já está no estoque é recusada ao salvar a negociação e ao fechar: "já está no estoque", com o nome do veículo. No fechamento, nada é lançado e a tela oferece "Corrigir placa", que vale em qualquer etapa aberta, porque não muda valores.',
             'Não há avaliação, vistoria ou controle de documentos do carro recebido.',
           ],
         },
@@ -270,7 +271,7 @@ export const manual: ManualGuide = {
           ],
         },
         { text: 'Com integração, clique em "Consultar status" para ver a resposta na hora.' },
-        { text: 'Depois da aprovação e da assinatura, clique em "Contrato assinado". Use "Cancelar" se o cliente desistir da proposta.' },
+        { text: 'Depois da aprovação e da assinatura, clique em "Contrato assinado". Use "Cancelar" se o cliente desistir da proposta. Contrato já assinado que caiu: combine o distrato com o banco e clique em "Registrar distrato", com o motivo.' },
         { tip: 'Quando o crédito é aprovado, o cliente recebe uma mensagem avisando. Combine logo a assinatura e a entrega.' },
       ],
       technical: [
@@ -283,6 +284,7 @@ export const manual: ManualGuide = {
             'Manual: o sistema dá um protocolo próprio até a equipe informar o da instituição.',
             'Aviso ao cliente: modelo "Financiamento aprovado", por e-mail e WhatsApp, conforme os canais ativos. Sai quando a proposta passa a Aprovada.',
             'O "Valor aprovado" é só registro: não altera os valores da negociação.',
+            'Distrato: o sistema só anota, com o motivo no histórico e na auditoria; não cancela nada no banco. A negociação volta a Em negociação. Depois da venda fechada, a proposta fica só como histórico; um distrato vindo da integração entra na linha do tempo do cliente, para conferir o repasse no financeiro.',
           ],
         },
       ],
@@ -324,7 +326,7 @@ export const manual: ManualGuide = {
         { text: 'Se o cliente desistiu, marque como perdida. O carro volta a ficar disponível e o motivo ajuda a entender por que a loja perde vendas.' },
         {
           steps: [
-            'Se houver proposta em andamento, clique em "Cancelar" nela.',
+            'Se houver proposta em andamento, clique em "Cancelar" nela. Se ela já estiver Contratada, combine o distrato com o banco e clique em "Registrar distrato".',
             'Clique em "Perdida".',
             'Escolha o Motivo.',
             'Se escolher "Outro", descreva em Detalhes.',
@@ -335,7 +337,7 @@ export const manual: ManualGuide = {
       ],
       technical: [
         { text: 'Permissão: vehicles.deals.write. Motivos: Preço, Financiamento negado, Comprou em outra loja, Desistiu, Troca não aceita, Sem contato e Outro. Em "Outro", o detalhe precisa de pelo menos 3 caracteres.' },
-        { text: 'Proposta Enviada, Em análise ou Aprovada bloqueia: "Cancele a proposta de financiamento em andamento antes". Proposta Contratada não bloqueia nem pode ser cancelada pela tela; confirme com o banco antes de perder. O veículo só volta a Disponível se ainda estiver Reservado. A mudança vai para a auditoria.' },
+        { text: 'Proposta Enviada, Em análise ou Aprovada bloqueia: "Cancele a proposta de financiamento em andamento antes". Proposta Contratada também bloqueia: "Há contrato de financiamento assinado". O veículo só volta a Disponível se ainda estiver Reservado. A mudança vai para a auditoria.' },
       ],
     },
     {

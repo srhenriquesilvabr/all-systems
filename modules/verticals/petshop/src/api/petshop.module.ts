@@ -1,12 +1,15 @@
-import { ModuleHooks, ModuleSettingsService, OutboxHandlers, TenantDb, coreSchema } from '@all/core';
+import { AuditService, CustomersService, ModuleHooks, ModuleSettingsService, OutboxHandlers, TenantDb, ZodPipe, coreSchema } from '@all/core';
 import type { Tx } from '@all/db';
+import { ModuleRoute, RequireAnyPermission, RequirePermission, requestContext } from '@all/module-sdk';
 import { NotificationsModule, NotificationsService } from '@all/notifications';
 import { STATUS_CHANGED, type AppointmentStatusChanged } from '@all/scheduling';
-import { schAppointmentServices, schServices } from '@all/scheduling/schema';
+import { schAppointments, schAppointmentServices, schServices } from '@all/scheduling/schema';
 import { pets } from '@all/pets/schema';
 import { salesProducts } from '@all/sales/schema';
-import { Injectable, Module, OnModuleInit } from '@nestjs/common';
-import { and, eq } from 'drizzle-orm';
+import { BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, Injectable, Module, NotFoundException, OnModuleInit, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
+import { and, eq, gte, lte } from 'drizzle-orm';
+import { z } from 'zod';
+import { petshopPickups } from '../db/schema';
 import type { PetshopSettings } from '../manifest';
 
 const MODULE = 'petshop';
@@ -45,11 +48,79 @@ export class PetshopService implements OnModuleInit {
     private readonly handlers: OutboxHandlers,
     private readonly settings: ModuleSettingsService,
     private readonly notifications: NotificationsService,
+    private readonly customers: CustomersService,
+    private readonly audit: AuditService,
   ) {}
 
   onModuleInit() {
     this.hooks.register(MODULE, { onEnable: (tx, tenantId) => this.seed(tx, tenantId) });
     this.handlers.on<AppointmentStatusChanged>(STATUS_CHANGED, 'petshop.ready', (e) => this.onStatusChanged(e.payload));
+  }
+
+  /** Saídas registradas dos horários de um período, para o quadro. */
+  pickups(from: Date, to: Date) {
+    return this.tdb.run(async (tx) => {
+      const rows = await tx
+        .select({ appointmentId: petshopPickups.appointmentId, pickedUpAt: petshopPickups.pickedUpAt, userName: coreSchema.users.name })
+        .from(petshopPickups)
+        .innerJoin(schAppointments, eq(schAppointments.id, petshopPickups.appointmentId))
+        .leftJoin(coreSchema.users, eq(coreSchema.users.id, petshopPickups.pickedUpBy))
+        .where(and(gte(schAppointments.startsAt, from), lte(schAppointments.startsAt, to)));
+      return rows.map((r) => ({ appointmentId: r.appointmentId, pickedUpAt: r.pickedUpAt.toISOString(), userName: r.userName }));
+    });
+  }
+
+  /** O tutor buscou o pet: só depois de pronto, uma vez por horário. */
+  registerPickup(appointmentId: string) {
+    const { tenantId, userId } = requestContext.requireTenant();
+    return this.tdb.run(async (tx) => {
+      const appointment = await this.appointmentOrFail(tx, appointmentId);
+      if (appointment.status !== 'done') throw new BadRequestException({ code: 'NOT_READY', message: 'O pet ainda não está pronto para ser buscado' });
+      const [row] = await tx
+        .insert(petshopPickups)
+        .values({ appointmentId, tenantId, pickedUpBy: userId ?? null })
+        .onConflictDoNothing()
+        .returning();
+      if (!row) throw new ConflictException({ code: 'ALREADY_PICKED_UP', message: 'A saída deste pet já foi registrada' });
+      await this.customers.addTimeline(tx, {
+        customerId: appointment.customerId,
+        moduleKey: MODULE,
+        type: 'petshop.picked_up',
+        title: `${appointment.subjectLabel ?? 'Pet'} buscado(a) pelo tutor`,
+        entity: 'appointment',
+        entityId: appointmentId,
+      });
+      await this.audit.log(tx, { action: 'petshop.picked_up', entity: 'appointment', entityId: appointmentId });
+      return { appointmentId, pickedUpAt: row.pickedUpAt.toISOString() };
+    });
+  }
+
+  /** Marcou no pet errado: desfaz (fica na auditoria). */
+  undoPickup(appointmentId: string) {
+    return this.tdb.run(async (tx) => {
+      const [row] = await tx.delete(petshopPickups).where(eq(petshopPickups.appointmentId, appointmentId)).returning();
+      if (!row) throw new NotFoundException({ code: 'PICKUP_NOT_FOUND', message: 'Saída não encontrada' });
+      await this.audit.log(tx, { action: 'petshop.pickup_undone', entity: 'appointment', entityId: appointmentId, data: { pickedUpAt: row.pickedUpAt.toISOString() } });
+    });
+  }
+
+  /** Horário marcado sem pet: escolhe depois, pelo quadro, antes de concluir (é o que faz o aviso sair). */
+  setPet(appointmentId: string, petId: string) {
+    return this.tdb.run(async (tx) => {
+      const appointment = await this.appointmentOrFail(tx, appointmentId);
+      if (['done', 'no_show', 'cancelled'].includes(appointment.status)) throw new BadRequestException({ code: 'APPOINTMENT_CLOSED', message: 'Este horário já foi encerrado' });
+      const [pet] = await tx.select({ id: pets.id, name: pets.name, customerId: pets.customerId }).from(pets).where(eq(pets.id, petId));
+      if (!pet || pet.customerId !== appointment.customerId) throw new BadRequestException({ code: 'PET_NOT_FOUND', message: 'Este pet não é do cliente do horário' });
+      await tx.update(schAppointments).set({ subjectType: 'pet', subjectId: pet.id, subjectLabel: pet.name }).where(eq(schAppointments.id, appointmentId));
+      await this.audit.log(tx, { action: 'petshop.appointment_pet', entity: 'appointment', entityId: appointmentId, data: { petId } });
+      return { id: pet.id, name: pet.name };
+    });
+  }
+
+  private async appointmentOrFail(tx: Tx, id: string) {
+    const [row] = await tx.select().from(schAppointments).where(eq(schAppointments.id, id));
+    if (!row) throw new NotFoundException({ code: 'APPOINTMENT_NOT_FOUND', message: 'Horário não encontrado' });
+    return row;
   }
 
   /** Atendimento de um pet concluído: avisa o tutor que pode buscar. */
@@ -89,5 +160,40 @@ async function isActive(tx: Tx, key: string) {
   return !!row;
 }
 
-@Module({ imports: [NotificationsModule], providers: [PetshopService] })
+const rangeQuery = z.object({ from: z.coerce.date(), to: z.coerce.date() });
+const petBody = z.object({ petId: z.string().uuid('Escolha o pet') });
+
+@Controller('petshop')
+@ModuleRoute(MODULE)
+export class PetshopController {
+  constructor(private readonly petshop: PetshopService) {}
+
+  @Get('pickups')
+  @RequirePermission('shared.scheduling.read')
+  pickups(@Query(new ZodPipe(rangeQuery)) q: z.infer<typeof rangeQuery>) {
+    return this.petshop.pickups(q.from, q.to);
+  }
+
+  @Post('appointments/:id/pickup')
+  @RequirePermission('shared.scheduling.status')
+  pickup(@Param('id', ParseUUIDPipe) id: string) {
+    return this.petshop.registerPickup(id);
+  }
+
+  @Delete('appointments/:id/pickup')
+  @HttpCode(204)
+  @RequirePermission('shared.scheduling.status')
+  undoPickup(@Param('id', ParseUUIDPipe) id: string) {
+    return this.petshop.undoPickup(id);
+  }
+
+  @Post('appointments/:id/pet')
+  @HttpCode(200)
+  @RequireAnyPermission('shared.scheduling.write', 'shared.scheduling.status')
+  setPet(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(petBody)) body: z.infer<typeof petBody>) {
+    return this.petshop.setPet(id, body.petId);
+  }
+}
+
+@Module({ imports: [NotificationsModule], controllers: [PetshopController], providers: [PetshopService] })
 export class PetshopModule {}

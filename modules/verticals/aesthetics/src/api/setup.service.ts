@@ -26,7 +26,7 @@ import {
 } from '../contracts';
 import { aesConsentTemplates, aesLotUsages, aesProductLots, aesProducts, aesProfessionalCredentials } from '../db/schema';
 import type { AestheticsSettings } from '../manifest';
-import { LASER_ROOM, SPECIALTY_SERVICES, SPECIALTY_TEMPLATES } from './specialty-seeds';
+import { BASIC_LASER_SERVICE, LASER_ROOM, SPECIALTY_SERVICES, SPECIALTY_TEMPLATES } from './specialty-seeds';
 
 export const MODULE = 'aesthetics';
 const { schResources, schServices, schServiceResources } = schedulingSchema;
@@ -111,7 +111,7 @@ export class SpecialtySetupService implements OnModuleInit {
       created.push(
         ...(await tx
           .insert(schServices)
-          .values(fresh.map((s) => ({ tenantId, name: s.name, category: s.category, durationMin: s.durationMin, bufferMin: s.bufferMin ?? 0, price: s.price, online: s.online ?? true, description: s.description ?? null, requiresRoom: s.requiresRoom ?? false })))
+          .values(fresh.map((s) => ({ tenantId, name: s.name, category: s.category, durationMin: s.durationMin, bufferMin: s.bufferMin ?? 0, price: s.price, online: s.online ?? false, description: s.description ?? null, requiresRoom: s.requiresRoom ?? false })))
           .returning({ id: schServices.id, name: schServices.name, requiresRoom: schServices.requiresRoom })),
       );
     }
@@ -125,14 +125,28 @@ export class SpecialtySetupService implements OnModuleInit {
     if (missing.length) await tx.insert(aesConsentTemplates).values(missing.map((t) => ({ tenantId, key: t.key, specialty: t.specialty, title: t.title, body: t.body })));
   }
 
-  /** Equipamento de laser na agenda, ligado aos serviços de laser criados agora (se ainda não existir). */
+  /**
+   * Equipamento de laser na agenda, ligado aos serviços de laser criados agora. Na primeira vez (o
+   * equipamento nasce aqui), a depilação dos exemplos básicos passa a exigir o aparelho; depois, o que
+   * a clínica mudar à mão nesse serviço fica como está.
+   */
   private async ensureLaserRoom(tx: Tx, tenantId: string, serviceIds: string[]) {
     const [room] = await tx
       .select({ id: schResources.id })
       .from(schResources)
       .where(and(eq(schResources.tenantId, tenantId), eq(schResources.kind, 'room'), eq(schResources.name, LASER_ROOM.name)));
     const roomId = room?.id ?? (await tx.insert(schResources).values({ tenantId, name: LASER_ROOM.name, kind: 'room', color: LASER_ROOM.color }).returning({ id: schResources.id }))[0]!.id;
-    if (serviceIds.length) await tx.insert(schServiceResources).values(serviceIds.map((serviceId) => ({ tenantId, serviceId, resourceId: roomId }))).onConflictDoNothing();
+    const ids = [...serviceIds];
+    if (!room) {
+      const upgraded = await tx
+        .update(schServices)
+        .set({ requiresRoom: true })
+        .where(and(eq(schServices.tenantId, tenantId), sql`lower(${schServices.name}) = lower(${BASIC_LASER_SERVICE})`))
+        .returning({ id: schServices.id });
+      ids.push(...upgraded.map((s) => s.id));
+      if (upgraded.length) await this.audit.log(tx, { action: 'aesthetics.laser_service_upgraded', entity: 'sch_service', entityId: upgraded[0]!.id, data: { requiresRoom: true, roomId } });
+    }
+    if (ids.length) await tx.insert(schServiceResources).values(ids.map((serviceId) => ({ tenantId, serviceId, resourceId: roomId }))).onConflictDoNothing();
   }
 
   // ---- Registro no conselho ------------------------------------------------------------------
@@ -322,6 +336,7 @@ export class SpecialtySetupService implements OnModuleInit {
           usedOn: u.usedOn,
           specialty: u.specialty as SpecialtyKey,
           entryId: u.entryId,
+          reversalOf: u.reversalOf,
         })),
       };
     });

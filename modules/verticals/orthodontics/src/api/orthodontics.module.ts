@@ -4,9 +4,9 @@ import type { Tx } from '@all/db';
 import { MedicalRecordsModule, MedicalRecordsService } from '@all/medical-records';
 import { ModuleRoute, RequirePermission, requestContext } from '@all/module-sdk';
 import { SchedulingModule, SchedulingService } from '@all/scheduling';
-import { schServices } from '@all/scheduling/schema';
-import { BadRequestException, Body, Controller, Get, Injectable, Module, NotFoundException, OnModuleInit, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
-import { and, desc, eq } from 'drizzle-orm';
+import { schAppointments, schAppointmentServices, schServices } from '@all/scheduling/schema';
+import { BadRequestException, Body, ConflictException, Controller, Get, Injectable, Module, NotFoundException, OnModuleInit, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
+import { and, desc, eq, gt, ne, notInArray } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   applianceLabel,
@@ -14,6 +14,7 @@ import {
   COVERED_CATEGORY,
   extendInput,
   finishInput,
+  INSTALLATION_CATEGORY,
   orthoForms,
   treatmentInput,
   type Installment,
@@ -31,7 +32,7 @@ const SOURCE_FEE = 'ortho_entry_fee';
 const SERVICES = [
   { name: 'Avaliação ortodôntica', category: 'Avaliação', durationMin: 40, price: '100.00' },
   { name: 'Documentação ortodôntica', category: 'Avaliação', durationMin: 30, price: '250.00' },
-  { name: 'Instalação de aparelho', category: 'Tratamento', durationMin: 90, price: '500.00' },
+  { name: 'Instalação de aparelho', category: INSTALLATION_CATEGORY, durationMin: 90, price: '500.00' },
   { name: 'Manutenção mensal', category: COVERED_CATEGORY, durationMin: 30, price: '180.00' },
   { name: 'Colagem de bráquete', category: 'Tratamento', durationMin: 20, price: '60.00' },
   { name: 'Remoção de aparelho', category: 'Tratamento', durationMin: 60, price: '300.00' },
@@ -40,6 +41,7 @@ const SERVICES = [
 
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 const brDate = (iso: string) => iso.split('-').reverse().join('/');
+const INSTALLATION_LABEL = 'na taxa do tratamento';
 /** " em 10/10/2026" quando o encerramento é registrado com data passada. */
 const onDay = (iso: string) => (iso === today() ? '' : ` em ${brDate(iso)}`);
 
@@ -66,18 +68,37 @@ export class OrthodonticsService implements OnModuleInit {
   onModuleInit() {
     this.hooks.register(MODULE, { onEnable: (tx, tenantId) => this.seed(tx, tenantId) });
     for (const form of orthoForms) this.records.registerForm(form);
-    // Manutenção de quem está em tratamento já é paga na mensalidade: R$ 0 na agenda.
+    // Manutenção de quem está em tratamento já é paga na mensalidade; a instalação, na taxa de
+    // entrada do tratamento (uma vez só): R$ 0 na agenda, para não cobrar duas vezes.
     this.scheduling.registerPricer({
       moduleKey: MODULE,
       price: async (tx, ctx) => {
         const [service] = await tx.select({ category: schServices.category }).from(schServices).where(eq(schServices.id, ctx.serviceId));
-        if (service?.category !== COVERED_CATEGORY) return null;
+        if (service?.category !== COVERED_CATEGORY && service?.category !== INSTALLATION_CATEGORY) return null;
         const [active] = await tx
-          .select({ id: orthoTreatments.id })
+          .select({ id: orthoTreatments.id, entryFee: orthoTreatments.entryFee })
           .from(orthoTreatments)
           .where(and(eq(orthoTreatments.customerId, ctx.customerId), eq(orthoTreatments.status, 'active')))
           .limit(1);
-        return active ? { price: 0, label: 'no tratamento' } : null;
+        if (!active) return null;
+        if (service.category === COVERED_CATEGORY) return { price: 0, label: 'no tratamento' };
+        if (toCents(active.entryFee) <= 0) return null;
+        // A taxa cobre uma instalação: uma nova (ex.: recolagem completa) volta a ter preço.
+        const [covered] = await tx
+          .select({ id: schAppointmentServices.id })
+          .from(schAppointmentServices)
+          .innerJoin(schAppointments, eq(schAppointments.id, schAppointmentServices.appointmentId))
+          .where(
+            and(
+              eq(schAppointments.customerId, ctx.customerId),
+              eq(schAppointmentServices.serviceId, ctx.serviceId),
+              eq(schAppointmentServices.covered, true),
+              ne(schAppointments.id, ctx.appointmentId),
+              notInArray(schAppointments.status, ['cancelled', 'no_show']),
+            ),
+          )
+          .limit(1);
+        return covered ? null : { price: 0, label: INSTALLATION_LABEL };
       },
     });
   }
@@ -106,6 +127,14 @@ export class OrthodonticsService implements OnModuleInit {
         .where(and(eq(orthoTreatments.customerId, customer.id), eq(orthoTreatments.status, 'active')))
         .limit(1);
       if (running) throw badRequest('TREATMENT_ACTIVE', 'Este paciente já tem um tratamento em andamento');
+
+      const charged = input.entryFee > 0 ? await this.coverInstallations(tx, customer.id) : [];
+      if (charged.length && !input.confirmInstallationCharged) {
+        throw new ConflictException({
+          code: 'INSTALLATION_ALREADY_CHARGED',
+          message: `A instalação já foi cobrada na agenda (${charged.map((c) => `${brDate(c.date)}, R$ ${c.price.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`).join('; ')}). Tire a instalação da taxa ou confirme para lançar assim mesmo.`,
+        });
+      }
 
       const [row] = await tx
         .insert(orthoTreatments)
@@ -144,7 +173,7 @@ export class OrthodonticsService implements OnModuleInit {
         entity: 'ortho_treatment',
         entityId: row!.id,
       });
-      await this.audit.log(tx, { action: 'orthodontics.treatment.started', entity: 'ortho_treatment', entityId: row!.id });
+      await this.audit.log(tx, { action: 'orthodontics.treatment.started', entity: 'ortho_treatment', entityId: row!.id, data: charged.length ? { installationAlreadyCharged: charged } : undefined });
       return this.detailInTx(tx, row!.id);
     });
   }
@@ -183,6 +212,33 @@ export class OrthodonticsService implements OnModuleInit {
       await this.audit.log(tx, { action: 'orthodontics.treatment.cancelled', entity: 'ortho_treatment', entityId: id, data: { reason, cancelledOn } });
       return this.detailInTx(tx, id);
     });
+  }
+
+  /**
+   * A taxa vai cobrir a instalação: horário em aberto e sem pagamento fica sem custo. Devolve o que
+   * já foi cobrado (concluído ou pago) e não dá mais para zerar aqui.
+   */
+  private async coverInstallations(tx: Tx, customerId: string) {
+    const lines = await tx
+      .select({ appointmentId: schAppointments.id, serviceId: schAppointmentServices.serviceId, price: schAppointmentServices.price, startsAt: schAppointments.startsAt })
+      .from(schAppointmentServices)
+      .innerJoin(schAppointments, eq(schAppointments.id, schAppointmentServices.appointmentId))
+      .innerJoin(schServices, eq(schServices.id, schAppointmentServices.serviceId))
+      .where(
+        and(
+          eq(schAppointments.customerId, customerId),
+          eq(schServices.category, INSTALLATION_CATEGORY),
+          gt(schAppointmentServices.price, '0'),
+          notInArray(schAppointments.status, ['cancelled', 'no_show']),
+        ),
+      );
+    const charged: { date: string; price: number }[] = [];
+    for (const l of lines) {
+      if (!(await this.scheduling.coverServiceInTx(tx, l.appointmentId, l.serviceId!, INSTALLATION_LABEL))) {
+        charged.push({ date: new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(l.startsAt), price: Number(l.price) });
+      }
+    }
+    return charged;
   }
 
   private async addInstallments(tx: Tx, t: TreatmentRow, from: number, count: number) {

@@ -3,7 +3,7 @@ import { Alert, Card, EmptyState, PageHeader, Select, Spinner, Table, Td, Th } f
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link } from 'react-router';
-import type { LaundryReport } from '../contracts';
+import { formatServiceQuantity, type LaundryReport } from '../contracts';
 
 const periods = [
   { key: 'today', label: 'Hoje', days: 0 },
@@ -99,8 +99,8 @@ function Report({ r }: { r: LaundryReport }) {
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
-          <h2 className="px-4 pt-4 font-medium">Receita por serviço</h2>
-          <p className="px-4 text-xs text-fg-muted">Ordens abertas no período, exceto canceladas.</p>
+          <h2 className="px-4 pt-4 font-medium">Valor contratado por serviço</h2>
+          <p className="px-4 text-xs text-fg-muted">Soma dos itens das ordens abertas no período, exceto canceladas, antes do desconto da ordem. Não é o que entrou no caixa: para isso, use o Financeiro.</p>
           {r.byService.length === 0 ? (
             <EmptyState title="Nenhuma ordem no período" />
           ) : (
@@ -108,16 +108,16 @@ function Report({ r }: { r: LaundryReport }) {
               <thead>
                 <tr>
                   <Th>Serviço</Th>
-                  <Th className="text-right">Qtd.</Th>
-                  <Th className="text-right">Receita</Th>
+                  <Th className="text-right">Quantidade</Th>
+                  <Th className="text-right">Contratado</Th>
                 </tr>
               </thead>
               <tbody>
                 {r.byService.map((s) => (
-                  <tr key={s.serviceName}>
+                  <tr key={`${s.serviceName}-${s.unit}`}>
                     <Td>{s.serviceName}</Td>
-                    <Td className="text-right tabular-nums">{s.quantity.toLocaleString('pt-BR')}</Td>
-                    <Td className="text-right tabular-nums">{formatMoney(s.revenue)}</Td>
+                    <Td className="whitespace-nowrap text-right tabular-nums">{formatServiceQuantity(s.quantity, s.unit)}</Td>
+                    <Td className="text-right tabular-nums">{formatMoney(s.contracted)}</Td>
                   </tr>
                 ))}
               </tbody>

@@ -6,6 +6,7 @@ import { useNavigate, useParams } from 'react-router';
 import { salePaymentLabel, type CashRegister, type RegisterSession, type RegisterSessionSummary, type SalesSettings } from '../contracts';
 import { brl, registersKey, salesKey, useRegisters, useRegisterSession, useSalesSettings } from './hooks';
 import { backdated, ClosingReport, DifferenceBadge, SessionActions, SessionDetails, toLocalInput } from './registers';
+import { PosSettingsCard } from './SalesSettingsCards';
 
 const daysAgo = (n: number) => {
   const d = new Date();
@@ -132,6 +133,7 @@ export function RegistersPage() {
           </Table>
         )}
       </Card>
+      <PosSettingsCard />
       {managing && registers.data && <ManageRegistersModal registers={registers.data.registers} onClose={() => setManaging(false)} />}
       {backfilling && registers.data && (
         <BackfillModal registers={registers.data.registers} onClose={() => setBackfilling(false)} onOpened={(s) => navigate(`/caixas/${s.id}`)} />

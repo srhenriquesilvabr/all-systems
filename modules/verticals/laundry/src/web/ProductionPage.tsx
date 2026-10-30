@@ -1,6 +1,6 @@
 import { api, ApiError, formatDateTime } from '@all/module-sdk/web';
 import { ordersKey } from '@all/service-orders/web';
-import { Alert, Badge, Button, Card, cn, EmptyState, Input, PageHeader, Select, Spinner } from '@all/ui';
+import { Alert, Badge, Button, Card, Checkbox, cn, EmptyState, Input, PageHeader, Select, Spinner } from '@all/ui';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
@@ -11,7 +11,9 @@ const next = (s: PieceStatus): PieceStatus | undefined => pieceStatuses[pieceSta
 
 export function ProductionPage() {
   const queryClient = useQueryClient();
-  const board = useProduction();
+  // Ordem pronta sai do quadro; a opção traz as que ainda estão na loja, para dar retrabalho por aqui.
+  const [showReady, setShowReady] = useState(false);
+  const board = useProduction(showReady);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkTarget, setBulkTarget] = useState<PieceStatus>('washing');
 
@@ -36,6 +38,9 @@ export function ProductionPage() {
     <>
       <PageHeader title="Produção" description="Peças das ordens em andamento, das mais urgentes para as menos. Atualiza sozinho a cada 30 segundos." />
       <TagReader onMoved={() => queryClient.invalidateQueries({ queryKey: laundryKey })} />
+      <div className="mb-4">
+        <Checkbox label="Mostrar também as ordens prontas que ainda estão na loja (para retrabalho)" checked={showReady} onChange={(e) => setShowReady(e.target.checked)} />
+      </div>
 
       {selected.size > 0 && (
         <div className="sticky top-0 z-10 mb-4 flex flex-wrap items-center gap-2 rounded-md border border-brand-200 bg-brand-50 p-3 text-sm">
@@ -137,10 +142,21 @@ function PieceCard({
           </div>
         </div>
       </div>
-      {to && (
+      {to ? (
         <Button size="sm" variant="secondary" className="mt-2 w-full" disabled={busy} onClick={() => onAdvance(to)}>
           → {pieceStatusLabel[to]}
         </Button>
+      ) : (
+        <Select aria-label={`Voltar a peça ${piece.tagCode} para retrabalho`} className="mt-2 h-8 w-full" value="" disabled={busy} onChange={(e) => e.target.value && onAdvance(e.target.value as PieceStatus)}>
+          <option value="">Voltar para retrabalho…</option>
+          {pieceStatuses
+            .filter((s) => s !== 'ready')
+            .map((s) => (
+              <option key={s} value={s}>
+                {pieceStatusLabel[s]}
+              </option>
+            ))}
+        </Select>
       )}
     </Card>
   );

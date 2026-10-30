@@ -78,7 +78,7 @@ export const manual: ManualGuide = {
           ],
         },
         { text: 'Para manutenções fixas, marque Repetir, escolha A cada 2 semanas ou Todo mês (mesmo dia), e diga quando Termina. As datas que não couberem aparecem no final.' },
-        { warn: 'O campo Outro horário aceita qualquer hora. Confira você mesmo o expediente e os bloqueios do dentista.' },
+        { warn: 'O campo Outro horário aceita outra hora, mas o sistema recusa se cair fora do expediente ou numa folga. Para uma exceção real, quem configura a agenda clica em Marcar mesmo assim, e isso fica registrado.' },
       ],
       technical: [
         {
@@ -98,7 +98,7 @@ export const manual: ManualGuide = {
       simple: [
         { text: 'Quem está em tratamento já paga a manutenção na mensalidade. Por isso, a manutenção sai com valor zero na agenda.' },
         { list: ['Paciente com tratamento em andamento: Manutenção mensal sai por R$ 0, com o texto "no tratamento".', 'Paciente sem tratamento ativo: paga o preço normal do serviço.', 'Outros serviços, como Colagem de bráquete e Contenção: pagam o preço normal, mesmo em tratamento.'] },
-        { warn: 'A taxa de documentação e instalação do tratamento não se liga aos serviços da agenda. Se você marcar Instalação de aparelho, o preço do serviço também é cobrado ao concluir. Combine na clínica como fazer, para não cobrar duas vezes.' },
+        { text: 'Tratamento com Documentação e instalação preenchida: o serviço Instalação de aparelho sai por R$ 0 na agenda, com o texto "na taxa do tratamento". Assim não se cobra duas vezes. Vale para uma instalação; marcar outra volta a cobrar o preço do serviço.' },
       ],
       technical: [
         {
@@ -128,12 +128,13 @@ export const manual: ManualGuide = {
           ],
         },
         { warn: 'Concluído, Faltou e Cancelado não voltam atrás.' },
-        { warn: 'Não dá para trocar o dentista ou o serviço de um horário já marcado. Cancele e marque de novo.' },
+        { warn: 'Depois de Concluído, Faltou ou Cancelado, o horário não muda mais. Para trocar dentista, serviço, preço ou desconto de um horário aberto, clique em Alterar.' },
       ],
       technical: [
         {
           list: [
-            'Transições: Agendado e Confirmado vão para Chegou, Em atendimento, Concluído, Faltou ou Cancelado (Agendado também para Confirmado). Chegou vai para Em atendimento, Concluído ou Cancelado. Em atendimento só para Concluído, embora a tela mostre Cancelar horário.',
+            'Transições: Agendado e Confirmado vão para Chegou, Em atendimento, Concluído, Faltou ou Cancelado (Agendado também para Confirmado). Chegou vai para Em atendimento, Concluído ou Cancelado. Em atendimento só para Concluído.',
+            'Alterar vale até concluir e pede shared.scheduling.write; mudar preço ou desconto pede também shared.scheduling.payments. O início não muda, e o fim acompanha a duração. Valem as mesmas conferências da marcação (quem faz, expediente, folga, sala). O total não pode ficar abaixo do que já foi pago, e linha coberta por pacote ou tratamento não muda de valor. Trocar profissional ou serviço avisa o cliente.',
             'Permissões: shared.scheduling.status para a situação e shared.scheduling.write para remarcar e cancelar.',
             'Remarcar só em Agendado e Confirmado. O horário volta para Agendado e o lembrete é reenviado.',
             'Faltou e Cancelado liberam o horário. A aba Agendamentos do paciente guarda o histórico.',
@@ -185,12 +186,13 @@ export const manual: ManualGuide = {
             'Busque o paciente.',
             'Escolha o Aparelho e confira a data de Início.',
             'Preencha Duração prevista (meses), Dia do vencimento e Mensalidade (R$).',
-            'Em Documentação e instalação (R$), informe a taxa inicial, se houver.',
+            'Em Documentação e instalação (R$), informe a taxa inicial, se houver. Instalação já marcada e sem pagamento fica sem custo.',
             'Clique em Iniciar. A janela mostra as parcelas criadas.',
           ],
         },
         { tip: 'Exemplo: início em 15/03, vencimento dia 10 e 24 meses. A taxa vence em 15/03 e a primeira mensalidade em 10/04.' },
         { warn: 'Confira os valores antes de iniciar. Não há como editar o valor da mensalidade depois.' },
+        { warn: 'Se a instalação já foi cobrada na agenda (concluída ou paga), o sistema avisa e só lança a taxa se você clicar em Lançar a taxa mesmo assim. O vínculo é pela categoria Instalação do serviço: não troque essa categoria.' },
       ],
       technical: [
         {
@@ -284,7 +286,8 @@ export const manual: ManualGuide = {
         {
           list: [
             'Permissão: shared.scheduling.payments. Formas: Dinheiro, Pix, Cartão de crédito, Cartão de débito, Transferência, Outro.',
-            'Vira receita paga, com a data de hoje. Valor acima do saldo é recusado.',
+            'Vira receita paga, na data informada (padrão hoje; futuro é recusado). Valor acima do saldo é recusado.',
+            'Com Caixa escolhido e sessão aberta, o recebimento entra na conferência do fechamento como "Recebimento de atendimento". No financeiro continua um lançamento só. Dinheiro no caixa vai para a conta Caixa. Caixa fechado recusa o pagamento de hoje; com data passada, a tela não oferece caixa.',
             'Ao concluir, o saldo vira "a receber" no dia do atendimento e só se resolve pela agenda. Faltou ou Cancelado zera o saldo. Valor já pago não é devolvido automaticamente.',
             'Com o módulo de Pix ativo, é possível gerar QR Code. A confirmação continua manual.',
           ],
@@ -300,19 +303,19 @@ export const manual: ManualGuide = {
         {
           steps: [
             'Abra Serviços da agenda e desça até Lembretes e agendamento online.',
-            'Marque Receber agendamentos online.',
+            'Marque Receber agendamentos online e marque, em Serviços liberados no link, o que a paciente pode marcar.',
             'Preencha Antecedência mínima (horas) e Até quantos dias à frente.',
             'Clique em Salvar configurações, depois em Copiar, e divulgue o link.',
           ],
         },
-        { warn: 'Todos os serviços vêm liberados para o link. Antes de divulgar, edite os que só o dentista deve marcar, como Instalação de aparelho e Remoção de aparelho, e desmarque Pode ser marcado online pelo cliente.' },
+        { warn: 'Serviço novo vem desligado do link. Em Serviços liberados no link, marque só o que a paciente pode marcar sozinha. Instalação de aparelho e Remoção de aparelho costumam ficar de fora.' },
       ],
       technical: [
         {
           list: [
             'Paciente reconhecido pelo celular. Sem cadastro, um novo é criado.',
             'O horário é conferido de novo ao confirmar. O preço segue as mesmas regras, inclusive a manutenção sem custo.',
-            'Até 5 serviços por marcação e 5 marcações por IP a cada 10 minutos. A página mostra no máximo os próximos 14 dias.',
+            'Até 5 serviços por marcação e 5 marcações por IP a cada 10 minutos. A página mostra os dias até o limite de Até quantos dias à frente (até 180), com um campo de data para ir direto.',
             'Salvar exige core.access.settings. Sem pagamento pelo link.',
           ],
         },

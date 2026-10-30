@@ -159,11 +159,14 @@ export function Transitions({
   workflow,
   onChanged,
   hide = [],
+  cancelHint,
 }: {
   order: OrderDetail;
   workflow: ServiceOrderWorkflow;
   onChanged?: () => void;
   hide?: string[];
+  /** Aviso extra na janela de cancelamento (o que mais a vertical desfaz junto). */
+  cancelHint?: string;
 }) {
   const canChange = useCan('shared.service-orders.status');
   const queryClient = useQueryClient();
@@ -217,6 +220,7 @@ export function Transitions({
         <div className="space-y-3">
           {move.error && <Alert>{move.error instanceof ApiError ? move.error.message : 'Erro ao cancelar'}</Alert>}
           <p className="text-sm text-fg-muted">O valor em aberto sai do contas a receber. Pagamentos já feitos continuam registrados: se houver devolução, lance no financeiro.</p>
+          {cancelHint && <p className="text-sm text-fg-muted">{cancelHint}</p>}
           <Field label="Motivo">{(id) => <Textarea id={id} value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />}</Field>
         </div>
       </Modal>

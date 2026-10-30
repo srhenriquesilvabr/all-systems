@@ -1,11 +1,11 @@
-import { AuditService, centsToDecimal, centsToNumber, CustomersService, FilesService, FinanceService, ModuleSettingsService, TenantDb, toCents, type UploadedFile } from '@all/core';
-import { customers, memberships, users } from '@all/core/schema';
+import { AuditService, centsToDecimal, centsToNumber, CustomersService, FilesService, FinanceService, ModuleSettingsService, OWNER_ROLE, TenantDb, toCents, type UploadedFile } from '@all/core';
+import { customers, membershipRoles, memberships, rolePermissions, roles, users } from '@all/core/schema';
 import type { Tx } from '@all/db';
 import { requestContext } from '@all/module-sdk';
 import { NotificationsService } from '@all/notifications';
 import { ServiceOrdersService } from '@all/service-orders';
 import { soOrders } from '@all/service-orders/schema';
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, eq, gte, inArray, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import {
   feeMethodLabel,
@@ -35,6 +35,9 @@ const FEE_SOURCE = 'laundry_logistics';
 /** Dono das fotos do comprovante de entrega em `files`. */
 const PHOTO_OWNER = 'laundry_logistics_job';
 const MANAGE = 'laundry.logistics.manage';
+const DRIVE = 'laundry.logistics.drive';
+const RECEIVE = 'laundry.logistics.receive';
+const ORDER_PAYMENTS = 'shared.service-orders.payments';
 /** Status da ordem em que ainda dá para agendar a entrega (antes de sair para entrega). */
 const ORDER_OPEN = ['received', 'in_process', 'ready'];
 
@@ -89,6 +92,31 @@ export class LaundryLogisticsService {
   async defaults(): Promise<{ pickupFee: number; deliveryFee: number }> {
     const s = await this.tdb.run((tx) => this.settings.getInTx<LaundrySettings>(tx, 'laundry'));
     return { pickupFee: s.pickupFee, deliveryFee: s.deliveryFee };
+  }
+
+  /** Quem pode ser escolhido como motorista: quem tem a permissão de dirigir (ou é o dono da empresa). */
+  drivers(): Promise<{ id: string; name: string }[]> {
+    return this.tdb.run((tx) => this.driversQuery(tx));
+  }
+
+  private driversQuery(tx: Tx, onlyUserId?: string) {
+    const { tenantId } = requestContext.requireTenant();
+    return tx
+      .selectDistinct({ id: users.id, name: users.name })
+      .from(memberships)
+      .innerJoin(users, eq(users.id, memberships.userId))
+      .innerJoin(membershipRoles, eq(membershipRoles.membershipId, memberships.id))
+      .innerJoin(roles, eq(roles.id, membershipRoles.roleId))
+      .leftJoin(rolePermissions, eq(rolePermissions.roleId, roles.id))
+      .where(
+        and(
+          eq(memberships.tenantId, tenantId),
+          eq(memberships.status, 'active'),
+          or(eq(roles.key, OWNER_ROLE), eq(rolePermissions.permissionKey, DRIVE)),
+          onlyUserId ? eq(users.id, onlyUserId) : undefined,
+        ),
+      )
+      .orderBy(asc(users.name));
   }
 
   /** Quadro do escritório. Sem filtro de data/ordem/cliente/status, mostra o dia de hoje. */
@@ -159,7 +187,8 @@ export class LaundryLogisticsService {
       const patch: Partial<typeof laundryLogisticsJobs.$inferInsert> = {};
 
       if (input.driverUserId !== undefined) {
-        if (input.driverUserId) await this.assertMember(tx, input.driverUserId);
+        // Quem já estava na tarefa não é conferido de novo: salvar outro campo não pode tirar o motorista.
+        if (input.driverUserId && input.driverUserId !== job.driverUserId) await this.assertDriver(tx, input.driverUserId);
         patch.driverUserId = input.driverUserId;
       }
       if (input.address !== undefined) patch.address = this.assertAddress(input.address);
@@ -247,10 +276,14 @@ export class LaundryLogisticsService {
         if (!input.receiverName) throw badRequest('RECEIVER_REQUIRED', 'Informe o nome de quem recebeu');
         const order = await this.laundryOrder(tx, job.orderId!, true);
         this.assertAfterOrder(order, at);
-        if (order.status === 'ready' || order.status === 'out_for_delivery') await this.orders.transitionInTx(tx, order.id, 'delivered', null, { at, notify: !isLate(at) });
-        else if (order.status !== 'delivered') throw badRequest('ORDER_NOT_READY', `A ordem nº ${order.number} não está pronta para entrega`);
+        if (order.status !== 'ready' && order.status !== 'out_for_delivery' && order.status !== 'delivered') {
+          throw badRequest('ORDER_NOT_READY', `A ordem nº ${order.number} não está pronta para entrega`);
+        }
+        if (input.balancePayment) await this.receiveBalance(tx, order.id, input.balancePayment, at);
+        if (order.status !== 'delivered') await this.orders.transitionInTx(tx, order.id, 'delivered', null, { at, notify: !isLate(at) });
         title = `Entrega da ordem nº ${order.number} concluída (recebido por ${input.receiverName})`;
       } else {
+        if (input.balancePayment) throw badRequest('NOT_A_DELIVERY', 'Só a entrega recebe o saldo da ordem');
         if (!input.itemsCount) throw badRequest('ITEMS_REQUIRED', 'Informe quantas peças foram coletadas');
         title = `Coleta concluída: ${input.itemsCount} peça(s)`;
       }
@@ -293,11 +326,11 @@ export class LaundryLogisticsService {
       if (job.status !== 'scheduled' && job.status !== 'en_route') throw badRequest('INVALID_JOB_STATUS', 'Esta coleta/entrega não está em aberto');
       const at = upToNow(input.occurredAt);
       this.assertMoment(job, at, !!input.occurredAt);
-      await this.returnOrderToShop(tx, job, `Entrega não realizada: ${reason}`, at);
       await tx
         .update(laundryLogisticsJobs)
         .set({ status: 'failed', failReason: reason, failedAt: at, attempts: job.attempts + 1 })
         .where(eq(laundryLogisticsJobs.id, id));
+      await this.returnOrderToShop(tx, job, `Entrega não realizada: ${reason}`, at);
       await this.customers.addTimeline(tx, {
         customerId: job.customerId,
         moduleKey: 'laundry',
@@ -315,16 +348,43 @@ export class LaundryLogisticsService {
     return this.tdb.run(async (tx) => {
       const job = await this.findForAction(tx, id, true);
       if (job.status === 'done' || job.status === 'cancelled') throw badRequest('INVALID_JOB_STATUS', 'Esta coleta/entrega já foi encerrada');
-      await this.returnOrderToShop(tx, job, `Entrega cancelada${reason ? `: ${reason}` : ''}`);
       const [updated] = await tx
         .update(laundryLogisticsJobs)
         .set({ status: 'cancelled', cancelReason: reason ?? null })
         .where(eq(laundryLogisticsJobs.id, id))
         .returning();
+      await this.returnOrderToShop(tx, job, `Entrega cancelada${reason ? `: ${reason}` : ''}`);
       await this.syncFee(tx, updated!);
       await this.audit.log(tx, { action: 'laundry.logistics.cancelled', entity: 'laundry_logistics_job', entityId: id, data: { reason } });
       return this.jobOrFail(tx, id);
     });
+  }
+
+  /** Ordem cancelada: a entrega em aberto cai junto. A taxa ainda não recebida sai do "a receber"; a recebida fica. */
+  async cancelForOrderInTx(tx: Tx, orderId: string, reason: string | null) {
+    const t = laundryLogisticsJobs;
+    const open = await tx
+      .select()
+      .from(t)
+      .where(and(eq(t.orderId, orderId), eq(t.kind, 'delivery'), inArray(t.status, ['scheduled', 'en_route', 'failed'])))
+      .for('update');
+    for (const job of open) {
+      const [updated] = await tx
+        .update(t)
+        .set({ status: 'cancelled', cancelReason: `Ordem cancelada${reason ? `: ${reason}` : ''}`.slice(0, 500) })
+        .where(eq(t.id, job.id))
+        .returning();
+      await this.syncFee(tx, updated!);
+      await this.customers.addTimeline(tx, {
+        customerId: job.customerId,
+        moduleKey: 'laundry',
+        type: 'laundry.delivery.cancelled',
+        title: 'Entrega cancelada junto com a ordem',
+        entity: 'laundry_logistics_job',
+        entityId: job.id,
+      });
+      await this.audit.log(tx, { action: 'laundry.logistics.cancelled', entity: 'laundry_logistics_job', entityId: job.id, data: { reason, byOrder: orderId } });
+    }
   }
 
   /** Liga uma coleta concluída à ordem aberta depois no balcão. */
@@ -397,7 +457,7 @@ export class LaundryLogisticsService {
     const past = input.date < spToday();
     const w = resolveWindow(input);
     if ('error' in w) throw badRequest('INVALID_WINDOW', w.error);
-    if (input.driverUserId) await this.assertMember(tx, input.driverUserId);
+    if (input.driverUserId) await this.assertDriver(tx, input.driverUserId);
 
     const address = this.assertAddress(input.address ?? (customer.address as JobAddress | null) ?? {});
     const settings = await this.settings.getInTx<LaundrySettings>(tx, 'laundry');
@@ -489,6 +549,20 @@ export class LaundryLogisticsService {
     });
   }
 
+  /**
+   * O motorista recebeu o saldo da ordem na entrega: vira um pagamento da ordem (o "a receber" dela
+   * acompanha), na data da conclusão e na conta de caixa padrão. Passar do saldo é recusado.
+   */
+  private async receiveBalance(tx: Tx, orderId: string, payment: NonNullable<CompleteJobInput['balancePayment']>, at: Date) {
+    const { permissions } = requestContext.require();
+    if (!permissions?.has(RECEIVE) && !permissions?.has(ORDER_PAYMENTS)) {
+      throw new ForbiddenException({ code: 'MISSING_PERMISSION', message: 'Você não tem permissão para receber o saldo da ordem', missing: [RECEIVE] });
+    }
+    const accountId = await this.finance.defaultAccountId(tx);
+    if (!accountId) throw badRequest('NO_ACCOUNT', 'Cadastre uma conta (caixa) no financeiro para registrar o pagamento recebido');
+    await this.orders.addPaymentInTx(tx, orderId, { amount: payment.amount, method: payment.method, accountId, paidAt: spDay(at) });
+  }
+
   private async feeDescription(tx: Tx, job: JobRow) {
     if (job.kind === 'pickup') return `Taxa de coleta (${dayFmt.format(dayAsDate(job.date))})`;
     const [order] = await tx.select({ number: soOrders.number }).from(soOrders).where(eq(soOrders.id, job.orderId!));
@@ -537,13 +611,16 @@ export class LaundryLogisticsService {
     return order;
   }
 
-  private async assertMember(tx: Tx, userId: string) {
+  private async assertDriver(tx: Tx, userId: string) {
+    const [driver] = await this.driversQuery(tx, userId);
+    if (driver) return;
     const { tenantId } = requestContext.require();
     const [member] = await tx
       .select({ id: memberships.id })
       .from(memberships)
       .where(and(eq(memberships.tenantId, tenantId), eq(memberships.userId, userId), eq(memberships.status, 'active')));
     if (!member) throw badRequest('DRIVER_NOT_FOUND', 'Motorista não encontrado na equipe');
+    throw badRequest('DRIVER_NOT_ALLOWED', 'Esta pessoa não tem a permissão de fazer coletas e entregas e não veria a tarefa em Minhas rotas. Ajuste o papel dela em Configurações, Usuários.');
   }
 
   private assertAddress(address: JobAddress): JobAddress {

@@ -55,7 +55,10 @@ export const accessManifest = defineModule({
     { key: 'core.access.manage', label: 'Criar e editar papéis' },
     { key: 'core.access.settings', label: 'Configurar os módulos contratados (ex.: chave Pix)' },
   ],
-  menu: [{ label: 'Papéis', path: '/configuracoes/papeis', icon: 'shield', permission: 'core.access.read', group: 'Configurações' }],
+  menu: [
+    { label: 'Papéis', path: '/configuracoes/papeis', icon: 'shield', permission: 'core.access.read', group: 'Configurações' },
+    { label: 'Módulos contratados', path: '/configuracoes/modulos', icon: 'list', permission: 'core.access.settings', group: 'Configurações' },
+  ],
 });
 
 export const auditManifest = defineModule({

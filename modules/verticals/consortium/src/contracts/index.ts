@@ -73,7 +73,7 @@ export interface Quota {
   id: string;
   number: number;
   customer: { id: string; name: string; phone: string | null };
-  plan: { id: string; name: string; institution: string; creditValue: number; termMonths: number; installment: number; assetType: Plan['assetType'] };
+  plan: { id: string; connectionId: string; name: string; institution: string; creditValue: number; termMonths: number; installment: number; assetType: Plan['assetType'] };
   status: QuotaStatus;
   statusMessage: string | null;
   groupCode: string | null;
@@ -94,9 +94,28 @@ export interface Quota {
   createdAt: string;
 }
 
+/**
+ * Chave de comparação de código de grupo e de número de cota: sem espaços, em maiúsculas e sem zeros
+ * à esquerda ("012" = "12", "g 7a" = "G7A"). Só compara: o que foi digitado é guardado como está.
+ */
+export const normalizeCode = (v: string | null | undefined) =>
+  (v ?? '')
+    .replace(/\s+/g, '')
+    .toUpperCase()
+    .replace(/^0+(?=.)/, '');
+export const sameCode = (a: string | null | undefined, b: string | null | undefined) => normalizeCode(a) === normalizeCode(b);
+
+/** Administradora que pode ter grupos (para escolher na assembleia). */
+export interface Administrator {
+  connectionId: string;
+  institution: string;
+}
+
 export const assemblyInput = z.object({
   groupCode: z.string().trim().min(1).max(20),
   heldOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  /** Administradora do grupo. Sem informar, é deduzida do código; se o código existir em mais de uma, é exigida. */
+  connectionId: z.string().uuid().nullish(),
   /** Cotas sorteadas. */
   drawn: z.array(z.string().trim().min(1).max(10)).max(50).default([]),
   /** Cotas contempladas por lance, com o percentual ofertado. */
@@ -109,8 +128,38 @@ export const assemblyStatuses = ['scheduled', 'held'] as const;
 export type AssemblyStatus = (typeof assemblyStatuses)[number];
 export const assemblyStatusLabel: Record<AssemblyStatus, string> = { scheduled: 'Agendada', held: 'Realizada' };
 
+export interface AssemblyResultSnapshot {
+  drawn: string[];
+  bids: { quotaNumber: string; percent: number }[];
+  notes: string | null;
+}
+
+/** O que a correção fez com as cotas da carteira. */
+export interface CorrectionEffects {
+  /** Contemplação desfeita: voltou a Ativa, crédito em aberto retirado, com ou sem aviso de correção ao cliente. */
+  reverted: { quotaId: string; quotaNumber: string | null; customer: string; notified: boolean; creditRemoved: boolean }[];
+  /** Contemplada pela correção (cliente avisado como numa contemplação normal). */
+  contemplated: { quotaId: string; quotaNumber: string | null; customer: string; type: 'draw' | 'bid' }[];
+  /** Continua contemplada, com outra forma ou outro percentual. */
+  changed: { quotaId: string; quotaNumber: string | null; customer: string; type: 'draw' | 'bid'; bidPercent: number | null }[];
+}
+
+export interface AssemblyCorrection {
+  id: string;
+  kind: 'correction' | 'contemplation_reverted';
+  reason: string;
+  before: AssemblyResultSnapshot;
+  after: AssemblyResultSnapshot;
+  effects: CorrectionEffects;
+  userName: string | null;
+  createdAt: string;
+}
+
 export interface Assembly {
   id: string;
+  /** Administradora do grupo; vazio = ainda não identificada. */
+  connectionId: string | null;
+  institution: string | null;
   groupCode: string;
   heldOn: string;
   /** Agendada (sem resultado ainda, recebe lances) ou realizada (com resultado). */
@@ -122,6 +171,8 @@ export interface Assembly {
   /** Lances das cotas desta carteira para esta assembleia. */
   ourBids: { id: string; quotaId: string; customer: string; quotaNumber: string | null; type: BidType; percent: number; amount: number; status: BidStatus }[];
   notes: string | null;
+  /** Correções do resultado lançado, da mais recente para a mais antiga. */
+  corrections: AssemblyCorrection[];
 }
 
 const isoDate = z
@@ -133,6 +184,7 @@ const isoDate = z
 export const assemblyScheduleInput = z.object({
   groupCode: z.string().trim().min(1).max(20),
   heldOn: isoDate,
+  connectionId: z.string().uuid().nullish(),
   notes: z.string().trim().max(500).nullish(),
 });
 export type AssemblyScheduleInput = z.infer<typeof assemblyScheduleInput>;
@@ -157,6 +209,20 @@ export function parseWinningBids(text: string): { bids: { quotaNumber: string; p
 
 export const assemblyResultsInput = assemblyInput.omit({ groupCode: true, heldOn: true });
 export type AssemblyResultsInput = z.infer<typeof assemblyResultsInput>;
+
+const correctionReason = z.string().trim().min(3, 'Informe o motivo da correção').max(300);
+
+/** Corrige um resultado já lançado: a lista nova vale inteira no lugar da anterior. */
+export const assemblyCorrectionInput = assemblyResultsInput.extend({
+  reason: correctionReason,
+  /** Avisa os clientes cuja contemplação foi desfeita. */
+  notifyCustomer: z.boolean().default(true),
+});
+export type AssemblyCorrectionInput = z.infer<typeof assemblyCorrectionInput>;
+
+/** Desfaz a contemplação de uma cota: ela sai do resultado da assembleia. */
+export const revertContemplationInput = z.object({ reason: correctionReason, notifyCustomer: z.boolean().default(true) });
+export type RevertContemplationInput = z.infer<typeof revertContemplationInput>;
 
 // ---- Parcelas (acompanhamento; quem cobra é a administradora) ---------------------------------
 

@@ -17,4 +17,5 @@ export const serviceOrdersWeb = defineWebModule({
 // Peças reaproveitadas pelas telas das verticais (ex.: ordem da lavanderia).
 export { newOrderPath, OrderRows, orderPath, ordersKey, PaymentBadge, StatusBadge, useWorkflows } from './shared';
 export { PaymentModal, Transitions } from './OrderPage';
+export { paymentMethodLabel, paymentMethods, type PaymentMethod } from '../contracts';
 export { CustomerSearch, type CustomerOption } from '@all/module-sdk/web';

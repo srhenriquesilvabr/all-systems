@@ -54,7 +54,7 @@ export interface Product extends Omit<ProductInput, 'cost' | 'minStock'> {
 }
 
 export const stockMoveKinds = ['purchase', 'production', 'loss', 'count'] as const;
-export const stockMoveLabel: Record<(typeof stockMoveKinds)[number] | 'sale' | 'return' | 'consumption', string> = {
+export const stockMoveLabel: Record<(typeof stockMoveKinds)[number] | 'sale' | 'return' | 'consumption' | 'order', string> = {
   purchase: 'Entrada (compra)',
   production: 'Produção',
   loss: 'Perda / quebra',
@@ -62,6 +62,7 @@ export const stockMoveLabel: Record<(typeof stockMoveKinds)[number] | 'sale' | '
   sale: 'Venda',
   return: 'Venda cancelada',
   consumption: 'Uso em atendimento',
+  order: 'Encomenda retirada',
 };
 
 export const stockMoveInput = z.object({
@@ -188,8 +189,9 @@ export const openSessionInput = z.object({
 export type OpenSessionInput = z.infer<typeof openSessionInput>;
 
 export const registerMoveKinds = ['withdrawal', 'deposit'] as const;
-export type RegisterMoveKind = (typeof registerMoveKinds)[number];
-export const registerMoveLabel: Record<RegisterMoveKind, string> = { withdrawal: 'Sangria', deposit: 'Suprimento' };
+/** Além dos que se lançam à mão: `service_receipt`, recebimento de outro módulo (ex.: atendimento da agenda). */
+export type RegisterMoveKind = (typeof registerMoveKinds)[number] | 'service_receipt';
+export const registerMoveLabel: Record<RegisterMoveKind, string> = { withdrawal: 'Sangria', deposit: 'Suprimento', service_receipt: 'Recebimento de atendimento' };
 
 export const registerMoveInput = z.object({
   kind: z.enum(registerMoveKinds),
@@ -297,6 +299,8 @@ export interface RegistersOverview {
   accounts: { id: string; name: string; type: 'cash' | 'bank' | 'gateway' }[];
   /** Conta onde entra o dinheiro das vendas (a gaveta). */
   cashAccountId: string | null;
+  /** Rodapé do cupom: vem aqui porque quem vende não acessa as configurações do módulo. */
+  receiptFooter: string;
 }
 
 /** Quantidade com a casa decimal certa para a unidade: "1,250 kg", "3 un". */

@@ -13,11 +13,11 @@ export const useCustomFields = () =>
   useQuery({ queryKey: ['custom-fields', 'customer'], queryFn: () => api<CustomField[]>('/custom-fields/customer') });
 
 /** Cadastro e edição de cliente (na própria página), com aviso de possíveis duplicados. */
-export function CustomerForm({ customer, onCancel, onSaved }: { customer?: Customer; onCancel: () => void; onSaved: (c: Customer) => void }) {
+export function CustomerForm({ customer, initialType = 'person', onCancel, onSaved }: { customer?: Customer; initialType?: Customer['type']; onCancel: () => void; onSaved: (c: Customer) => void }) {
   const queryClient = useQueryClient();
   const fields = useCustomFields();
   const [form, setForm] = useState({
-    type: customer?.type ?? ('person' as Customer['type']),
+    type: customer?.type ?? initialType,
     name: customer?.name ?? '',
     document: formatDocument(customer?.document ?? null),
     email: customer?.email ?? '',

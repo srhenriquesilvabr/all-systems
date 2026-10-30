@@ -46,6 +46,7 @@ export const extraKindLabel: Record<ExtraKind, string> = { condo: 'Condomínio',
 
 /** Lei do Inquilinato (8.245/91), art. 38: a caução em dinheiro não passa de três aluguéis. */
 export const MAX_DEPOSIT_RENTS = 3;
+export const depositLimitMessage = `A caução não pode passar de ${MAX_DEPOSIT_RENTS} aluguéis (Lei do Inquilinato, art. 38)`;
 
 function validCpf(input: string): boolean {
   const cpf = input.replace(/\D/g, '');
@@ -57,6 +58,35 @@ function validCpf(input: string): boolean {
     return rest === 10 ? 0 : rest;
   };
   return digit(9) === Number(cpf[9]) && digit(10) === Number(cpf[10]);
+}
+
+/** Dados da garantia: o que cada tipo exige. A caução é conferida contra o aluguel de quem chama. */
+const guaranteeFields = {
+  guaranteeType: z.enum(guaranteeTypes).default('none'),
+  guaranteeAmount: money.nullish(),
+  guarantorName: text(150),
+  guarantorDocument: z
+    .string()
+    .max(20)
+    .nullish()
+    .transform((v) => (v ? v.replace(/\D/g, '') : null)),
+  guaranteeProvider: text(150),
+  guaranteeNumber: text(60),
+};
+function checkGuarantee(
+  v: { guaranteeType: GuaranteeType; guaranteeAmount?: number | null; guarantorName: string | null; guarantorDocument: string | null; guaranteeProvider: string | null; guaranteeNumber: string | null },
+  issue: (path: string, message: string) => void,
+) {
+  if (v.guaranteeType === 'deposit' && !v.guaranteeAmount) issue('guaranteeAmount', 'Informe o valor da caução');
+  if (v.guaranteeType === 'guarantor') {
+    if (!v.guarantorName || v.guarantorName.length < 3) issue('guarantorName', 'Informe o nome do fiador');
+    if (!v.guarantorDocument || !validCpf(v.guarantorDocument)) issue('guarantorDocument', 'CPF do fiador inválido');
+  }
+  if (v.guaranteeType === 'insurance') {
+    if (!v.guaranteeProvider) issue('guaranteeProvider', 'Informe a seguradora');
+    if (!v.guaranteeNumber) issue('guaranteeNumber', 'Informe o número da apólice');
+  }
+  if (v.guaranteeType === 'capitalization' && !v.guaranteeNumber) issue('guaranteeNumber', 'Informe o número do título');
 }
 
 export const leaseInput = z
@@ -74,37 +104,44 @@ export const leaseInput = z
     adjustmentPercent: z.coerce.number().min(0).max(30).nullish(),
     /** Sem informar, o mês de início do contrato. */
     adjustmentMonth: z.coerce.number().int().min(1).max(12).nullish(),
-    guaranteeType: z.enum(guaranteeTypes).default('none'),
-    guaranteeAmount: money.nullish(),
-    guarantorName: text(150),
-    guarantorDocument: z
-      .string()
-      .max(20)
-      .nullish()
-      .transform((v) => (v ? v.replace(/\D/g, '') : null)),
-    guaranteeProvider: text(150),
-    guaranteeNumber: text(60),
+    ...guaranteeFields,
     adminFeePercent: z.coerce.number().min(0).max(50).default(10),
     notes: text(2000),
   })
   .superRefine((v, ctx) => {
     const issue = (path: string, message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
     if (v.adjustmentIndex === 'fixed' && !v.adjustmentPercent) issue('adjustmentPercent', 'Informe o percentual do reajuste');
-    if (v.guaranteeType === 'deposit') {
-      if (!v.guaranteeAmount) issue('guaranteeAmount', 'Informe o valor da caução');
-      else if (v.guaranteeAmount > v.rent * MAX_DEPOSIT_RENTS) issue('guaranteeAmount', `A caução não pode passar de ${MAX_DEPOSIT_RENTS} aluguéis (Lei do Inquilinato, art. 38)`);
-    }
-    if (v.guaranteeType === 'guarantor') {
-      if (!v.guarantorName || v.guarantorName.length < 3) issue('guarantorName', 'Informe o nome do fiador');
-      if (!v.guarantorDocument || !validCpf(v.guarantorDocument)) issue('guarantorDocument', 'CPF do fiador inválido');
-    }
-    if (v.guaranteeType === 'insurance') {
-      if (!v.guaranteeProvider) issue('guaranteeProvider', 'Informe a seguradora');
-      if (!v.guaranteeNumber) issue('guaranteeNumber', 'Informe o número da apólice');
-    }
-    if (v.guaranteeType === 'capitalization' && !v.guaranteeNumber) issue('guaranteeNumber', 'Informe o número do título');
+    if (v.guaranteeType === 'deposit' && v.guaranteeAmount && v.guaranteeAmount > v.rent * MAX_DEPOSIT_RENTS) issue('guaranteeAmount', depositLimitMessage);
+    checkGuarantee(v, issue);
   });
 export type LeaseInput = z.infer<typeof leaseInput>;
+
+/**
+ * Edição do contrato ativo: só o que não muda o que foi combinado de aluguel e prazo (para isso há
+ * reajuste e prorrogação). Condomínio e IPTU valem para as mensalidades a partir de `applyFrom`; as
+ * que já têm recebimento ou repasse baixado não mudam.
+ */
+export const leaseUpdateInput = z
+  .object({
+    condoFee: money,
+    iptuMonthly: money,
+    /** Início do primeiro mês de uso com os valores novos. Sem informar, o primeiro mês que começa de hoje em diante. */
+    applyFrom: isoDate.nullish(),
+    ...guaranteeFields,
+    notes: text(2000),
+  })
+  .superRefine((v, ctx) => checkGuarantee(v, (path, message) => ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message })));
+export type LeaseUpdateInput = z.infer<typeof leaseUpdateInput>;
+
+/** Baixa do repasse, feita no contrato para o aviso de aluguel não recebido aparecer antes de pagar. */
+export const payoutInput = z.object({
+  paidAt: isoDate,
+  accountId: z.string().uuid('Escolha a conta'),
+  paymentMethod: text(40),
+  /** Confirma o repasse mesmo sem o aluguel recebido: a imobiliária adianta do próprio caixa. */
+  acknowledgeUnreceived: z.boolean().default(false),
+});
+export type PayoutInput = z.infer<typeof payoutInput>;
 
 export const leaseExtraInput = z.object({
   kind: z.enum(extraKinds),
@@ -175,6 +212,7 @@ export interface LeaseExtra {
   passToOwner: boolean;
   status: 'active' | 'cancelled';
   receipt: ReceiptStatus;
+  payoutStatus: PayoutStatus | null;
 }
 
 export type AdjustmentStatus = 'pending' | 'applied' | 'skipped';
@@ -233,6 +271,11 @@ export interface LeaseDetail extends Lease {
   charges: LeaseCharge[];
   extras: LeaseExtra[];
   adjustments: LeaseAdjustment[];
+}
+
+/** Resposta da edição: o efeito nas mensalidades (null se condomínio e IPTU não mudaram). */
+export interface LeaseUpdateResult extends LeaseDetail {
+  applied: { from: string; rebilled: number; kept: number } | null;
 }
 
 export interface OwnerStatementLine {

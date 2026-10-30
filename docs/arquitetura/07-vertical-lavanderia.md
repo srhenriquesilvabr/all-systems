@@ -87,7 +87,7 @@ O **status por peça** (`laundry_order_items.item_status`) segue: `recebida → 
 
 ### 1. Balcão (sem Shopify)
 1. O atendente busca ou cadastra o cliente (dedup por telefone).
-2. Cria a OS e adiciona as peças: tipo, serviço, cor, observações e **fotos das avarias pré-existentes**. As fotos são obrigatórias se `requirePhotosOnReceive` estiver ligado.
+2. Cria a OS e adiciona as peças: tipo, serviço, cor, observações e **fotos das avarias pré-existentes**. Com `requirePiecePhotos` ligado, a peça sem foto não sai de "Recebida" (a ordem abre antes, porque a foto precisa da peça).
 3. O sistema calcula o total e o prazo (maior `turnaround_hours` entre os serviços).
 4. Imprime o **comprovante** (com QR do acompanhamento) e as **etiquetas** das peças (`tag_code`).
 5. Pagamento na entrada ou na retirada: dinheiro, maquininha (registro manual) ou **Pix** (`integration.payments`, com baixa automática por webhook do gateway).

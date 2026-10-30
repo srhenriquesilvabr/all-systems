@@ -1,5 +1,5 @@
 import { api } from '@all/module-sdk/web';
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import type { ComponentType } from 'react';
 import type { Pet } from '../contracts';
 
@@ -10,6 +10,15 @@ export function usePets(query: { q?: string; customerId?: string }, enabled = tr
     queryKey: [...petsKey, 'list', query],
     queryFn: () => api<Pet[]>('/pets', { query: { ...query, limit: 100 } }),
     enabled,
+  });
+}
+
+/** Lista da tela de pets, em páginas. */
+export function usePetsPage(query: { q?: string; limit: number; offset: number }) {
+  return useQuery({
+    queryKey: [...petsKey, 'page', query],
+    queryFn: () => api<{ items: Pet[]; total: number }>('/pets/page', { query }),
+    placeholderData: keepPreviousData,
   });
 }
 

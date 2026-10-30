@@ -1,5 +1,6 @@
 import { api, ApiError, CustomerSearch, formatDate, formatDateTime, formatMoney, parseMoney, today, useCan, type CustomerOption } from '@all/module-sdk/web';
-import { localToUtc, useResources, useServices } from '@all/scheduling/web';
+import type { MedicalForm } from '@all/medical-records';
+import { localToUtc, OutsideScheduleAlert, useResources, useServices } from '@all/scheduling/web';
 import { Alert, Badge, Button, Card, Field, Input, Modal, Select, Textarea } from '@all/ui';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -106,12 +107,25 @@ export function NewCaseForm({ customerId, specialty, onClose }: { customerId?: s
 }
 
 /** Cartão do tratamento: andamento, etapa da cirurgia, orçamento, agenda e encerramento. */
-export function CaseCard({ item: c, onRecord }: { item: AesCase; onRecord?: (caseId: string) => void }) {
+export function CaseCard({
+  item: c,
+  forms,
+  onRecord,
+  onConsent,
+}: {
+  item: AesCase;
+  /** Fichas da especialidade: com mais de uma, "+ Ficha" pergunta qual. */
+  forms?: MedicalForm[];
+  onRecord?: (caseId: string, form?: MedicalForm) => void;
+  onConsent?: (caseId: string) => void;
+}) {
   const canWrite = useCan('shared.medical-records.write');
   const canBudget = useCan('aesthetics.surgery.budget');
   const canSchedule = useCan('shared.scheduling.write');
   const canSell = useCan('aesthetics.packages.sell');
-  const [panel, setPanel] = useState<'budget' | 'surgery' | 'close' | 'drainage' | null>(null);
+  const [panel, setPanel] = useState<'budget' | 'surgery' | 'close' | 'drainage' | 'forms' | 'rename' | null>(null);
+  const [title, setTitle] = useState(c.title);
+  const rename = useCaseMutation(() => api(`/aesthetics/cases/${c.id}`, { method: 'PATCH', body: { title } }), () => setPanel(null));
   const stage = useCaseMutation((s: SurgeryStage) => api(`/aesthetics/cases/${c.id}/stage`, { method: 'POST', body: { stage: s } }));
   const surgery = c.specialty === 'plastic_surgery';
   const surgeryActive = c.surgery && c.surgery.status !== 'cancelled' && c.surgery.status !== 'no_show';
@@ -136,8 +150,13 @@ export function CaseCard({ item: c, onRecord }: { item: AesCase; onRecord?: (cas
         {c.status === 'active' && (
           <div className="flex flex-wrap gap-2">
             {onRecord && canWrite && (
-              <Button size="sm" variant="secondary" onClick={() => onRecord(c.id)}>
+              <Button size="sm" variant="secondary" onClick={() => ((forms?.length ?? 0) > 1 ? setPanel(panel === 'forms' ? null : 'forms') : onRecord(c.id, forms?.[0]))}>
                 + Ficha
+              </Button>
+            )}
+            {canWrite && (
+              <Button size="sm" variant="ghost" onClick={() => setPanel('rename')}>
+                Renomear
               </Button>
             )}
             {canWrite && (
@@ -148,7 +167,53 @@ export function CaseCard({ item: c, onRecord }: { item: AesCase; onRecord?: (cas
           </div>
         )}
       </div>
+      {panel === 'forms' && onRecord && (
+        <div className="mt-3 flex flex-wrap gap-2 rounded-xl border border-line p-3">
+          {forms?.map((f) => (
+            <Button
+              key={f.key}
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                setPanel(null);
+                onRecord(c.id, f);
+              }}
+            >
+              + {f.label}
+            </Button>
+          ))}
+          {onConsent && (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                setPanel(null);
+                onConsent(c.id);
+              }}
+            >
+              + Termo de consentimento
+            </Button>
+          )}
+        </div>
+      )}
+      {panel === 'rename' && (
+        <div className="mt-3 flex flex-wrap items-end gap-2 rounded-xl border border-line p-3">
+          {rename.error && <Alert>{errorText(rename.error, 'Erro ao renomear')}</Alert>}
+          <Field label={surgery ? 'Cirurgia' : 'Tratamento'}>{(id) => <Input id={id} value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />}</Field>
+          <Button size="sm" loading={rename.isPending} disabled={title.trim().length < 3} onClick={() => rename.mutate(undefined)}>
+            Salvar
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setPanel(null)}>
+            Voltar
+          </Button>
+        </div>
+      )}
       {c.notes && <p className="mt-2 whitespace-pre-line text-sm">{c.notes}</p>}
+      {c.packages.length > 0 && (
+        <p className="mt-2 text-sm text-fg-muted">
+          Pacotes deste tratamento: {c.packages.map((p) => `${p.service} (${p.usedSessions} de ${p.totalSessions} usadas${p.status === 'cancelled' ? ', cancelado' : ''})`).join('; ')}
+        </p>
+      )}
       {surgery && (
         <div className="mt-3 space-y-2 rounded-xl border border-line p-3 text-sm">
           {c.budget ? (
@@ -206,7 +271,7 @@ export function CaseCard({ item: c, onRecord }: { item: AesCase; onRecord?: (cas
       {panel === 'budget' && <BudgetEditor item={c} onClose={() => setPanel(null)} />}
       {panel === 'surgery' && <SurgeryScheduleForm item={c} onClose={() => setPanel(null)} />}
       {panel === 'close' && <CloseCaseForm item={c} onClose={() => setPanel(null)} />}
-      {panel === 'drainage' && <SellModal customer={{ id: c.customer.id }} serviceName="Drenagem linfática" onClose={() => setPanel(null)} />}
+      {panel === 'drainage' && <SellModal customer={{ id: c.customer.id }} serviceName="Drenagem linfática" caseId={c.id} onClose={() => setPanel(null)} />}
     </Card>
   );
 }
@@ -360,8 +425,9 @@ function SurgeryScheduleForm({ item: c, onClose }: { item: AesCase; onClose: () 
   ]);
   const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
   const serviceId = form.serviceId || defaultService;
+  const canOverride = useCan('shared.scheduling.manage');
   const save = useCaseMutation(
-    () =>
+    (override: boolean) =>
       api(`/aesthetics/cases/${c.id}/surgery`, {
         method: 'POST',
         body: {
@@ -371,10 +437,12 @@ function SurgeryScheduleForm({ item: c, onClose }: { item: AesCase; onClose: () 
           roomId: form.roomId || null,
           location: form.location,
           team: team.filter((m) => m.name.trim().length >= 2),
+          overrideSchedule: override || undefined,
         },
       }),
     onClose,
   );
+  const outside = save.error instanceof ApiError && save.error.code === 'OUTSIDE_SCHEDULE';
   const surgeons = credentials.data?.filter((p) => p.active && p.credential?.council === 'CRM') ?? [];
   return (
     <Modal
@@ -386,14 +454,15 @@ function SurgeryScheduleForm({ item: c, onClose }: { item: AesCase; onClose: () 
           <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button loading={save.isPending} disabled={!form.resourceId || !serviceId || !form.date || !form.time || form.location.trim().length < 2} onClick={() => save.mutate(undefined)}>
+          <Button loading={save.isPending} disabled={!form.resourceId || !serviceId || !form.date || !form.time || form.location.trim().length < 2} onClick={() => save.mutate(false)}>
             Marcar na agenda
           </Button>
         </>
       }
     >
       <div className="space-y-4">
-        {save.error && <Alert>{errorText(save.error, 'Erro ao marcar a cirurgia')}</Alert>}
+        {outside && <OutsideScheduleAlert message={(save.error as ApiError).message} canOverride={canOverride} busy={save.isPending} onConfirm={() => save.mutate(true)} />}
+        {save.error && !outside && <Alert>{errorText(save.error, 'Erro ao marcar a cirurgia')}</Alert>}
         <p className="text-xs text-fg-muted">Para marcar: orçamento aprovado, termo aceito neste tratamento e pré-operatório liberado (inclusive pela anestesia).</p>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Cirurgião (CRM e RQE)">

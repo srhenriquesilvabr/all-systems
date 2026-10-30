@@ -4,6 +4,7 @@ import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, P
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
 import {
+  appointmentEditInput,
   appointmentInput,
   appointmentPaymentInput,
   appointmentRoomInput,
@@ -12,12 +13,14 @@ import {
   availabilityQuery,
   cancelSeriesInput,
   onlineBookingInput,
+  onlineServicesInput,
   rescheduleInput,
   resourceInput,
   serviceInput,
   statusInput,
   timeOffInput,
   workingHoursInput,
+  type AppointmentEditInput,
   type AppointmentInput,
   type AppointmentSeriesInput,
   type ResourceInput,
@@ -105,6 +108,14 @@ export class SchedulingController {
     return this.scheduling.saveService(id, body);
   }
 
+  /** O que fica liberado no link de agendamento online. */
+  @Put('services/online')
+  @HttpCode(204)
+  @RequirePermission('shared.scheduling.manage')
+  setOnlineServices(@Body(new ZodPipe(onlineServicesInput)) body: z.infer<typeof onlineServicesInput>) {
+    return this.scheduling.setOnlineServices(body.serviceIds);
+  }
+
   @Get('availability')
   @RequirePermission('shared.scheduling.read')
   availability(@Query(new ZodPipe(availabilityQuery)) q: z.infer<typeof availabilityQuery>) {
@@ -150,6 +161,13 @@ export class SchedulingController {
     return this.scheduling.reschedule(id, body);
   }
 
+  /** Troca profissional, serviços, preço, desconto, sala ou observação de um horário ainda aberto. */
+  @Patch('appointments/:id')
+  @RequirePermission('shared.scheduling.write')
+  edit(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(appointmentEditInput)) body: AppointmentEditInput) {
+    return this.scheduling.editAppointment(id, body);
+  }
+
   /** Salas que servem para o atendimento e se estão livres (no horário dele ou em `startsAt`). */
   @Get('appointments/:id/rooms')
   @RequirePermission('shared.scheduling.read')
@@ -189,6 +207,13 @@ export class SchedulingController {
   @RequirePermission('shared.scheduling.payments')
   paymentAccounts() {
     return this.finance.listAccountsBasic();
+  }
+
+  /** Caixas do PDV com sessão aberta agora (vazio sem o módulo de vendas). */
+  @Get('payment-registers')
+  @RequirePermission('shared.scheduling.payments')
+  paymentRegisters() {
+    return this.scheduling.paymentRegisters();
   }
 }
 

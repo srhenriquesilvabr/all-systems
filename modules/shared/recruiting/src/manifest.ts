@@ -62,6 +62,13 @@ export const recruitingManifest = defineModule({
       label: 'Recrutador',
       permissions: ['recruiting.jobs.read', 'recruiting.jobs.manage', 'recruiting.candidates.read', 'recruiting.candidates.manage'],
     },
+    // Exportar e excluir dados de candidatos é pedido de titular (LGPD): fica com quem responde pelo
+    // recrutamento, não com todo recrutador. As duas ações ficam na auditoria.
+    {
+      key: 'recruiting.manager',
+      label: 'Gestor(a) de recrutamento',
+      permissions: ['recruiting.jobs.read', 'recruiting.jobs.manage', 'recruiting.candidates.read', 'recruiting.candidates.manage', 'recruiting.candidates.privacy'],
+    },
     { key: 'recruiting.viewer', label: 'Visualizador de recrutamento', permissions: ['recruiting.jobs.read', 'recruiting.candidates.read'] },
   ],
   menu: [

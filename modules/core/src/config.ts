@@ -35,6 +35,11 @@ export class CoreConfig {
   get isProduction() {
     return this.nodeEnv === 'production';
   }
+
+  /** Em produção, sem a chave do Resend, os e-mails são descartados (ver MailService). */
+  get emailEnabled() {
+    return !!this.resendApiKey || !this.isProduction;
+  }
 }
 
 export function loadConfig(env: Record<string, string | undefined>): CoreConfig {

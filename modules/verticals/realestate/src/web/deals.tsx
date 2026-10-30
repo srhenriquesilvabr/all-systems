@@ -183,6 +183,7 @@ export function DealPage() {
   const [reassigning, setReassigning] = useState(false);
   const [reasonKey, setReasonKey] = useState<LostReasonKey | ''>('');
   const [reason, setReason] = useState('');
+  const [editing, setEditing] = useState(false);
   const close = useMutation({ mutationFn: () => api(`/real-estate/deals/${id}/close`, { method: 'POST' }), onSuccess: () => queryClient.invalidateQueries() });
   const lose = useMutation({
     mutationFn: () => api(`/real-estate/deals/${id}/lose`, { method: 'POST', body: { reasonKey, reason: reason.trim() || null } }),
@@ -197,6 +198,8 @@ export function DealPage() {
   const d = deal.data;
   const open = d.status !== 'closed' && d.status !== 'lost';
   const canClose = open && (d.paymentType === 'cash' || d.status === 'credit_approved');
+  const contracted = proposals.data?.some((p) => p.status === 'contracted') ?? false;
+  if (editing) return <DealForm deal={d} onClose={() => setEditing(false)} />;
   return (
     <>
       <PageHeader
@@ -206,9 +209,14 @@ export function DealPage() {
           canWrite &&
           open && (
             <div className="flex gap-2">
-              <Button variant="ghost" onClick={() => setLosing(true)}>
+              <Button variant="ghost" disabled={contracted} title={contracted ? 'Registre o distrato na proposta contratada antes' : undefined} onClick={() => setLosing(true)}>
                 Perdida
               </Button>
+              {['negotiating', 'credit_rejected'].includes(d.status) && (
+                <Button variant="secondary" onClick={() => setEditing(true)}>
+                  Editar proposta
+                </Button>
+              )}
               <Button disabled={!canClose} loading={close.isPending} onClick={() => close.mutate()}>
                 Fechar venda
               </Button>
@@ -218,6 +226,7 @@ export function DealPage() {
       />
       {close.error && <Alert>{close.error instanceof ApiError ? close.error.message : 'Erro ao fechar'}</Alert>}
       {lose.error && <Alert>{lose.error instanceof ApiError ? lose.error.message : 'Erro'}</Alert>}
+      {open && contracted && <Alert tone="info">Há contrato de financiamento assinado. Para marcar como perdida, combine o distrato com o banco e clique em "Registrar distrato" na proposta.</Alert>}
       <div className="grid gap-6 lg:grid-cols-[20rem_1fr]">
         <Card className="h-fit space-y-2 p-5 text-sm">
           <Badge tone={dealTone[d.status]}>{dealStatusLabel[d.status]}</Badge>
@@ -268,7 +277,7 @@ export function DealPage() {
                 disabled={d.status === 'credit_analysis' || d.status === 'credit_approved'}
               />
             ) : (
-              <ProposalList proposals={proposals.data} loading={proposals.isPending} />
+              <ProposalList proposals={proposals.data} loading={proposals.isPending} readOnly />
             )
           ) : (
             <Card className="p-5 text-sm text-fg-muted">Compra à vista: sem financiamento.</Card>
@@ -366,40 +375,42 @@ function Line({ label, strong, children }: { label: string; strong?: boolean; ch
   );
 }
 
-export function DealModal({ property, onClose, onSaved }: { property: Property; onClose: () => void; onSaved?: (d: Deal) => void }) {
+const money = (n: number | null | undefined) => (n ? n.toFixed(2).replace('.', ',') : '');
+
+/** Nova proposta (pela página do imóvel) ou edição de uma em aberto, na própria página. */
+export function DealForm({ property, deal, onClose, onSaved }: { property?: Property; deal?: Deal; onClose: () => void; onSaved?: (d: Deal) => void }) {
   const queryClient = useQueryClient();
   const [customer, setCustomer] = useState<CustomerOption | null>(null);
+  const financeable = deal ? deal.property.financeable : property!.financeable;
   const { user } = useSession();
   const team = useTeam();
   const [form, setForm] = useState({
-    brokerId: user.id,
-    price: property.salePrice ? property.salePrice.toFixed(2).replace('.', ',') : '',
-    paymentType: property.financeable ? 'financing' : 'cash',
-    downPayment: '',
-    fgtsAmount: '',
-    commissionPercent: '6',
-    notes: '',
+    // Nova proposta: quem está registrando; na edição, o atual (vazio = mantém).
+    brokerId: deal ? (deal.brokerId ?? '') : user.id,
+    price: money(deal?.price ?? property?.salePrice),
+    paymentType: deal?.paymentType ?? (financeable ? 'financing' : 'cash'),
+    downPayment: money(deal?.downPayment),
+    fgtsAmount: money(deal?.fgtsAmount),
+    commissionPercent: deal ? String(deal.commissionPercent).replace('.', ',') : '6',
+    notes: deal?.notes ?? '',
   });
   const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
   const price = parseMoney(form.price) || 0;
   const own = (parseMoney(form.downPayment) || 0) + (parseMoney(form.fgtsAmount) || 0);
   const minOwn = price * (1 - MAX_LTV);
   const save = useMutation({
-    mutationFn: () =>
-      api<Deal>('/real-estate/deals', {
-        method: 'POST',
-        body: {
-          customerId: customer?.id,
-          propertyId: property.id,
-          price,
-          paymentType: form.paymentType,
-          downPayment: parseMoney(form.downPayment) || 0,
-          fgtsAmount: form.paymentType === 'financing' ? parseMoney(form.fgtsAmount) || 0 : 0,
-          commissionPercent: Number(form.commissionPercent.replace(',', '.')),
-          notes: form.notes || null,
-          brokerId: form.brokerId || null,
-        },
-      }),
+    mutationFn: () => {
+      const body = {
+        price,
+        paymentType: form.paymentType,
+        downPayment: parseMoney(form.downPayment) || 0,
+        fgtsAmount: form.paymentType === 'financing' ? parseMoney(form.fgtsAmount) || 0 : 0,
+        commissionPercent: Number(form.commissionPercent.replace(',', '.')),
+        notes: form.notes || null,
+        brokerId: form.brokerId || null,
+      };
+      return deal ? api<Deal>(`/real-estate/deals/${deal.id}`, { method: 'PATCH', body }) : api<Deal>('/real-estate/deals', { method: 'POST', body: { ...body, customerId: customer?.id, propertyId: property!.id } });
+    },
     onSuccess: (d) => {
       queryClient.invalidateQueries({ queryKey: key });
       onSaved?.(d);
@@ -411,66 +422,72 @@ export function DealModal({ property, onClose, onSaved }: { property: Property; 
     save.mutate();
   }
   return (
-    <Modal
-      open
-      title="Nova proposta de compra"
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose}>
-            Cancelar
-          </Button>
-          <Button type="submit" form="re-deal-form" loading={save.isPending} disabled={!customer}>
-            Registrar proposta
-          </Button>
-        </>
-      }
-    >
-      {!customer ? (
-        <div className="space-y-2">
-          <p className="text-sm text-fg-muted">Quem está comprando?</p>
-          <CustomerSearch onSelect={setCustomer} />
-        </div>
-      ) : (
-        <form id="re-deal-form" onSubmit={submit} className="space-y-4">
-          {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao salvar'}</Alert>}
-          <p className="text-sm">
-            Comprador: <span className="font-medium">{customer.name}</span>
-          </p>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Valor da proposta (R$)">{(id) => <Input id={id} inputMode="decimal" required value={form.price} onChange={(e) => set({ price: e.target.value })} />}</Field>
-            <Field label="Pagamento">
-              {(id) => (
-                <Select id={id} value={form.paymentType} onChange={(e) => set({ paymentType: e.target.value })}>
-                  {property.financeable && <option value="financing">Financiamento habitacional</option>}
-                  <option value="cash">À vista</option>
-                </Select>
-              )}
-            </Field>
-            <Field label="Entrada (R$)">{(id) => <Input id={id} inputMode="decimal" value={form.downPayment} onChange={(e) => set({ downPayment: e.target.value })} />}</Field>
-            {form.paymentType === 'financing' && <Field label="FGTS (R$)">{(id) => <Input id={id} inputMode="decimal" value={form.fgtsAmount} onChange={(e) => set({ fgtsAmount: e.target.value })} />}</Field>}
-            <Field label="Comissão (%)">{(id) => <Input id={id} inputMode="decimal" value={form.commissionPercent} onChange={(e) => set({ commissionPercent: e.target.value })} />}</Field>
-            <Field label="Corretor(a)">
-              {(id) => (
-                <Select id={id} value={form.brokerId} onChange={(e) => set({ brokerId: e.target.value })}>
-                  {team.data?.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.name}
-                    </option>
-                  ))}
-                </Select>
-              )}
-            </Field>
+    <>
+      <PageHeader title={deal ? `Editar proposta nº ${deal.number}` : 'Nova proposta de compra'} description={deal ? `${deal.customer.name} · Cód. ${deal.property.code} — ${deal.property.title}` : `Cód. ${property!.code} — ${property!.title}`} />
+      <Card className="p-5">
+        {!deal && !customer ? (
+          <div className="space-y-3">
+            <p className="text-sm text-fg-muted">Quem está comprando?</p>
+            <CustomerSearch onSelect={setCustomer} />
+            <Button variant="secondary" onClick={onClose}>
+              Cancelar
+            </Button>
           </div>
-          {form.paymentType === 'financing' && price > 0 && (
-            <p className={own < minOwn ? 'text-sm text-danger-600' : 'text-sm text-fg-muted'}>
-              Entrada + FGTS: {formatMoney(own)} (mínimo {formatMoney(minOwn)}, {Math.round((1 - MAX_LTV) * 100)}%). A financiar: {formatMoney(Math.max(price - own, 0))}.
-            </p>
-          )}
-          <Field label="Condições e observações">{(id) => <Textarea id={id} rows={2} value={form.notes} onChange={(e) => set({ notes: e.target.value })} />}</Field>
-        </form>
-      )}
-    </Modal>
+        ) : (
+          <form id="re-deal-form" onSubmit={submit} className="space-y-4">
+            {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao salvar'}</Alert>}
+            {customer && (
+              <p className="text-sm">
+                Comprador: <span className="font-medium">{customer.name}</span>
+              </p>
+            )}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Valor da proposta (R$)">{(id) => <Input id={id} inputMode="decimal" required value={form.price} onChange={(e) => set({ price: e.target.value })} />}</Field>
+              <Field label="Pagamento">
+                {(id) => (
+                  <Select id={id} value={form.paymentType} onChange={(e) => set({ paymentType: e.target.value as 'cash' | 'financing' })}>
+                    {financeable && <option value="financing">Financiamento habitacional</option>}
+                    <option value="cash">À vista</option>
+                  </Select>
+                )}
+              </Field>
+              <Field label="Entrada (R$)">{(id) => <Input id={id} inputMode="decimal" value={form.downPayment} onChange={(e) => set({ downPayment: e.target.value })} />}</Field>
+              {form.paymentType === 'financing' && <Field label="FGTS (R$)">{(id) => <Input id={id} inputMode="decimal" value={form.fgtsAmount} onChange={(e) => set({ fgtsAmount: e.target.value })} />}</Field>}
+              <Field label="Comissão (%)">{(id) => <Input id={id} inputMode="decimal" value={form.commissionPercent} onChange={(e) => set({ commissionPercent: e.target.value })} />}</Field>
+              <Field label="Corretor(a)">
+                {(id) => (
+                  <Select id={id} value={form.brokerId} onChange={(e) => set({ brokerId: e.target.value })}>
+                    {deal && !deal.brokerId && <option value="">Sem corretor</option>}
+                    {team.data?.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.name}
+                      </option>
+                    ))}
+                    {/* Corretor que saiu da equipe continua aparecendo até ser trocado. */}
+                    {deal?.brokerId && team.data && !team.data.some((u) => u.id === deal.brokerId) && <option value={deal.brokerId}>{deal.brokerName ?? 'Atual'}</option>}
+                  </Select>
+                )}
+              </Field>
+            </div>
+            {form.paymentType === 'financing' && price > 0 && (
+              <p className={own < minOwn ? 'text-sm text-danger-600' : 'text-sm text-fg-muted'}>
+                Entrada + FGTS: {formatMoney(own)} (mínimo {formatMoney(minOwn)}, {Math.round((1 - MAX_LTV) * 100)}%). A financiar: {formatMoney(Math.max(price - own, 0))}.
+              </p>
+            )}
+            <Field label="Condições e observações">{(id) => <Textarea id={id} rows={2} value={form.notes} onChange={(e) => set({ notes: e.target.value })} />}</Field>
+            {deal?.status === 'credit_rejected' && <p className="text-sm text-fg-muted">Ao salvar, a proposta volta para "Proposta em negociação" e pode ser enviada a outro banco.</p>}
+            <div className="flex gap-2">
+              <Button type="submit" loading={save.isPending}>
+                {deal ? 'Salvar' : 'Registrar proposta'}
+              </Button>
+              <Button type="button" variant="secondary" onClick={onClose}>
+                Cancelar
+              </Button>
+            </div>
+          </form>
+        )}
+      </Card>
+    </>
   );
 }
 

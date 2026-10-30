@@ -17,6 +17,7 @@ export const schedulingWeb = defineWebModule({
 // Página pública (fora do login), montada pelo admin em /agendar/:slug.
 export { PublicBookingPage } from './PublicBookingPage';
 // Para verticais: seletor de "para quem é" (ex.: pet) no formulário de horário.
-export { registerSubjectPicker, type SubjectPicker, type SubjectValue } from './AppointmentForm';
+export { OutsideScheduleAlert, registerSubjectPicker, type SubjectPicker, type SubjectValue } from './AppointmentForm';
 export { AppointmentDetails, statusTone } from './AppointmentDetails';
+export { appointmentStatusLabel } from '../contracts';
 export { useAppointments, useResources, useServices, schedulingKey, localToUtc, localDate, localTime, todayLocal, shiftDate } from './hooks';

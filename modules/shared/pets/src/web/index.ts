@@ -19,3 +19,4 @@ export const petsWeb = defineWebModule({
 
 export { registerPetTab, usePet, usePets, petsKey, type PetTab } from './hooks';
 export { PetModal } from './PetModal';
+export { PetPicker } from './PetPicker';

@@ -109,6 +109,7 @@ export class RegistersService {
         }),
         accounts,
         cashAccountId: cashAccountId ?? null,
+        receiptFooter: settings.receiptFooter,
       };
     });
   }
@@ -358,6 +359,27 @@ export class RegistersService {
     return null;
   }
 
+  /**
+   * Recebimento de outro módulo (ex.: atendimento da agenda) na sessão devolvida por
+   * `sessionForSaleInTx`: entra no esperado do fechamento, pela forma de pagamento, e não gera
+   * lançamento: quem recebe já lançou no financeiro, e aqui contaria duas vezes (ADR-040).
+   */
+  async addServiceReceiptInTx(tx: Tx, input: { sessionId: string; method: SalePaymentMethod; amountCents: number; reason: string; occurredAt: Date; sourceType: string; sourceId: string }) {
+    const { tenantId, userId } = requestContext.requireTenant();
+    await tx.insert(salesRegisterMoves).values({
+      tenantId,
+      sessionId: input.sessionId,
+      kind: 'service_receipt',
+      amount: centsToDecimal(input.amountCents),
+      reason: input.reason,
+      method: input.method,
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
+      userId: userId ?? null,
+      occurredAt: input.occurredAt,
+    });
+  }
+
   // ---- internos -------------------------------------------------------------------------------
 
   private async openSessionOf(tx: Tx, registerId: string) {
@@ -453,10 +475,10 @@ export class RegistersService {
         .where(completed)
         .groupBy(salesSales.registerSessionId),
       tx
-        .select({ sessionId: salesRegisterMoves.sessionId, kind: salesRegisterMoves.kind, amount: sql<string>`sum(${salesRegisterMoves.amount})` })
+        .select({ sessionId: salesRegisterMoves.sessionId, kind: salesRegisterMoves.kind, method: salesRegisterMoves.method, amount: sql<string>`sum(${salesRegisterMoves.amount})` })
         .from(salesRegisterMoves)
         .where(inArray(salesRegisterMoves.sessionId, ids))
-        .groupBy(salesRegisterMoves.sessionId, salesRegisterMoves.kind),
+        .groupBy(salesRegisterMoves.sessionId, salesRegisterMoves.kind, salesRegisterMoves.method),
     ]);
     for (const p of payments) out.get(p.sessionId!)?.byMethod.set(p.method, toCents(p.amount));
     for (const s of sales) {
@@ -465,7 +487,11 @@ export class RegistersService {
     }
     for (const m of moves) {
       const live = out.get(m.sessionId);
-      if (live) live[m.kind === 'withdrawal' ? 'withdrawals' : 'deposits'] = toCents(m.amount);
+      if (!live) continue;
+      if (m.kind === 'service_receipt') {
+        const method = (m.method ?? 'other') as SalePaymentMethod;
+        live.byMethod.set(method, (live.byMethod.get(method) ?? 0) + toCents(m.amount));
+      } else live[m.kind === 'withdrawal' ? 'withdrawals' : 'deposits'] = toCents(m.amount);
     }
     return out;
   }

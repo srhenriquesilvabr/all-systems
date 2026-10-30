@@ -6,6 +6,7 @@ import { SegmentationService, type CustomerRfm } from './segmentation.service';
 
 const segments = ['champions', 'loyal', 'promising', 'new', 'at_risk', 'hibernating', 'lost'] as const;
 const listQuery = z.object({ segment: z.enum(segments).optional(), limit: z.coerce.number().int().min(1).max(5000).default(200) });
+const exportQuery = listQuery.extend({ consent: z.enum(['marketing_email', 'marketing_whatsapp']).optional() });
 
 const segmentLabel: Record<(typeof segments)[number], string> = {
   champions: 'Campeões',
@@ -23,9 +24,10 @@ function toCsv(rows: CustomerRfm[]): string {
     const s = v === null ? '' : typeof v === 'number' ? String(v).replace('.', ',') : v;
     return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  const header = ['Cliente', 'Telefone', 'E-mail', 'Segmento', 'Última compra', 'Dias desde a última', 'Compras (12 meses)', 'Valor (12 meses)', 'R', 'F', 'M'];
+  const yesNo = (v: boolean) => (v ? 'Sim' : 'Não');
+  const header = ['Cliente', 'Telefone', 'E-mail', 'Segmento', 'Última compra', 'Dias desde a última', 'Compras (12 meses)', 'Valor (12 meses)', 'R', 'F', 'M', 'Autoriza ofertas por e-mail', 'Autoriza ofertas por WhatsApp'];
   const lines = rows.map((r) =>
-    [r.customer.name, r.customer.phone, r.customer.email, segmentLabel[r.segment], r.lastPurchaseOn, r.recencyDays, r.frequency, r.monetary, r.r, r.f, r.m].map(cell).join(';'),
+    [r.customer.name, r.customer.phone, r.customer.email, segmentLabel[r.segment], r.lastPurchaseOn, r.recencyDays, r.frequency, r.monetary, r.r, r.f, r.m, yesNo(r.marketingEmail), yesNo(r.marketingWhatsapp)].map(cell).join(';'),
   );
   return `﻿${[header.join(';'), ...lines].join('\r\n')}\r\n`;
 }
@@ -49,8 +51,8 @@ export class SegmentationController {
   @Get('customers.csv')
   @RequirePermission('core.segmentation.read')
   @Header('Content-Type', 'text/csv; charset=utf-8')
-  async csv(@Query(new ZodPipe(listQuery)) q: z.infer<typeof listQuery>) {
-    return toCsv(await this.segmentation.list({ ...q, limit: 5000 }));
+  async csv(@Query(new ZodPipe(exportQuery)) q: z.infer<typeof exportQuery>) {
+    return toCsv(await this.segmentation.exportList({ ...q, limit: 5000 }));
   }
 
   @Get('customers/:id')

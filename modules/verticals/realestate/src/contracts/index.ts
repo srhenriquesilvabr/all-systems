@@ -17,6 +17,8 @@ export const propertyStatuses = ['available', 'reserved', 'sold', 'rented', 'ina
 export type PropertyStatus = (typeof propertyStatuses)[number];
 export const propertyStatusLabel: Record<PropertyStatus, string> = { available: 'Disponível', reserved: 'Reservado', sold: 'Vendido', rented: 'Alugado', inactive: 'Fora do mercado' };
 export const purposeLabel = { sale: 'Venda', rent: 'Locação', both: 'Venda e locação' } as const;
+/** Situações que a equipe escolhe. Reservado, Vendido e Alugado vêm da proposta e do contrato de locação. */
+export const manualPropertyStatuses = ['available', 'inactive'] as const satisfies readonly PropertyStatus[];
 
 export const propertyInput = z
   .object({
@@ -74,6 +76,10 @@ export const dealInput = z.object({
 });
 export type DealInput = z.infer<typeof dealInput>;
 
+/** Edição da proposta em aberto: valores e condições. Comprador e imóvel não mudam. */
+export const dealUpdateInput = dealInput.pick({ price: true, paymentType: true, downPayment: true, fgtsAmount: true, commissionPercent: true, notes: true, brokerId: true });
+export type DealUpdateInput = z.infer<typeof dealUpdateInput>;
+
 export const lostReasonKeys = ['price', 'financing_denied', 'bought_other', 'gave_up', 'documentation', 'no_contact', 'other'] as const;
 export type LostReasonKey = (typeof lostReasonKeys)[number];
 export const lostReasonLabel: Record<LostReasonKey, string> = {
@@ -112,7 +118,7 @@ export interface Deal {
   id: string;
   number: number;
   customer: { id: string; name: string; phone: string | null; email: string | null; document: string | null };
-  property: { id: string; code: number; title: string; address: string; askingPrice: number | null };
+  property: { id: string; code: number; title: string; address: string; askingPrice: number | null; financeable: boolean };
   price: number;
   paymentType: 'cash' | 'financing';
   downPayment: number;

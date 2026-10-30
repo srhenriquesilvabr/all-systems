@@ -6,18 +6,24 @@ import { ModuleRoute, RequirePermission, requestContext } from '@all/module-sdk'
 import { NotificationsModule, NotificationsService } from '@all/notifications';
 import { CREDIT_BUREAU, CreditBureauModule, CreditBureauService } from '@all/credit-bureau';
 import { Body, Controller, Delete, Get, HttpCode, Injectable, Module, NotFoundException, OnModuleInit, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
-import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import {
+  assemblyCorrectionInput,
   assemblyInput,
   assemblyResultsInput,
   assemblyScheduleInput,
   assemblyStatuses,
   assemblyUpdateInput,
+  normalizeCode,
   quotaInput,
+  revertContemplationInput,
   sellerInput,
+  type Administrator,
   type Assembly,
+  type AssemblyCorrectionInput,
   type AssemblyInput,
+  type AssemblyResultSnapshot,
   type AssemblyResultsInput,
   type AssemblyScheduleInput,
   type Plan,
@@ -25,11 +31,14 @@ import {
   type QuotaInput,
   type QuotasSummary,
   type QuotaStatus,
+  type CorrectionEffects,
+  type RevertContemplationInput,
 } from '../contracts';
-import { consAdministrators, consAssemblies, consBids, consPlans, consQuotas } from '../db/schema';
+import { consAdministrators, consAssemblies, consAssemblyCorrections, consBids, consCredits, consPlans, consQuotas } from '../db/schema';
 import type { ConsortiumSettings } from '../manifest';
 import {
   badRequest,
+  brDate,
   brl,
   commissionCents,
   commissionPercentInTx,
@@ -42,7 +51,9 @@ import {
   localDate,
   localToday,
   MODULE,
+  normCode,
   openCreditInTx,
+  resolveConnectionInTx,
   REVERSAL_SOURCE,
   settleBidsInTx,
   SOURCE,
@@ -66,6 +77,16 @@ const periodOf = (from?: string, to?: string) => {
 };
 
 type AssemblyRow = typeof consAssemblies.$inferSelect;
+type Winner = { n: string; type: 'draw' | 'bid'; percent: number | null };
+
+/** Cotas premiadas de um resultado, pela chave de comparação. Sorteada e com lance: vale o sorteio. */
+function winnersOf(input: Pick<AssemblyResultsInput, 'drawn' | 'bids'>): Map<string, Winner> {
+  const winners = new Map<string, Winner>();
+  for (const n of input.drawn) if (!winners.has(normalizeCode(n))) winners.set(normalizeCode(n), { n, type: 'draw', percent: null });
+  for (const b of input.bids) if (!winners.has(normalizeCode(b.quotaNumber))) winners.set(normalizeCode(b.quotaNumber), { n: b.quotaNumber, type: 'bid', percent: b.percent });
+  return winners;
+}
+const snapshotOf = (r: Pick<AssemblyRow, 'drawn' | 'bids' | 'notes'>): AssemblyResultSnapshot => ({ drawn: r.drawn, bids: r.bids, notes: r.notes });
 
 @Injectable()
 export class ConsortiumService implements OnModuleInit {
@@ -189,7 +210,7 @@ export class ConsortiumService implements OnModuleInit {
           and(
             opts.status ? eq(consQuotas.status, opts.status as QuotaStatus) : undefined,
             opts.customerId ? eq(consQuotas.customerId, opts.customerId) : undefined,
-            opts.groupCode ? eq(consQuotas.groupCode, opts.groupCode) : undefined,
+            opts.groupCode ? eq(normCode(consQuotas.groupCode), normalizeCode(opts.groupCode)) : undefined,
             opts.sellerId === 'none' ? isNull(consQuotas.sellerId) : opts.sellerId ? eq(consQuotas.sellerId, opts.sellerId) : undefined,
           ),
         )
@@ -219,18 +240,24 @@ export class ConsortiumService implements OnModuleInit {
         const [row] = await tx.select({ q: consQuotas, plan: consPlans }).from(consQuotas).innerJoin(consPlans, eq(consPlans.id, consQuotas.planId)).where(eq(consQuotas.id, id)).for('update');
         if (!row || (row.q.status !== 'proposal' && row.q.status !== 'active')) throw badRequest('QUOTA_NOT_CANCELLABLE', 'Só cotas em análise ou ativas podem ser canceladas');
         await tx.update(consQuotas).set({ status: 'cancelled', statusMessage: reason, cancelledAt: new Date() }).where(eq(consQuotas.id, id));
-        const reversal = row.q.status === 'active' ? await this.reverseCommissionInTx(tx, row.q, row.plan) : null;
-        await this.audit.log(tx, { action: 'consortium.quota.cancelled', entity: 'cons_quota', entityId: id, data: { reason, reversal } });
+        const withinReversal = row.q.status === 'active' && (await this.withinReversalInTx(tx, row.q));
+        const reversal = withinReversal ? await this.reverseCommissionInTx(tx, row.q, row.plan) : null;
+        // O lead sai de "Venda" e a recompensa da indicação segue a mesma regra de estorno da comissão.
+        const lead = await this.leads.quotaCancelledInTx(tx, row.q, { reason, withinReversal });
+        await this.audit.log(tx, { action: 'consortium.quota.cancelled', entity: 'cons_quota', entityId: id, data: { reason, reversal, lead } });
         return id;
       })
       .then((qid) => this.get(qid));
   }
 
-  private async reverseCommissionInTx(tx: Tx, q: QuotaRow, plan: PlanRow) {
+  /** A cota foi cancelada dentro do prazo de estorno (configurado em Comissões; zero = nunca)? */
+  private async withinReversalInTx(tx: Tx, q: QuotaRow) {
     const { reversalMonths } = await this.settings.getInTx<ConsortiumSettings>(tx, MODULE);
-    if (!reversalMonths) return null;
+    return !!reversalMonths && localToday() < addMonths(localDate(q.activatedAt ?? q.createdAt), reversalMonths);
+  }
+
+  private async reverseCommissionInTx(tx: Tx, q: QuotaRow, plan: PlanRow) {
     const today = localToday();
-    if (today >= addMonths(localDate(q.activatedAt ?? q.createdAt), reversalMonths)) return null;
     const entries = (await this.finance.listBySourceInTx(tx, SOURCE, q.id)).filter((e) => e.kind === 'income');
     const pendingCents = entries.filter((e) => e.status === 'pending').reduce((s, e) => s + toCents(e.amount), 0);
     const paidCents = entries.filter((e) => e.status === 'paid').reduce((s, e) => s + toCents(e.amount), 0);
@@ -319,23 +346,44 @@ export class ConsortiumService implements OnModuleInit {
 
   // ---- Assembleias ----------------------------------------------------------------------------
 
+  /** Administradoras da empresa: as da tabela de comissões e as que têm planos. */
+  administrators(): Promise<Administrator[]> {
+    return this.tdb.run(async (tx) => {
+      const admins = await tx.select({ connectionId: consAdministrators.connectionId, institution: consAdministrators.institution }).from(consAdministrators);
+      const plans = await tx.selectDistinct({ connectionId: consPlans.connectionId, institution: consPlans.institution }).from(consPlans);
+      const byConnection = new Map([...plans, ...admins].map((a) => [a.connectionId, a]));
+      return [...byConnection.values()].sort((x, y) => x.institution.localeCompare(y.institution));
+    });
+  }
+
   /**
-   * Resultado da assembleia por grupo + data. Se ela estava agendada, o resultado entra nela (e
-   * acerta os lances); se não existia, é criada já realizada. Realizada de novo: erro.
+   * Resultado da assembleia por grupo + data + administradora. Se ela estava agendada, o resultado
+   * entra nela (e acerta os lances); se não existia, é criada já realizada. Realizada de novo: erro
+   * (para mudar um resultado lançado, use a correção).
    */
   recordAssembly(input: AssemblyInput): Promise<Assembly> {
     const { tenantId } = requestContext.require();
     return this.tdb.run(async (tx) => {
-      const [existing] = await tx.select().from(consAssemblies).where(and(eq(consAssemblies.groupCode, input.groupCode), eq(consAssemblies.heldOn, input.heldOn))).for('update');
+      const connectionId = await resolveConnectionInTx(tx, input.groupCode, input.connectionId);
+      const [existing] = await tx.select().from(consAssemblies).where(this.sameAssembly(input.groupCode, input.heldOn, connectionId)).for('update');
       if (existing && existing.status === 'held') throw badRequest('ASSEMBLY_EXISTS', 'Esta assembleia já foi lançada');
       const row =
         existing ??
         (await tx
           .insert(consAssemblies)
-          .values({ tenantId, groupCode: input.groupCode, heldOn: input.heldOn, status: 'held', drawn: input.drawn, bids: input.bids, notes: input.notes ?? null })
+          .values({ tenantId, connectionId, groupCode: input.groupCode, heldOn: input.heldOn, status: 'held', drawn: input.drawn, bids: input.bids, notes: input.notes ?? null })
           .returning())[0]!;
-      return this.applyResultsInTx(tx, tenantId, row, input);
+      return this.applyResultsInTx(tx, tenantId, row, { ...input, connectionId });
     });
+  }
+
+  /** Mesmo grupo (código normalizado) e data; na mesma administradora, ou em assembleia ainda sem administradora. */
+  private sameAssembly(groupCode: string, heldOn: string, connectionId: string | null) {
+    return and(
+      eq(normCode(consAssemblies.groupCode), normalizeCode(groupCode)),
+      eq(consAssemblies.heldOn, heldOn),
+      connectionId ? or(eq(consAssemblies.connectionId, connectionId), isNull(consAssemblies.connectionId)) : undefined,
+    );
   }
 
   /** Resultado de uma assembleia agendada (pelo id). */
@@ -351,33 +399,18 @@ export class ConsortiumService implements OnModuleInit {
 
   /** Cotas da carteira sorteadas ou com lance vencedor ficam contempladas, os lances são acertados e o cliente é avisado. */
   private async applyResultsInTx(tx: Tx, tenantId: string, row: AssemblyRow, input: AssemblyResultsInput): Promise<Assembly> {
+    const connectionId = row.connectionId ?? (await resolveConnectionInTx(tx, row.groupCode, input.connectionId));
     await tx
       .update(consAssemblies)
-      .set({ status: 'held', drawn: input.drawn, bids: input.bids, notes: input.notes ?? row.notes })
+      .set({ connectionId, status: 'held', drawn: input.drawn, bids: input.bids, notes: input.notes ?? row.notes })
       .where(eq(consAssemblies.id, row.id));
-    const winners = [...input.drawn.map((n) => ({ n, type: 'draw' as const, percent: null })), ...input.bids.map((b) => ({ n: b.quotaNumber, type: 'bid' as const, percent: b.percent }))];
+    const winners = winnersOf(input);
+    const ours = await this.activeWinnersInTx(tx, { ...row, connectionId }, winners);
     const contemplated = new Map<string, { q: QuotaRow; plan: PlanRow; type: 'draw' | 'bid' }>();
-    if (winners.length) {
-      const ours = await tx
-        .select({ q: consQuotas, plan: consPlans })
-        .from(consQuotas)
-        .innerJoin(consPlans, eq(consPlans.id, consQuotas.planId))
-        .where(and(eq(consQuotas.groupCode, row.groupCode), eq(consQuotas.status, 'active'), inArray(consQuotas.quotaNumber, winners.map((w) => w.n))));
-      for (const { q, plan } of ours) {
-        const w = winners.find((x) => x.n === q.quotaNumber)!;
-        contemplated.set(q.id, { q, plan, type: w.type });
-        await tx
-          .update(consQuotas)
-          .set({ status: 'contemplated', contemplatedOn: row.heldOn, contemplationType: w.type, bidPercent: w.percent != null ? w.percent.toFixed(2) : null })
-          .where(eq(consQuotas.id, q.id));
-        await this.customers.addTimeline(tx, { customerId: q.customerId, moduleKey: MODULE, type: 'quota.contemplated', title: `Cota ${q.quotaNumber} contemplada (${w.type === 'draw' ? 'sorteio' : 'lance'})`, entity: 'cons_quota', entityId: q.id });
-        await this.notifications.enqueueInTx(tx, {
-          templateKey: 'consortium.contemplated',
-          customerId: q.customerId,
-          related: { entity: 'cons_quota', id: q.id },
-          data: { cota: { grupo: q.groupCode, numero: q.quotaNumber, credito: brl.format(Number(plan.creditValue)), forma: w.type === 'draw' ? 'sorteio' : 'lance' } },
-        });
-      }
+    for (const { q, plan } of ours) {
+      const w = winners.get(normalizeCode(q.quotaNumber))!;
+      contemplated.set(q.id, { q, plan, type: w.type });
+      await this.contemplateInTx(tx, row, q, plan, w);
     }
     const won = await settleBidsInTx(tx, row.id, {
       quotaIds: new Set(contemplated.keys()),
@@ -391,15 +424,172 @@ export class ConsortiumService implements OnModuleInit {
     return (await this.assembliesInTx(tx, { id: row.id }))[0]!;
   }
 
+  /** Cotas ativas da carteira neste grupo e nesta administradora com número premiado. */
+  private async activeWinnersInTx(tx: Tx, row: AssemblyRow, winners: Map<string, Winner>) {
+    if (!winners.size || !row.connectionId) return [];
+    return tx
+      .select({ q: consQuotas, plan: consPlans })
+      .from(consQuotas)
+      .innerJoin(consPlans, eq(consPlans.id, consQuotas.planId))
+      .where(
+        and(
+          eq(consPlans.connectionId, row.connectionId),
+          eq(normCode(consQuotas.groupCode), normalizeCode(row.groupCode)),
+          eq(consQuotas.status, 'active'),
+          inArray(normCode(consQuotas.quotaNumber), [...winners.keys()]),
+        ),
+      )
+      .for('update', { of: consQuotas });
+  }
+
+  private async contemplateInTx(tx: Tx, row: AssemblyRow, q: QuotaRow, plan: PlanRow, w: Winner) {
+    await tx
+      .update(consQuotas)
+      .set({ status: 'contemplated', contemplatedOn: row.heldOn, contemplationType: w.type, contemplatedAssemblyId: row.id, bidPercent: w.percent != null ? w.percent.toFixed(2) : null })
+      .where(eq(consQuotas.id, q.id));
+    await this.customers.addTimeline(tx, { customerId: q.customerId, moduleKey: MODULE, type: 'quota.contemplated', title: `Cota ${q.quotaNumber} contemplada (${w.type === 'draw' ? 'sorteio' : 'lance'})`, entity: 'cons_quota', entityId: q.id });
+    await this.notifications.enqueueInTx(tx, {
+      templateKey: 'consortium.contemplated',
+      customerId: q.customerId,
+      related: { entity: 'cons_quota', id: q.id },
+      data: { cota: { grupo: q.groupCode, numero: q.quotaNumber, credito: brl.format(Number(plan.creditValue)), forma: w.type === 'draw' ? 'sorteio' : 'lance' } },
+    });
+  }
+
+  /**
+   * Corrige um resultado já lançado: a lista nova vale inteira no lugar da anterior, e cada cota da
+   * carteira é acertada com ela. O que fica registrado (na assembleia e na auditoria): o motivo, o
+   * antes, o depois e o efeito em cada cota. Crédito já liberado precisa voltar antes pela aba
+   * Crédito: desfazer aqui esconderia uma liberação que aconteceu de verdade.
+   */
+  correctResults(id: string, input: AssemblyCorrectionInput): Promise<Assembly> {
+    const { tenantId } = requestContext.require();
+    return this.tdb.run(async (tx) => {
+      const [row] = await tx.select().from(consAssemblies).where(eq(consAssemblies.id, id)).for('update');
+      if (!row) throw new NotFoundException({ code: 'ASSEMBLY_NOT_FOUND', message: 'Assembleia não encontrada' });
+      if (row.status !== 'held') throw badRequest('ASSEMBLY_NOT_HELD', 'Esta assembleia ainda não tem resultado: use "Lançar resultado"');
+      return this.correctInTx(tx, tenantId, row, { ...input, notes: input.notes === undefined ? row.notes : input.notes }, 'correction');
+    });
+  }
+
+  /** Desfaz a contemplação de uma cota: ela sai do resultado da assembleia, pelo mesmo caminho da correção. */
+  revertContemplation(quotaId: string, input: RevertContemplationInput): Promise<Quota> {
+    const { tenantId } = requestContext.require();
+    return this.tdb
+      .run(async (tx) => {
+        const [found] = await tx.select({ q: consQuotas, connectionId: consPlans.connectionId }).from(consQuotas).innerJoin(consPlans, eq(consPlans.id, consQuotas.planId)).where(eq(consQuotas.id, quotaId));
+        if (!found) throw new NotFoundException({ code: 'QUOTA_NOT_FOUND', message: 'Cota não encontrada' });
+        const { q, connectionId } = found;
+        if (q.status !== 'contemplated') throw badRequest('QUOTA_NOT_CONTEMPLATED', 'Esta cota não está contemplada');
+        if (!q.contemplatedAssemblyId) throw badRequest('ASSEMBLY_NOT_FOUND', 'Assembleia da contemplação não encontrada');
+        const [row] = await tx.select().from(consAssemblies).where(eq(consAssemblies.id, q.contemplatedAssemblyId)).for('update');
+        if (!row) throw badRequest('ASSEMBLY_NOT_FOUND', 'Assembleia da contemplação não encontrada');
+        const number = normalizeCode(q.quotaNumber);
+        const drawn = row.drawn.filter((n) => normalizeCode(n) !== number);
+        const bids = row.bids.filter((b) => normalizeCode(b.quotaNumber) !== number);
+        await this.correctInTx(tx, tenantId, row, { ...input, connectionId, drawn, bids, notes: row.notes }, 'contemplation_reverted');
+      })
+      .then(() => this.get(quotaId));
+  }
+
+  private async correctInTx(tx: Tx, tenantId: string, row: AssemblyRow, input: AssemblyCorrectionInput, kind: 'correction' | 'contemplation_reverted'): Promise<Assembly> {
+    const connectionId = row.connectionId ?? (await resolveConnectionInTx(tx, row.groupCode, input.connectionId));
+    const winners = winnersOf(input);
+    const current = await tx
+      .select({ q: consQuotas, plan: consPlans, customer: customers.name, creditStatus: consCredits.status })
+      .from(consQuotas)
+      .innerJoin(consPlans, eq(consPlans.id, consQuotas.planId))
+      .innerJoin(customers, eq(customers.id, consQuotas.customerId))
+      .leftJoin(consCredits, eq(consCredits.quotaId, consQuotas.id))
+      .where(eq(consQuotas.contemplatedAssemblyId, row.id))
+      .for('update', { of: consQuotas });
+
+    const leaving = current.filter((c) => !winners.has(normalizeCode(c.q.quotaNumber)));
+    const staying = current.filter((c) => winners.has(normalizeCode(c.q.quotaNumber)));
+    const retyped = staying.filter((c) => winners.get(normalizeCode(c.q.quotaNumber))!.type !== c.q.contemplationType);
+    // Recusa antes de mudar qualquer coisa: a transação inteira fica como estava.
+    const released = [...leaving, ...retyped].filter((c) => c.creditStatus && c.creditStatus !== 'awaiting_docs');
+    if (released.length) {
+      throw badRequest(
+        'CREDIT_ALREADY_RELEASED',
+        `O crédito da cota ${released.map((c) => c.q.quotaNumber).join(', ')} já foi liberado: confirme com a administradora e volte o crédito para "Aguardando documentação" na aba Crédito da cota antes de corrigir`,
+      );
+    }
+
+    await tx.update(consAssemblies).set({ connectionId, drawn: input.drawn, bids: input.bids, notes: input.notes ?? null }).where(eq(consAssemblies.id, row.id));
+
+    const effects: CorrectionEffects = { reverted: [], contemplated: [], changed: [] };
+    for (const { q, customer, creditStatus } of leaving) {
+      await tx.update(consQuotas).set({ status: 'active', contemplatedOn: null, contemplationType: null, contemplatedAssemblyId: null, bidPercent: null }).where(eq(consQuotas.id, q.id));
+      if (creditStatus) await tx.delete(consCredits).where(eq(consCredits.quotaId, q.id));
+      await this.customers.addTimeline(tx, { customerId: q.customerId, moduleKey: MODULE, type: 'quota.contemplation_reverted', title: `Contemplação da cota ${q.quotaNumber} desfeita: ${input.reason}`, entity: 'cons_quota', entityId: q.id });
+      // O motivo é interno: o cliente recebe só a correção do aviso anterior.
+      if (input.notifyCustomer) {
+        await this.notifications.enqueueInTx(tx, {
+          templateKey: 'consortium.contemplation_reverted',
+          customerId: q.customerId,
+          related: { entity: 'cons_quota', id: q.id },
+          data: { cota: { grupo: q.groupCode, numero: q.quotaNumber }, assembleia: { data: brDate(row.heldOn) } },
+        });
+      }
+      effects.reverted.push({ quotaId: q.id, quotaNumber: q.quotaNumber, customer, notified: input.notifyCustomer, creditRemoved: !!creditStatus });
+    }
+
+    const contemplated = new Map<string, { q: QuotaRow; plan: PlanRow; type: 'draw' | 'bid' }>();
+    for (const { q, plan, customer } of staying) {
+      const w = winners.get(normalizeCode(q.quotaNumber))!;
+      contemplated.set(q.id, { q, plan, type: w.type });
+      const percent = w.percent != null ? w.percent.toFixed(2) : null;
+      if (w.type === q.contemplationType && Number(percent ?? 0) === Number(q.bidPercent ?? 0)) continue;
+      await tx.update(consQuotas).set({ contemplationType: w.type, bidPercent: percent }).where(eq(consQuotas.id, q.id));
+      effects.changed.push({ quotaId: q.id, quotaNumber: q.quotaNumber, customer, type: w.type, bidPercent: w.percent });
+    }
+
+    const newcomers = await this.activeWinnersInTx(tx, { ...row, connectionId }, winners);
+    const names = newcomers.length
+      ? new Map((await tx.select({ id: customers.id, name: customers.name }).from(customers).where(inArray(customers.id, newcomers.map((n) => n.q.customerId)))).map((c) => [c.id, c.name]))
+      : new Map<string, string>();
+    for (const { q, plan } of newcomers) {
+      const w = winners.get(normalizeCode(q.quotaNumber))!;
+      contemplated.set(q.id, { q, plan, type: w.type });
+      await this.contemplateInTx(tx, row, q, plan, w);
+      effects.contemplated.push({ quotaId: q.id, quotaNumber: q.quotaNumber, customer: names.get(q.customerId) ?? '', type: w.type });
+    }
+
+    const won = await settleBidsInTx(
+      tx,
+      row.id,
+      { quotaIds: new Set(contemplated.keys()), bidQuotaIds: new Set([...contemplated.values()].filter((c) => c.type === 'bid').map((c) => c.q.id)) },
+      { all: true },
+    );
+    // Crédito: abre para quem entrou; refaz para quem mudou de forma (o lance embutido sai do crédito).
+    for (const { q } of retyped) await tx.delete(consCredits).where(eq(consCredits.quotaId, q.id));
+    for (const { q, plan } of [...retyped, ...newcomers]) {
+      const bid = won.get(q.id);
+      await openCreditInTx(tx, tenantId, q.id, plan.creditValue, bid?.type === 'embedded' ? bid.amount : null);
+    }
+
+    const after: AssemblyResultSnapshot = { drawn: input.drawn, bids: input.bids, notes: input.notes ?? null };
+    await tx.insert(consAssemblyCorrections).values({ tenantId, assemblyId: row.id, kind, reason: input.reason, before: snapshotOf(row), after, effects, userId: requestContext.get().userId ?? null });
+    await this.audit.log(tx, {
+      action: kind === 'correction' ? 'consortium.assembly.corrected' : 'consortium.quota.contemplation_reverted',
+      entity: 'cons_assembly',
+      entityId: row.id,
+      data: { reason: input.reason, before: snapshotOf(row), after, effects, notifyCustomer: input.notifyCustomer },
+    });
+    return (await this.assembliesInTx(tx, { id: row.id }))[0]!;
+  }
+
   /** Agenda a próxima assembleia do grupo (sem resultado), para o calendário e para receber lances. */
   scheduleAssembly(input: AssemblyScheduleInput): Promise<Assembly> {
     const { tenantId } = requestContext.require();
     if (input.heldOn < localToday()) throw badRequest('ASSEMBLY_IN_PAST', 'Para assembleia que já aconteceu, lance o resultado');
     return this.tdb.run(async (tx) => {
-      await this.assertFreeDate(tx, input.groupCode, input.heldOn);
+      const connectionId = await resolveConnectionInTx(tx, input.groupCode, input.connectionId);
+      await this.assertFreeDate(tx, input.groupCode, input.heldOn, connectionId);
       const [row] = await tx
         .insert(consAssemblies)
-        .values({ tenantId, groupCode: input.groupCode, heldOn: input.heldOn, status: 'scheduled', drawn: [], bids: [], notes: input.notes ?? null })
+        .values({ tenantId, connectionId, groupCode: input.groupCode, heldOn: input.heldOn, status: 'scheduled', drawn: [], bids: [], notes: input.notes ?? null })
         .returning();
       await this.audit.log(tx, { action: 'consortium.assembly.scheduled', entity: 'cons_assembly', entityId: row!.id, data: { groupCode: input.groupCode, heldOn: input.heldOn } });
       return (await this.assembliesInTx(tx, { id: row!.id }))[0]!;
@@ -412,7 +602,7 @@ export class ConsortiumService implements OnModuleInit {
       const row = await this.scheduledOrFail(tx, id);
       if (input.heldOn && input.heldOn !== row.heldOn) {
         if (input.heldOn < localToday()) throw badRequest('ASSEMBLY_IN_PAST', 'Para assembleia que já aconteceu, lance o resultado');
-        await this.assertFreeDate(tx, row.groupCode, input.heldOn);
+        await this.assertFreeDate(tx, row.groupCode, input.heldOn, row.connectionId);
       }
       await tx
         .update(consAssemblies)
@@ -441,16 +631,16 @@ export class ConsortiumService implements OnModuleInit {
     return row;
   }
 
-  private async assertFreeDate(tx: Tx, groupCode: string, heldOn: string) {
-    const [dup] = await tx.select({ id: consAssemblies.id }).from(consAssemblies).where(and(eq(consAssemblies.groupCode, groupCode), eq(consAssemblies.heldOn, heldOn)));
+  private async assertFreeDate(tx: Tx, groupCode: string, heldOn: string, connectionId: string | null) {
+    const [dup] = await tx.select({ id: consAssemblies.id }).from(consAssemblies).where(this.sameAssembly(groupCode, heldOn, connectionId));
     if (dup) throw badRequest('ASSEMBLY_EXISTS', 'Já existe assembleia deste grupo nesta data');
   }
 
-  assemblies(opts: { from?: string; to?: string; status?: string; groupCode?: string } = {}): Promise<Assembly[]> {
+  assemblies(opts: { from?: string; to?: string; status?: string; groupCode?: string; connectionId?: string } = {}): Promise<Assembly[]> {
     return this.tdb.run((tx) => this.assembliesInTx(tx, opts));
   }
 
-  private async assembliesInTx(tx: Tx, opts: { id?: string; from?: string; to?: string; status?: string; groupCode?: string }): Promise<Assembly[]> {
+  private async assembliesInTx(tx: Tx, opts: { id?: string; from?: string; to?: string; status?: string; groupCode?: string; connectionId?: string }): Promise<Assembly[]> {
     const rows = await tx
       .select()
       .from(consAssemblies)
@@ -460,7 +650,8 @@ export class ConsortiumService implements OnModuleInit {
           opts.from ? gte(consAssemblies.heldOn, opts.from) : undefined,
           opts.to ? lte(consAssemblies.heldOn, opts.to) : undefined,
           opts.status ? eq(consAssemblies.status, opts.status as AssemblyRow['status']) : undefined,
-          opts.groupCode ? eq(consAssemblies.groupCode, opts.groupCode) : undefined,
+          opts.groupCode ? eq(normCode(consAssemblies.groupCode), normalizeCode(opts.groupCode)) : undefined,
+          opts.connectionId ? or(eq(consAssemblies.connectionId, opts.connectionId), isNull(consAssemblies.connectionId)) : undefined,
         ),
       )
       .orderBy(desc(consAssemblies.heldOn))
@@ -470,7 +661,7 @@ export class ConsortiumService implements OnModuleInit {
           .select({ q: consQuotas, customer: customers.name })
           .from(consQuotas)
           .innerJoin(customers, eq(customers.id, consQuotas.customerId))
-          .where(and(eq(consQuotas.status, 'contemplated'), inArray(consQuotas.groupCode, [...new Set(rows.map((r) => r.groupCode))])))
+          .where(and(eq(consQuotas.status, 'contemplated'), inArray(consQuotas.contemplatedAssemblyId, rows.map((r) => r.id))))
       : [];
     const bids = rows.length
       ? await tx
@@ -481,8 +672,19 @@ export class ConsortiumService implements OnModuleInit {
           .where(inArray(consBids.assemblyId, rows.map((r) => r.id)))
           .orderBy(asc(consBids.createdAt))
       : [];
+    const corrections = rows.length
+      ? await tx
+          .select({ c: consAssemblyCorrections, userName: coreSchema.users.name })
+          .from(consAssemblyCorrections)
+          .leftJoin(coreSchema.users, eq(coreSchema.users.id, consAssemblyCorrections.userId))
+          .where(inArray(consAssemblyCorrections.assemblyId, rows.map((r) => r.id)))
+          .orderBy(desc(consAssemblyCorrections.createdAt), desc(consAssemblyCorrections.id))
+      : [];
+    const institutions = new Map((await tx.select({ id: consAdministrators.connectionId, name: consAdministrators.institution }).from(consAdministrators)).map((a) => [a.id, a.name]));
     return rows.map((r) => ({
       id: r.id,
+      connectionId: r.connectionId,
+      institution: r.connectionId ? (institutions.get(r.connectionId) ?? null) : null,
       groupCode: r.groupCode,
       heldOn: r.heldOn,
       status: r.status,
@@ -492,12 +694,15 @@ export class ConsortiumService implements OnModuleInit {
       ourWinners:
         r.status === 'held'
           ? contemplated
-              .filter((c) => c.q.groupCode === r.groupCode && c.q.contemplatedOn === r.heldOn)
+              .filter((c) => c.q.contemplatedAssemblyId === r.id)
               .map((c) => ({ quotaId: c.q.id, customer: c.customer, quotaNumber: c.q.quotaNumber!, type: c.q.contemplationType! }))
           : [],
       ourBids: bids
         .filter((x) => x.b.assemblyId === r.id)
         .map((x) => ({ id: x.b.id, quotaId: x.b.quotaId, customer: x.customer, quotaNumber: x.quotaNumber, type: x.b.type, percent: Number(x.b.percent), amount: Number(x.b.amount), status: x.b.status })),
+      corrections: corrections
+        .filter((x) => x.c.assemblyId === r.id)
+        .map((x) => ({ id: x.c.id, kind: x.c.kind, reason: x.c.reason, before: x.c.before, after: x.c.after, effects: x.c.effects, userName: x.userName, createdAt: x.c.createdAt.toISOString() })),
     }));
   }
 
@@ -609,7 +814,7 @@ function toQuota(row: { q: QuotaRow; plan: PlanRow; adminPercent: string | null;
     id: q.id,
     number: q.number,
     customer: row.customer,
-    plan: { id: plan.id, name: plan.name, institution: plan.institution, creditValue: Number(plan.creditValue), termMonths: plan.termMonths, installment: installmentOf(plan), assetType: plan.assetType },
+    plan: { id: plan.id, connectionId: plan.connectionId, name: plan.name, institution: plan.institution, creditValue: Number(plan.creditValue), termMonths: plan.termMonths, installment: installmentOf(plan), assetType: plan.assetType },
     status: q.status,
     statusMessage: q.statusMessage,
     groupCode: q.groupCode,
@@ -639,7 +844,7 @@ const quotasQuery = z.object({
 });
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const summaryQuery = z.object({ from: isoDate.optional(), to: isoDate.optional() }).refine((q) => !q.from || !q.to || q.from <= q.to, 'Período inválido');
-const assembliesQuery = z.object({ from: isoDate.optional(), to: isoDate.optional(), status: z.enum(assemblyStatuses).optional(), groupCode: z.string().max(20).optional() });
+const assembliesQuery = z.object({ from: isoDate.optional(), to: isoDate.optional(), status: z.enum(assemblyStatuses).optional(), groupCode: z.string().max(20).optional(), connectionId: z.string().uuid().optional() });
 
 @Controller('consortium')
 @ModuleRoute('consortium')
@@ -697,6 +902,20 @@ export class ConsortiumController {
     return this.consortium.cancel(id, body.reason);
   }
 
+  @Get('administrators')
+  @RequirePermission('consortium.read')
+  administrators() {
+    return this.consortium.administrators();
+  }
+
+  /** Desfaz a contemplação da cota (com motivo). */
+  @Post('quotas/:id/revert-contemplation')
+  @HttpCode(200)
+  @RequirePermission('consortium.manage')
+  revertContemplation(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(revertContemplationInput)) body: RevertContemplationInput) {
+    return this.consortium.revertContemplation(id, body);
+  }
+
   @Get('assemblies')
   @RequirePermission('consortium.read')
   assemblies(@Query(new ZodPipe(assembliesQuery)) q: z.infer<typeof assembliesQuery>) {
@@ -734,6 +953,14 @@ export class ConsortiumController {
   @RequirePermission('consortium.manage')
   results(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(assemblyResultsInput)) body: AssemblyResultsInput) {
     return this.consortium.recordResults(id, body);
+  }
+
+  /** Corrige o resultado já lançado (com motivo). */
+  @Post('assemblies/:id/correct')
+  @HttpCode(200)
+  @RequirePermission('consortium.manage')
+  correct(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(assemblyCorrectionInput)) body: AssemblyCorrectionInput) {
+    return this.consortium.correctResults(id, body);
   }
 }
 

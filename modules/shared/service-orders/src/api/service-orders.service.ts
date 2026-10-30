@@ -4,7 +4,7 @@ import type { Tx } from '@all/db';
 import { requestContext } from '@all/module-sdk';
 import { NotificationsService } from '@all/notifications';
 import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
-import { and, asc, count, desc, eq, ilike, or, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, ilike, inArray, or, type SQL } from 'drizzle-orm';
 import type { CreateOrderInput, OrderDetail, OrderItemInput, OrderSummary, PaymentInput, ServiceOrderWorkflow, UpdateOrderInput } from '../contracts';
 import { paymentMethodLabel } from '../contracts';
 import { soItems, soOrders, soPayments, soStatusHistory } from '../db/schema';
@@ -143,34 +143,91 @@ export class ServiceOrdersService implements OnModuleInit {
   }
 
   update(id: string, input: UpdateOrderInput) {
-    return this.tdb.run(async (tx) => {
-      const order = await this.findOrFail(tx, id, true);
-      if (this.statusOf(order)?.terminal) throw badRequest('ORDER_CLOSED', 'Ordem encerrada não pode ser alterada');
+    return this.tdb.run((tx) => this.updateInTx(tx, id, input));
+  }
 
-      const items = input.items ?? (await this.itemsOf(tx, id));
-      const totals = computeTotals(items, input.discount ?? Number(order.discount));
-      if (totals.total < toCents(order.paidAmount)) {
-        throw badRequest('TOTAL_BELOW_PAID', 'O novo total é menor do que o valor já pago');
-      }
+  /** Para verticais: edita a ordem na transação delas. Vale a regra de edição do fluxo (`beforeUpdate`). */
+  async updateInTx(tx: Tx, id: string, input: UpdateOrderInput): Promise<OrderDetail> {
+    const order = await this.findOrFail(tx, id, true);
+    if (this.statusOf(order)?.terminal) throw badRequest('ORDER_CLOSED', 'Ordem encerrada não pode ser alterada');
+    await this.workflows.get(order.workflow)?.beforeUpdate?.({ tx, orderId: id, status: order.status, input });
+    if (input.dueAt && toDateOnly(input.dueAt) < toDateOnly(order.receivedAt)) {
+      throw badRequest('DUE_BEFORE_RECEIVED', 'A previsão de entrega não pode ser antes da data de entrada');
+    }
 
-      const [updated] = await tx
-        .update(soOrders)
-        .set({
-          subtotal: centsToDecimal(totals.subtotal),
-          discount: centsToDecimal(totals.discount),
-          total: centsToDecimal(totals.total),
-          paymentStatus: paymentStatusOf(toCents(order.paidAmount), totals.total),
-          ...(input.dueAt !== undefined ? { dueAt: input.dueAt } : {}),
-          ...(input.notesCustomer !== undefined ? { notesCustomer: input.notesCustomer } : {}),
-          ...(input.notesInternal !== undefined ? { notesInternal: input.notesInternal } : {}),
-        })
-        .where(eq(soOrders.id, id))
+    const items = input.items ?? (await this.itemsOf(tx, id));
+    const totals = computeTotals(items, input.discount ?? Number(order.discount));
+    if (totals.total < toCents(order.paidAmount)) {
+      throw badRequest('TOTAL_BELOW_PAID', 'O novo total é menor do que o valor já pago');
+    }
+
+    const [updated] = await tx
+      .update(soOrders)
+      .set({
+        subtotal: centsToDecimal(totals.subtotal),
+        discount: centsToDecimal(totals.discount),
+        total: centsToDecimal(totals.total),
+        paymentStatus: paymentStatusOf(toCents(order.paidAmount), totals.total),
+        ...(input.dueAt !== undefined ? { dueAt: input.dueAt } : {}),
+        ...(input.notesCustomer !== undefined ? { notesCustomer: input.notesCustomer } : {}),
+        ...(input.notesInternal !== undefined ? { notesInternal: input.notesInternal } : {}),
+      })
+      .where(eq(soOrders.id, id))
+      .returning();
+    if (input.items) await this.replaceItems(tx, id, input.items);
+    await this.syncReceivable(tx, updated!);
+    await this.audit.log(tx, { action: 'service_order.updated', entity: 'service_order', entityId: id, data: { fields: Object.keys(input) } });
+    return this.detail(tx, id);
+  }
+
+  /**
+   * Para verticais com itens próprios (ex.: peças etiquetadas): inclui e tira itens sem refazer os
+   * outros, que mantêm o id. Total, saldo e "a receber" acompanham. Devolve os itens incluídos, na ordem.
+   */
+  async changeItemsInTx(tx: Tx, id: string, change: { add?: OrderItemInput[]; removeIds?: string[] }) {
+    const { tenantId } = requestContext.requireTenant();
+    const order = await this.findOrFail(tx, id, true);
+    if (this.statusOf(order)?.terminal) throw badRequest('ORDER_CLOSED', 'Ordem encerrada não pode ser alterada');
+    const current = await tx.select().from(soItems).where(eq(soItems.orderId, id));
+    const removeIds = change.removeIds ?? [];
+    const kept = current.filter((i) => !removeIds.includes(i.id));
+    if (kept.length + (change.add?.length ?? 0) === 0) throw badRequest('ORDER_WITHOUT_ITEMS', 'A ordem precisa ter ao menos um item');
+
+    const subtotal = kept.reduce((sum, i) => sum + toCents(i.total), 0) + (change.add ?? []).reduce((sum, i) => sum + itemTotal(i), 0);
+    const discount = toCents(order.discount);
+    if (discount > subtotal) throw badRequest('DISCOUNT_TOO_HIGH', 'O desconto é maior que o valor dos itens');
+    const total = subtotal - discount;
+    if (total < toCents(order.paidAmount)) throw badRequest('TOTAL_BELOW_PAID', 'O novo total é menor do que o valor já pago');
+
+    if (removeIds.length) await tx.delete(soItems).where(and(eq(soItems.orderId, id), inArray(soItems.id, removeIds)));
+    let added: (typeof soItems.$inferSelect)[] = [];
+    if (change.add?.length) {
+      const next = current.reduce((max, i) => Math.max(max, i.position), -1) + 1;
+      added = await tx
+        .insert(soItems)
+        .values(
+          change.add.map((item, i) => ({
+            tenantId,
+            orderId: id,
+            position: next + i,
+            description: item.description,
+            quantity: String(item.quantity),
+            unitPrice: centsToDecimal(toCents(item.unitPrice)),
+            total: centsToDecimal(itemTotal(item)),
+            refType: item.refType ?? null,
+            refId: item.refId ?? null,
+          })),
+        )
         .returning();
-      if (input.items) await this.replaceItems(tx, id, input.items);
-      await this.syncReceivable(tx, updated!);
-      await this.audit.log(tx, { action: 'service_order.updated', entity: 'service_order', entityId: id, data: { fields: Object.keys(input) } });
-      return this.detail(tx, id);
-    });
+      added.sort((a, b) => a.position - b.position);
+    }
+    const [updated] = await tx
+      .update(soOrders)
+      .set({ subtotal: centsToDecimal(subtotal), total: centsToDecimal(total), paymentStatus: paymentStatusOf(toCents(order.paidAmount), total) })
+      .where(eq(soOrders.id, id))
+      .returning();
+    await this.syncReceivable(tx, updated!);
+    return added;
   }
 
   transition(id: string, to: string, reason?: string | null) {
@@ -213,7 +270,8 @@ export class ServiceOrdersService implements OnModuleInit {
       entity: 'service_order',
       entityId: id,
     });
-    if (opts.notify !== false) await this.notify(tx, updated!, workflow);
+    if (opts.notify !== false && !workflow.silentTransitions?.[order.status]?.includes(to)) await this.notify(tx, updated!, workflow);
+    await workflow.afterTransition?.({ tx, orderId: id, number: order.number, customerId: order.customerId, from: order.status, to, reason, at: opts.at ?? new Date() });
     await this.audit.log(tx, { action: 'service_order.status_changed', entity: 'service_order', entityId: id, data: { from: order.status, to, reason } });
     await this.outbox.publish(tx, ORDER_STATUS_CHANGED, {
       orderId: id,
@@ -234,59 +292,65 @@ export class ServiceOrdersService implements OnModuleInit {
   }
 
   addPayment(id: string, input: PaymentInput) {
-    const { tenantId, userId } = requestContext.require();
-    return this.tdb.run(async (tx) => {
-      const order = await this.findOrFail(tx, id, true);
-      if (this.statusOf(order)?.cancelled) throw badRequest('ORDER_CANCELLED', 'Ordem cancelada não recebe pagamentos');
+    return this.tdb.run(async (tx) => (await this.addPaymentInTx(tx, id, input)).order);
+  }
 
-      const amount = toCents(input.amount);
-      const outstanding = toCents(order.total) - toCents(order.paidAmount);
-      if (amount > outstanding) {
-        throw badRequest('PAYMENT_EXCEEDS_BALANCE', `O valor passa do saldo em aberto (${brl.format(centsToNumber(outstanding))})`);
-      }
+  /** Para verticais: o pagamento entra na transação delas (ex.: saldo recebido pelo motorista na entrega, sinal no caixa). */
+  async addPaymentInTx(tx: Tx, id: string, input: PaymentInput): Promise<{ order: OrderDetail; paymentId: string }> {
+    const { tenantId, userId } = requestContext.requireTenant();
+    const order = await this.findOrFail(tx, id, true);
+    if (this.statusOf(order)?.cancelled) throw badRequest('ORDER_CANCELLED', 'Ordem cancelada não recebe pagamentos');
 
-      const entry = await this.finance.recordInTx(tx, {
-        kind: 'income',
-        status: 'paid',
-        amount: input.amount,
-        description: `Ordem de serviço nº ${order.number} (${paymentMethodLabel[input.method]})`,
-        dueDate: input.paidAt,
-        paidAt: input.paidAt,
-        accountId: input.accountId,
-        customerId: order.customerId,
-        paymentMethod: input.method,
-        sourceType: SOURCE,
-        sourceId: order.id,
-        categoryKey: 'services',
-      });
-      await tx.insert(soPayments).values({
+    const amount = toCents(input.amount);
+    const outstanding = toCents(order.total) - toCents(order.paidAmount);
+    if (amount > outstanding) {
+      throw badRequest('PAYMENT_EXCEEDS_BALANCE', `O valor passa do saldo em aberto (${brl.format(centsToNumber(outstanding))})`);
+    }
+
+    const entry = await this.finance.recordInTx(tx, {
+      kind: 'income',
+      status: 'paid',
+      amount: input.amount,
+      description: `Ordem de serviço nº ${order.number} (${paymentMethodLabel[input.method]})`,
+      dueDate: input.paidAt,
+      paidAt: input.paidAt,
+      accountId: input.accountId,
+      customerId: order.customerId,
+      paymentMethod: input.method,
+      sourceType: SOURCE,
+      sourceId: order.id,
+      categoryKey: 'services',
+    });
+    const [payment] = await tx
+      .insert(soPayments)
+      .values({
         tenantId,
         orderId: id,
         amount: centsToDecimal(amount),
         method: input.method,
         paidAt: input.paidAt,
         finEntryId: entry.id,
-        userId,
-      });
+        userId: userId ?? null,
+      })
+      .returning({ id: soPayments.id });
 
-      const paid = toCents(order.paidAmount) + amount;
-      const [updated] = await tx
-        .update(soOrders)
-        .set({ paidAmount: centsToDecimal(paid), paymentStatus: paymentStatusOf(paid, toCents(order.total)) })
-        .where(eq(soOrders.id, id))
-        .returning();
-      await this.syncReceivable(tx, updated!);
-      await this.customers.addTimeline(tx, {
-        customerId: order.customerId,
-        moduleKey: 'shared.service-orders',
-        type: 'service_order.payment',
-        title: `Pagamento de ${brl.format(input.amount)} na ordem nº ${order.number}`,
-        entity: 'service_order',
-        entityId: id,
-      });
-      await this.audit.log(tx, { action: 'service_order.payment', entity: 'service_order', entityId: id, data: input });
-      return this.detail(tx, id);
+    const paid = toCents(order.paidAmount) + amount;
+    const [updated] = await tx
+      .update(soOrders)
+      .set({ paidAmount: centsToDecimal(paid), paymentStatus: paymentStatusOf(paid, toCents(order.total)) })
+      .where(eq(soOrders.id, id))
+      .returning();
+    await this.syncReceivable(tx, updated!);
+    await this.customers.addTimeline(tx, {
+      customerId: order.customerId,
+      moduleKey: 'shared.service-orders',
+      type: 'service_order.payment',
+      title: `Pagamento de ${brl.format(input.amount)} na ordem nº ${order.number}`,
+      entity: 'service_order',
+      entityId: id,
     });
+    await this.audit.log(tx, { action: 'service_order.payment', entity: 'service_order', entityId: id, data: input });
+    return { order: await this.detail(tx, id), paymentId: payment!.id };
   }
 
   // ---- internos -----------------------------------------------------------------------------

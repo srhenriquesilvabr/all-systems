@@ -151,7 +151,8 @@ export function FinancingPanel({
   );
 }
 
-export function ProposalList({ proposals, loading }: { proposals?: Proposal[]; loading?: boolean }) {
+/** `readOnly`: a negociação já foi encerrada, a lista é só histórico. */
+export function ProposalList({ proposals, loading, readOnly }: { proposals?: Proposal[]; loading?: boolean; readOnly?: boolean }) {
   const queryClient = useQueryClient();
   const canPropose = useCan('integration.banking.propose');
   const act = useMutation({
@@ -160,6 +161,7 @@ export function ProposalList({ proposals, loading }: { proposals?: Proposal[]; l
     onSuccess: () => queryClient.invalidateQueries(),
   });
   const [answering, setAnswering] = useState<string | null>(null);
+  const [rescinding, setRescinding] = useState<string | null>(null);
   if (loading) return <Spinner />;
   if (!proposals?.length) return null;
   return (
@@ -181,7 +183,7 @@ export function ProposalList({ proposals, loading }: { proposals?: Proposal[]; l
               </div>
               {p.statusMessage && <div className="text-xs">{p.statusMessage}</div>}
             </div>
-            {canPropose && (
+            {canPropose && !readOnly && (
               <div className="flex gap-1">
                 {p.connection.mode === 'manual' && ['submitted', 'under_review', 'approved'].includes(p.status) && (
                   <Button size="sm" variant="secondary" onClick={() => setAnswering(answering === p.id ? null : p.id)}>
@@ -203,6 +205,16 @@ export function ProposalList({ proposals, loading }: { proposals?: Proposal[]; l
                     Cancelar
                   </Button>
                 )}
+                {p.status === 'contracted' && p.product !== 'consortium' && (
+                  <Button size="sm" variant="ghost" onClick={() => setRescinding(rescinding === p.id ? null : p.id)}>
+                    Registrar distrato
+                  </Button>
+                )}
+              </div>
+            )}
+            {rescinding === p.id && (
+              <div className="w-full">
+                <RescindForm proposal={p} onDone={() => setRescinding(null)} />
               </div>
             )}
             {answering === p.id && (
@@ -214,6 +226,36 @@ export function ProposalList({ proposals, loading }: { proposals?: Proposal[]; l
         ))}
       </ul>
     </Card>
+  );
+}
+
+/** Contrato assinado que caiu: registra o distrato combinado com a instituição, com o motivo. */
+function RescindForm({ proposal, onDone }: { proposal: Proposal; onDone: () => void }) {
+  const queryClient = useQueryClient();
+  const [reason, setReason] = useState('');
+  const save = useMutation({
+    mutationFn: () => api(`/banking/proposals/${proposal.id}/status`, { method: 'POST', body: { status: 'cancelled', message: reason.trim() } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries();
+      onDone();
+    },
+  });
+  return (
+    <div className="mt-2 space-y-3 rounded-xl border border-line bg-muted/30 p-3">
+      {save.error && <Alert>{save.error instanceof ApiError ? save.error.message : 'Erro ao registrar'}</Alert>}
+      <p className="text-sm text-fg-muted">
+        Este contrato foi assinado. Registre aqui só depois de combinar o distrato com {proposal.connection.name}: o sistema não cancela nada no banco, só anota. A negociação volta a poder ser alterada ou marcada como perdida.
+      </p>
+      <Field label="Motivo do distrato">{(id) => <Input id={id} maxLength={300} value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />}</Field>
+      <div className="flex gap-2">
+        <Button size="sm" variant="danger" disabled={reason.trim().length < 3} loading={save.isPending} onClick={() => save.mutate()}>
+          Registrar distrato
+        </Button>
+        <Button size="sm" variant="secondary" onClick={onDone}>
+          Voltar
+        </Button>
+      </div>
+    </div>
   );
 }
 

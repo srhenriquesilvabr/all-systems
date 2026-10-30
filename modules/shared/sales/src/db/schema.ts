@@ -109,9 +109,14 @@ export const salesRegisterMoves = pgTable(
     sessionId: uuid('session_id')
       .notNull()
       .references(() => salesRegisterSessions.id),
-    kind: text('kind', { enum: ['withdrawal', 'deposit'] }).notNull(),
+    /** `service_receipt`: recebimento de outro módulo (agenda); entra na conferência, sem lançar no financeiro. */
+    kind: text('kind', { enum: ['withdrawal', 'deposit', 'service_receipt'] }).notNull(),
     amount: money('amount').notNull(),
     reason: text('reason').notNull(),
+    /** Só em `service_receipt`: a forma de pagamento e de onde veio. */
+    method: text('method'),
+    sourceType: text('source_type'),
+    sourceId: uuid('source_id'),
     /** Conta do outro lado (banco, cofre); sem conta, saiu/entrou como despesa/receita. */
     accountId: uuid('account_id').references(() => finAccounts.id),
     userId: uuid('user_id').references(() => users.id),
@@ -198,8 +203,8 @@ export const salesStockMoves = pgTable(
     productId: uuid('product_id')
       .notNull()
       .references(() => salesProducts.id),
-    /** `consumption`: insumo usado num atendimento (ex.: frasco de toxina numa aplicação da estética). */
-    kind: text('kind', { enum: ['purchase', 'production', 'loss', 'count', 'sale', 'return', 'consumption'] }).notNull(),
+    /** `consumption`: insumo usado num atendimento (ex.: frasco de toxina numa aplicação da estética). `order`: encomenda retirada (padaria). */
+    kind: text('kind', { enum: ['purchase', 'production', 'loss', 'count', 'sale', 'return', 'consumption', 'order'] }).notNull(),
     /** Variação do saldo (negativa nas saídas). */
     quantity: quantity('quantity').notNull(),
     /** Saldo depois do movimento. */

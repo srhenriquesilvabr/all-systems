@@ -23,6 +23,10 @@ export function UsersPage() {
   const queryClient = useQueryClient();
   const [inviting, setInviting] = useState(false);
   const [editing, setEditing] = useState<Member | null>(null);
+  const [invitePanel, setInvitePanel] = useState<Member | null>(null);
+  const status = useQuery({ queryKey: ['users', 'email-status'], queryFn: () => api<{ emailEnabled: boolean }>('/users/email-status') });
+  const emailOff = status.data?.emailEnabled === false;
+  const pending = members.data?.filter((m) => m.pendingInvite && m.status === 'active') ?? [];
 
   return (
     <>
@@ -38,6 +42,16 @@ export function UsersPage() {
           )
         }
       />
+      {emailOff && (
+        <div className="mb-4">
+          <Alert>
+            O envio de e-mail está desligado neste ambiente: convites e links de senha são descartados e não chegam a ninguém.
+            {canManage ? ' Para dar acesso, use Copiar link de convite na linha da pessoa e entregue o link por outro canal.' : ' Peça a quem administra os usuários para copiar o link de convite.'}
+            {pending.length > 0 && ` ${pending.length === 1 ? 'Há 1 convite pendente' : `Há ${pending.length} convites pendentes`}.`}
+          </Alert>
+        </div>
+      )}
+      {invitePanel && <InvitePanel key={invitePanel.membershipId} member={invitePanel} emailOff={emailOff} onClose={() => setInvitePanel(null)} />}
       <Card>
         {members.isPending ? (
           <Spinner />
@@ -77,7 +91,12 @@ export function UsersPage() {
                   </Td>
                   <Td className="text-fg-muted">{m.user.lastLoginAt ? dateTime.format(new Date(m.user.lastLoginAt)) : 'Nunca'}</Td>
                   {canManage && (
-                    <Td className="text-right">
+                    <Td className="whitespace-nowrap text-right">
+                      {m.pendingInvite && m.status === 'active' && (
+                        <Button variant="ghost" size="sm" onClick={() => setInvitePanel(m)}>
+                          Convite
+                        </Button>
+                      )}
                       <Button variant="ghost" size="sm" onClick={() => setEditing(m)}>
                         Editar
                       </Button>
@@ -93,6 +112,57 @@ export function UsersPage() {
       {inviting && <InviteModal onClose={() => setInviting(false)} />}
       {editing && <EditModal member={editing} onClose={() => setEditing(null)} />}
     </>
+  );
+}
+
+/** Reenviar por e-mail ou copiar o link, para quem ainda não criou a senha. */
+function InvitePanel({ member, emailOff, onClose }: { member: Member; emailOff: boolean; onClose: () => void }) {
+  const [link, setLink] = useState<{ url: string; expiresAt: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const resend = useMutation({ mutationFn: () => api<{ emailEnabled: boolean }>(`/users/${member.membershipId}/resend-invite`, { method: 'POST' }) });
+  const createLink = useMutation({
+    mutationFn: () => api<{ url: string; expiresAt: string }>(`/users/${member.membershipId}/invite-link`, { method: 'POST' }),
+    onSuccess: async (r) => {
+      setLink(r);
+      try {
+        await navigator.clipboard.writeText(r.url);
+        setCopied(true);
+      } catch {
+        // Sem acesso à área de transferência: o link fica à vista para copiar à mão.
+        setCopied(false);
+      }
+    },
+  });
+  const error = resend.error ?? createLink.error;
+  return (
+    <Card className="mb-4 space-y-4 p-5">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="font-medium">Convite de {member.user.name}</h2>
+        <Button variant="ghost" size="sm" onClick={onClose}>
+          Fechar
+        </Button>
+      </div>
+      <p className="text-sm text-fg-muted">
+        {member.user.email} ainda não criou a senha. O convite vale por 7 dias. Quem tiver o link define a senha desta conta: entregue só à própria pessoa. Gerar outro link invalida o anterior.
+      </p>
+      {error && <Alert>{error instanceof ApiError ? error.message : 'Não foi possível concluir'}</Alert>}
+      {resend.isSuccess && (resend.data.emailEnabled ? <Alert tone="success">Convite reenviado para {member.user.email}.</Alert> : <Alert>O envio de e-mail está desligado: o convite não saiu. Use Copiar link de convite.</Alert>)}
+      <div className="flex flex-wrap gap-2">
+        <Button variant="secondary" loading={resend.isPending} disabled={emailOff} title={emailOff ? 'O envio de e-mail está desligado' : undefined} onClick={() => resend.mutate()}>
+          Reenviar convite
+        </Button>
+        <Button variant={emailOff ? 'primary' : 'secondary'} loading={createLink.isPending} onClick={() => createLink.mutate()}>
+          Copiar link de convite
+        </Button>
+      </div>
+      {link && (
+        <div className="space-y-1">
+          <Field label="Link de convite" hint={copied ? 'Copiado para a área de transferência.' : 'Selecione e copie o link.'}>
+            {(id) => <Input id={id} readOnly value={link.url} onFocus={(e) => e.target.select()} />}
+          </Field>
+        </div>
+      )}
+    </Card>
   );
 }
 

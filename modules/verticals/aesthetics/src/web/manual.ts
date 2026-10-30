@@ -90,16 +90,16 @@ export const manual: ManualGuide = {
         },
         { text: 'Para sessões fixas, marque Repetir e escolha a Frequência e quando Termina. As datas que não couberem aparecem no final.' },
         { text: 'A paciente também pode marcar sozinha pelo link. Ligue em Serviços da agenda, em Lembretes e agendamento online.' },
-        { warn: 'Procedimentos que vieram das especialidades, como toxina e fios, vêm fora do agendamento online. Confira a lista antes de divulgar o link.' },
+        { warn: 'Serviço novo, inclusive os de exemplo e os das especialidades, vem fora do link. Em Serviços liberados no link, marque o que a paciente pode marcar sozinha. Deixe de fora o que depende de avaliação, como toxina e fios.' },
       ],
       technical: [
         {
           list: [
             'Permissão: shared.scheduling.write. Sobreposição no mesmo profissional ou sala é recusada.',
-            'Outro horário não confere expediente nem bloqueio na marcação avulsa. A repetição confere as duas coisas em cada data e aceita até 52 datas.',
+            'Marcação avulsa confere expediente e bloqueio: "Fora do expediente neste horário" ou "Profissional de folga ou com horário bloqueado neste horário". Marcar mesmo assim exige shared.scheduling.manage e fica na auditoria. A repetição confere as duas coisas em cada data e aceita até 52 datas.',
             'O pacote é usado também em marcação online, repetição e retorno pela ficha. Veja o assunto de pacotes.',
             'Avisos automáticos ao cliente: marcado, remarcado, cancelado e lembrete (padrão 1 dia antes), conforme a configuração de notificações.',
-            'Online: até 5 serviços por marcação e 5 marcações por IP a cada 10 minutos. A página mostra no máximo os próximos 14 dias. O pagamento não é feito pelo link.',
+            'Online: Até 5 serviços por marcação e 5 marcações por IP a cada 10 minutos. A página mostra os dias até o limite de Até quantos dias à frente (até 180), com um campo de data para ir direto. Serviço novo vem desligado do link. O pagamento não é feito pelo link.',
           ],
         },
       ],
@@ -125,11 +125,13 @@ export const manual: ManualGuide = {
       technical: [
         {
           list: [
-            'Transições: Agendado e Confirmado vão para Chegou, Em atendimento, Concluído, Faltou ou Cancelado (Agendado também para Confirmado). Chegou vai para Em atendimento, Concluído ou Cancelado. Em atendimento só para Concluído, embora a tela mostre Cancelar horário.',
+            'Transições: Agendado e Confirmado vão para Chegou, Em atendimento, Concluído, Faltou ou Cancelado (Agendado também para Confirmado). Chegou vai para Em atendimento, Concluído ou Cancelado. Em atendimento só para Concluído.',
             'Permissões: shared.scheduling.status para a situação, shared.scheduling.payments para receber, shared.scheduling.write para remarcar e cancelar.',
-            'Pagamento vira receita paga na categoria de serviços, com a data de hoje. Valor acima do saldo é recusado.',
+            'Pagamento vira receita paga na categoria de serviços, na data informada (padrão hoje; futuro é recusado). Valor acima do saldo é recusado.',
+            'Com Caixa escolhido e sessão aberta, o recebimento entra na conferência do fechamento como "Recebimento de atendimento". No financeiro continua um lançamento só. Dinheiro no caixa vai para a conta Caixa. Caixa fechado recusa o pagamento de hoje; com data passada, a tela não oferece caixa.',
             'Ao concluir, o saldo vira "a receber" no dia do atendimento e se resolve pela agenda. Faltou ou Cancelado zera o saldo. Valor já pago não é devolvido automaticamente.',
-            'Remarcar só em Agendado e Confirmado. Volta para Agendado e reenvia o lembrete. A tela não troca profissional nem serviço.',
+            'Remarcar só em Agendado e Confirmado. Volta para Agendado e reenvia o lembrete.',
+            'Alterar vale até concluir e pede shared.scheduling.write; mudar preço ou desconto pede também shared.scheduling.payments. O início não muda, e o fim acompanha a duração. Valem as mesmas conferências da marcação (quem faz, expediente, folga, sala). O total não pode ficar abaixo do que já foi pago, e linha coberta por pacote ou tratamento não muda de valor. Trocar profissional ou serviço avisa o cliente.',
             'Se o serviço pede sala, na remarcação vale a atual, se livre, ou outra que sirva.',
           ],
         },
@@ -160,7 +162,7 @@ export const manual: ManualGuide = {
             'De 2 a 100 sessões. A tela oferece até 12 parcelas. As parcelas viram "a receber" mensais, e a baixa é feita em Lançamentos. Baixar exige core.finance.write.',
             'A tela Lançamentos mostra a paciente na coluna Cliente, e a busca encontra pelo nome dela. A descrição é "Pacote <procedimento> (<n> sessões)" e a parcela.',
             'Ao marcar: se a paciente tem pacote ativo, dentro da validade e com saldo daquele serviço, a sessão fica reservada e a linha sai com R$ 0 e o texto "pacote 3/10". Vale o pacote mais antigo.',
-            'Concluído usa a sessão. Cancelado ou Faltou devolve. A configuração noShowConsumesSession faria a falta gastar a sessão, mas não há campo para ela nesta tela.',
+            'Concluído usa a sessão. Cancelado devolve. Faltou devolve, a menos que Falta consome sessão do pacote esteja ligado em Especialidades da clínica (configuração noShowConsumesSession, exige core.access.settings). Vale para as faltas registradas depois de ligar.',
             'Com todas as sessões usadas, o pacote passa a Concluído e entra no histórico da paciente.',
             'Cancelar: motivo de ao menos 3 letras. Parcelas em aberto são canceladas. As pagas ficam, e o estorno é feito no financeiro. Recusa: "Há horários marcados usando este pacote: cancele ou conclua antes".',
           ],
@@ -226,7 +228,7 @@ export const manual: ManualGuide = {
             'Quantidade recebida é só informativa. O sistema mostra o total usado, mas não impede usar mais do que entrou.',
             'Baixa no estoque: quantidade usada dividida pela Quantidade por embalagem. Exemplo: 30 U de um frasco de 100 U baixa 0,3. O saldo pode ficar negativo. O movimento se chama Uso em atendimento e não traz o nome da paciente.',
             'O campo Baixa no estoque só aparece para quem pode ver os produtos do PDV (shared.sales.sell ou shared.sales.products).',
-            'Retificar uma ficha não altera o uso do lote nem o estoque já baixado.',
+            'Retificar uma ficha, por qualquer tela, corrige o uso do lote e o estoque pela diferença. A linha antiga não muda: o estorno é uma linha nova, marcada como Estorno em Quem recebeu, e a volta ao estoque é um movimento novo. Sem mudança de lote ou de quantidade, nada é lançado.',
           ],
         },
       ],
@@ -286,7 +288,7 @@ export const manual: ManualGuide = {
       technical: [
         {
           list: [
-            'Abrir, atualizar e encerrar tratamento: shared.medical-records.write. A tela não oferece edição do título depois de aberto.',
+            'Abrir, atualizar, renomear e encerrar tratamento: shared.medical-records.write. O título muda em Renomear, enquanto o tratamento está aberto, e a mudança fica na auditoria.',
             'Só contam as fichas de sessão ligadas ao tratamento e não retificadas: Aplicação de injetáveis, Sessão de clareamento, Micropigmentação, Sessão de laser e Sessão capilar.',
             'Encerrar como Cancelado exige motivo e cancela as parcelas em aberto do orçamento. Tratamento cancelado não recebe novas fichas.',
             'Fotos: JPG, PNG ou WebP, até 8 MB. Momentos: Antes, Durante, Depois, Retorno. A região é texto livre, com sugestões. Cada foto aberta entra no log de acesso.',
@@ -350,8 +352,8 @@ export const manual: ManualGuide = {
             'Sem CRO, o servidor recusa: "Clareamento dental exige profissional com CRO".',
             'Obrigatório: Tipo. O número da Sessão é sugerido a partir do tratamento em aberto.',
             'Tipos de produto oferecidos: gel clareador e outro. O lote de gel vencido é recusado.',
-            'A ficha não tem campo de quantidade: o lote entra no rastreio com quantidade zero e não há baixa automática no estoque do gel.',
-            'Serviços criados ao ligar: avaliação, clareamento em consultório, caseiro e retorno. Só a avaliação vem liberada para marcação online.',
+            'Com lote escolhido, a Quantidade de gel é obrigatória ("Informe a quantidade usada"): entra no rastreio e baixa o estoque, se o produto estiver ligado a um item do estoque.',
+            'Serviços criados ao ligar: avaliação, clareamento em consultório, caseiro e retorno. Todos vêm fora do link: libere a avaliação, se quiser.',
             'Esta ficha não oferece botão de agendar retorno. Marque pela agenda.',
           ],
         },
@@ -366,19 +368,19 @@ export const manual: ManualGuide = {
         {
           steps: [
             'Na aba Cirurgia plástica da paciente, em Tratamentos, clique em + Novo tratamento. Preencha Cirurgia e Cirurgião.',
-            'Em Fichas, clique em + Avaliação cirúrgica e escolha o Tratamento.',
+            'No cartão do tratamento, clique em + Ficha e escolha + Avaliação cirúrgica.',
             'Em Orçamentos de cirurgia, clique em Montar. Preencha os valores e, em cada item, escolha Cobrado pela clínica ou Pago direto ao prestador.',
             'Clique em Salvar rascunho enquanto negocia. Fechado, escolha Parcelas e 1º vencimento e clique em Aprovar e lançar no financeiro.',
-            'Em Fichas, clique em + Termo de consentimento e escolha o Tratamento.',
-            'Clique em + Pré-operatório, escolha o Tratamento e marque Avaliação anestésica: liberado(a) e Liberado(a) para a cirurgia quando for o caso.',
+            'Em + Ficha, escolha + Termo de consentimento.',
+            'Em + Ficha, escolha + Pré-operatório e marque Avaliação anestésica: liberado(a) e Liberado(a) para a cirurgia quando for o caso.',
             'Em Tratamentos, clique em Marcar cirurgia. Preencha cirurgião, procedimento, dia, hora, local e equipe, e clique em Marcar na agenda.',
-            'Depois da cirurgia, inclua + Descrição cirúrgica e + Retorno pós-operatório, sempre escolhendo o Tratamento.',
+            'Depois da cirurgia, inclua + Descrição cirúrgica e + Retorno pós-operatório pelo mesmo botão.',
             'Na alta, escolha Etapa: Alta no tratamento.',
           ],
         },
-        { warn: 'Escolha o Tratamento no termo e no pré-operatório. Sem isso, o sistema não os encontra e a cirurgia não pode ser marcada.' },
+        { warn: 'Termo e pré-operatório só contam ligados ao tratamento. Com um tratamento de cirurgia aberto, o sistema liga sozinho. Com mais de um, é preciso escolher. Sem nenhum, a ficha entra, mas não libera a cirurgia: abra o tratamento antes.' },
         { warn: 'Orçamento aprovado não pode ser alterado. Para refazer, é preciso cancelar o tratamento.' },
-        { tip: 'Com a cirurgia marcada, use Pacote de drenagem (pós-operatório) para vender as sessões, se a clínica oferece.' },
+        { tip: 'Com a cirurgia marcada, use Pacote de drenagem (pós-operatório) para vender as sessões, se a clínica oferece. O pacote fica ligado ao tratamento e aparece no cartão dele.' },
       ],
       technical: [
         {
@@ -407,7 +409,7 @@ export const manual: ManualGuide = {
             'Na aba Micropigmentação da paciente, clique em + Micropigmentação.',
             'Escolha Área, Sessão e Técnica.',
             'Em Pigmentos, clique em + Item, escolha o pigmento e o lote, e preencha Cor e Quantidade.',
-            'Marque Desenho aprovado pela cliente (foto anexada).',
+            'Marque Desenho aprovado pela cliente (foto anexada) e, em Foto do desenho aprovado, escolha o arquivo.',
             'Confira o Retoque previsto e clique em Incluir no prontuário.',
             'Depois, no cartão da ficha, clique em Agendar retoque.',
           ],
@@ -442,13 +444,13 @@ export const manual: ManualGuide = {
             'Depois, no cartão da ficha, clique em Agendar retorno.',
           ],
         },
-        { warn: 'Confira em Serviços da agenda se Depilação a laser (área pequena) está com Precisa de sala/equipamento livre marcado. Esse serviço também faz parte dos exemplos básicos e, nesse caso, não vem ligado ao aparelho.' },
+        { text: 'Ao ligar o laser pela primeira vez, Depilação a laser (área pequena), dos exemplos básicos, passa a exigir sala e fica ligada ao aparelho. Depois disso, o que você mudar nesse serviço fica como está.' },
       ],
       technical: [
         {
           list: [
             'Equipamento criado: Laser de diodo (equipamento), ligado apenas aos serviços de laser criados naquele momento.',
-            'Serviços: área pequena, média e grande, com sala obrigatória, e Laser corporal, com sala obrigatória e fora do online.',
+            'Serviços: área pequena, média e grande, e Laser corporal, todos com sala obrigatória e fora do link até a clínica liberar.',
             'Obrigatórios: Fototipo e ao menos uma linha com Área. Não exige registro em conselho.',
             'A escolha do equipamento na ficha é só um registro. Ela não confere com a reserva da agenda.',
             'A ficha não usa lote nem baixa estoque. Parâmetros e reação são registrados como informados: o sistema não valida valores nem bloqueia por fototipo.',

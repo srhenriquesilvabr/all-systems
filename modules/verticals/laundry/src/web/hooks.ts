@@ -18,10 +18,10 @@ export const useGarmentTypes = () =>
 export const useLaundryOrder = (id: string) =>
   useQuery({ queryKey: [...laundryKey, 'orders', id], queryFn: () => api<LaundryOrderDetail>(`/laundry/orders/${id}`) });
 
-export const useProduction = () =>
+export const useProduction = (includeReady = false) =>
   useQuery({
-    queryKey: [...laundryKey, 'production'],
-    queryFn: () => api<ProductionPiece[]>('/laundry/production'),
+    queryKey: [...laundryKey, 'production', includeReady],
+    queryFn: () => api<ProductionPiece[]>('/laundry/production', { query: { includeReady: includeReady || undefined } }),
     // Várias pessoas mexem no quadro ao mesmo tempo.
     refetchInterval: 30_000,
   });

@@ -32,7 +32,10 @@ describe('contabilidade e RH', () => {
       expect(again.fees).toBe(2);
       expect((await s.as('post', '/accounting/generate').expect(200)).body.fees).toBe(0);
       const { body: entries } = await s.as('get', `/finance/entries?limit=50&customerId=${padaria.id}`).expect(200);
-      expect(entries.items).toEqual([expect.objectContaining({ amount: 450, dueDate: `${localToday().slice(0, 7)}-10` })]);
+      // Depois do dia 10, o honorário fica para o dia 10 do mês seguinte, para não nascer vencido.
+      const [year, month, dayOfMonth] = localToday().split('-').map(Number) as [number, number, number];
+      const feeMonth = dayOfMonth <= 10 ? localToday().slice(0, 7) : month === 12 ? `${year + 1}-01` : `${year}-${String(month + 1).padStart(2, '0')}`;
+      expect(entries.items).toEqual([expect.objectContaining({ amount: 450, dueDate: `${feeMonth}-10` })]);
 
       const das = all.find((o: { type: { code: string }; competence: string }) => o.type.code === 'DAS');
       await s.as('post', `/accounting/obligations/${das.id}/status`).send({ status: 'done' }).expect(204);

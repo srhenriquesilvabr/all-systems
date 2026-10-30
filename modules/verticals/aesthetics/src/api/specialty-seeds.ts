@@ -58,6 +58,8 @@ export const SPECIALTY_SERVICES: Record<SpecialtyKey, SeedService[]> = {
 
 /** Equipamento que a depilação a laser reserva na agenda (criado se não houver um com o nome). */
 export const LASER_ROOM = { name: 'Laser de diodo (equipamento)', color: '#ea580c' };
+/** Vem nos exemplos básicos da estética, sem sala. Ao ligar o laser, passa a exigir o aparelho. */
+export const BASIC_LASER_SERVICE = 'Depilação a laser (área pequena)';
 
 const BASE = (risks: string) =>
   `Eu, {{paciente}}, declaro que fui informado(a) por {{profissional}}, de forma clara e em linguagem acessível, sobre o procedimento {{procedimento}}: como é feito, os resultados esperados, as alternativas e os cuidados antes e depois.

@@ -6,7 +6,7 @@ import { key, type Tone } from '../common';
 
 export const leadsKey = [...key, 'leads'] as const;
 export const leadTone: Record<LeadStatus, Tone> = { new: 'brand', contacting: 'warning', simulation_sent: 'warning', proposal: 'brand', won: 'success', lost: 'neutral' };
-export const rewardTone: Record<RewardStatus, Tone> = { none: 'neutral', waiting: 'neutral', due: 'warning', paid: 'success', cancelled: 'neutral' };
+export const rewardTone: Record<RewardStatus, Tone> = { none: 'neutral', waiting: 'neutral', due: 'warning', paid: 'success', cancelled: 'neutral', reversed: 'danger' };
 
 /** Link do WhatsApp com a mensagem pronta (o telefone já vem em E.164). */
 export const whatsappUrl = (phone: string, text: string) => `https://wa.me/${phone.replace(/\D/g, '')}?text=${encodeURIComponent(text)}`;

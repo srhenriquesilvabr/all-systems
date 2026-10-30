@@ -3,7 +3,7 @@ import { id, tenantId, tenantIsolation } from '@all/db';
 import { salesProducts } from '@all/sales/schema';
 import { schAppointments, schResources, schServices } from '@all/scheduling/schema';
 import { sql } from 'drizzle-orm';
-import { boolean, date, index, integer, jsonb, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, date, index, integer, jsonb, numeric, pgTable, text, timestamp, uniqueIndex, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
 
 const ts = (name: string) => timestamp(name, { withTimezone: true });
 
@@ -28,6 +28,8 @@ export const aesPackages = pgTable(
     notes: text('notes'),
     cancelReason: text('cancel_reason'),
     cancelledOn: date('cancelled_on', { mode: 'string' }),
+    /** Tratamento de origem, quando vendido a partir dele (ex.: drenagem do pós-operatório). */
+    caseId: uuid('case_id').references((): AnyPgColumn => aesCases.id),
     createdAt: ts('created_at').notNull().defaultNow(),
   },
   (t) => [index('aes_packages_customer_idx').on(t.customerId, t.status), tenantIsolation()],
@@ -134,6 +136,8 @@ export const aesProductLots = pgTable(
 /**
  * Uso de cada lote em cada paciente (rastreabilidade exigida pela Anvisa: num recall, quem
  * recebeu o lote). Só inclusão, como o prontuário: o app_user não tem UPDATE/DELETE (migration).
+ * Ficha retificada não muda a linha antiga: o estorno é uma linha nova, de quantidade negativa,
+ * com `reversal_of` apontando para o uso que corrige.
  */
 export const aesLotUsages = pgTable(
   'aes_lot_usages',
@@ -155,6 +159,8 @@ export const aesLotUsages = pgTable(
     amount: quantity('amount').notNull(),
     unit: text('unit').notNull(),
     usedOn: date('used_on', { mode: 'string' }).notNull(),
+    /** Só no estorno: o uso que esta linha corrige. */
+    reversalOf: uuid('reversal_of').references((): AnyPgColumn => aesLotUsages.id),
     createdAt: ts('created_at').notNull().defaultNow(),
   },
   (t) => [index('aes_lot_usages_lot_idx').on(t.lotId), index('aes_lot_usages_customer_idx').on(t.customerId), tenantIsolation()],

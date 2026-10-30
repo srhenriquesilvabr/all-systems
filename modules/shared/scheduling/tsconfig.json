@@ -11,6 +11,7 @@
     { "path": "../../../packages/db" },
     { "path": "../../../packages/module-sdk" },
     { "path": "../../core" },
-    { "path": "../notifications" }
+    { "path": "../notifications" },
+    { "path": "../sales" }
   ]
 }

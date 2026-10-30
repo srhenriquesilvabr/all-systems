@@ -30,9 +30,10 @@ export interface LaundryService extends ServiceInput {
 }
 
 export const laundrySettings = z.object({
-  pricingMode: z.enum(['per_piece', 'per_kg', 'mixed']).default('mixed'),
-  defaultTurnaroundHours: z.number().int().default(48),
-  requirePhotosOnReceive: z.boolean().default(true),
+  /** Prazo usado quando nenhum serviço da ordem informa o seu (em horas). */
+  defaultTurnaroundHours: z.number().int().min(1).max(24 * 60).default(48),
+  /** Exige ao menos uma foto da peça antes de ela sair de "Recebida" (a foto só existe depois de a ordem abrir). */
+  requirePiecePhotos: z.boolean().default(false),
   /** Taxas padrão de coleta e entrega (em reais), sugeridas ao agendar. */
   pickupFee: z.number().min(0).max(10_000).multipleOf(0.01).default(0),
   deliveryFee: z.number().min(0).max(10_000).multipleOf(0.01).default(0),
@@ -91,6 +92,26 @@ export const laundryOrderInput = z.object({
 });
 export type LaundryOrderInput = z.infer<typeof laundryOrderInput>;
 
+/** Edição da ordem: previsão, desconto e observações. As peças têm rotas próprias. */
+export const laundryOrderUpdate = z.object({
+  discount: z.coerce.number().min(0).max(1_000_000).multipleOf(0.01).optional(),
+  dueAt: z.coerce.date().nullish(),
+  notesCustomer: z.string().trim().max(2000).nullish(),
+  notesInternal: z.string().trim().max(2000).nullish(),
+});
+export type LaundryOrderUpdate = z.infer<typeof laundryOrderUpdate>;
+
+export const addPiecesInput = z.object({ lines: z.array(orderLineInput).min(1, 'Inclua ao menos uma peça').max(100) });
+export type AddPiecesInput = z.infer<typeof addPiecesInput>;
+
+/** Dados da peça que não mudam o preço nem a etiqueta. */
+export const pieceUpdate = z.object({
+  color: z.string().trim().max(40).nullish(),
+  brand: z.string().trim().max(40).nullish(),
+  intakeNotes: z.string().trim().max(500).nullish(),
+});
+export type PieceUpdate = z.infer<typeof pieceUpdate>;
+
 export const pieceStatusInput = z.object({ status: z.enum(pieceStatuses) });
 export const bulkStatusInput = z.object({ itemIds: z.array(z.string().uuid()).min(1).max(200), status: z.enum(pieceStatuses) });
 export const incidentInput = z.object({ notes: z.string().trim().min(5, 'Descreva o ocorrido').max(500) });
@@ -138,8 +159,16 @@ export interface LaundryReport {
   piecesReady: number;
   reworks: number;
   incidents: number;
-  byService: { serviceName: string; quantity: number; revenue: number }[];
+  /** Uma linha por serviço: a quantidade está na unidade de cobrança dele; o valor é o contratado, antes do desconto da ordem. */
+  byService: { serviceName: string; unit: PricingUnit; quantity: number; contracted: number }[];
   byOperator: { userName: string; moves: number }[];
+}
+
+/** Quantidade de um serviço no relatório: "12 peças", "5,5 kg", "3 m²". */
+export function formatServiceQuantity(quantity: number, unit: PricingUnit) {
+  const n = quantity.toLocaleString('pt-BR', { maximumFractionDigits: 3 });
+  if (unit === 'piece') return `${n} ${quantity === 1 ? 'peça' : 'peças'}`;
+  return `${n} ${unit === 'kg' ? 'kg' : 'm²'}`;
 }
 
 // ---- Coleta e entrega -------------------------------------------------------------------------
@@ -309,6 +338,17 @@ export const completeJobInput = z.object({
   notes: z.string().trim().max(1000).nullish(),
   /** O motorista recebeu a taxa na hora: dá baixa no financeiro com esta forma de pagamento (na data da conclusão). */
   feeMethod: z.enum(feeMethods).nullish(),
+  /**
+   * Entrega: o motorista recebeu o saldo da ordem (ou parte dele). Vira um pagamento da ordem, na
+   * data da conclusão e na conta de caixa padrão. Exige `laundry.logistics.receive` ou
+   * `shared.service-orders.payments`.
+   */
+  balancePayment: z
+    .object({
+      amount: z.coerce.number().positive('Informe o valor recebido').max(1_000_000).multipleOf(0.01, 'Use no máximo 2 casas decimais'),
+      method: z.enum(feeMethods),
+    })
+    .nullish(),
   /** Quando foi concluída; sem data, é agora. Não antes do dia da tarefa nem da saída. */
   occurredAt: occurredAtInput.optional(),
 });

@@ -32,6 +32,8 @@ export interface Entry {
   customerId: string | null;
   customerName: string | null;
   sourceType: string;
+  /** Nome da origem em português, vindo da API. */
+  sourceLabel: string;
   /** Lançamento de módulo que recebe baixa no financeiro (parcelas, honorários, folha). */
   settleInFinance: boolean;
   notes: string | null;
@@ -40,9 +42,17 @@ export interface Entry {
 }
 
 export const accountTypeLabel = { cash: 'Caixa', bank: 'Banco', gateway: 'Gateway de pagamento' } as const;
-export const sourceLabel: Record<string, string> = { manual: 'Manual', service_order: 'Ordem de serviço' };
 
 export const financeKey = ['finance'];
+
+/** Entrada do histórico de um lançamento ou conta (vem da auditoria). */
+export interface HistoryEntry {
+  id: string;
+  action: string;
+  data: Record<string, unknown> | null;
+  createdAt: string;
+  user: { id: string; name: string } | null;
+}
 
 export const useAccounts = () => useQuery({ queryKey: [...financeKey, 'accounts'], queryFn: () => api<Account[]>('/finance/accounts') });
 export const useCategories = () => useQuery({ queryKey: [...financeKey, 'categories'], queryFn: () => api<Category[]>('/finance/categories') });

@@ -8,6 +8,11 @@ export const vehicleKindLabel: Record<(typeof vehicleKinds)[number], string> = {
 export const vehicleStatuses = ['available', 'reserved', 'sold', 'inactive'] as const;
 export type VehicleStatus = (typeof vehicleStatuses)[number];
 export const vehicleStatusLabel: Record<VehicleStatus, string> = { available: 'Disponível', reserved: 'Reservado', sold: 'Vendido', inactive: 'Fora de venda' };
+/** Situações que a equipe escolhe. Reservado e Vendido vêm da negociação (abrir, perder, fechar). */
+export const manualVehicleStatuses = ['available', 'inactive'] as const satisfies readonly VehicleStatus[];
+
+const plateRegex = /^[A-Z]{3}-?\d[A-Z0-9]\d{2}$/;
+const plateMessage = 'Placa inválida (ABC1D23 ou ABC-1234)';
 
 export const vehicleInput = z
   .object({
@@ -21,7 +26,7 @@ export const vehicleInput = z
       .string()
       .trim()
       .toUpperCase()
-      .regex(/^[A-Z]{3}-?\d[A-Z0-9]\d{2}$/, 'Placa inválida (ABC1D23 ou ABC-1234)')
+      .regex(plateRegex, plateMessage)
       .transform((p) => p.replace('-', ''))
       .nullish()
       .or(z.literal('').transform(() => null)),
@@ -79,7 +84,14 @@ export const dealInput = z.object({
       brand: z.string().trim().min(2).max(60),
       model: z.string().trim().min(1).max(80),
       yearModel: year,
-      plate: z.string().trim().toUpperCase().max(8).nullish(),
+      plate: z
+        .string()
+        .trim()
+        .toUpperCase()
+        .regex(plateRegex, plateMessage)
+        .transform((p) => p.replace('-', ''))
+        .nullish()
+        .or(z.literal('').transform(() => null)),
       km: z.coerce.number().int().min(0).default(0),
       value: money.refine((v) => v > 0, 'Informe o valor da troca'),
     })
@@ -109,6 +121,18 @@ export const loseInput = z
 export type LoseInput = z.infer<typeof loseInput>;
 
 export const sellerInput = z.object({ sellerId: z.string().uuid('Escolha o vendedor') });
+
+/** Corrige só a placa do carro da troca: vale em qualquer etapa aberta, porque não muda valores. */
+export const tradePlateInput = z.object({
+  plate: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .regex(plateRegex, plateMessage)
+    .transform((p) => p.replace('-', ''))
+    .nullable()
+    .or(z.literal('').transform(() => null)),
+});
 
 export const dealStatuses = ['negotiating', 'credit_analysis', 'credit_approved', 'credit_rejected', 'closed', 'lost'] as const;
 export type DealStatus = (typeof dealStatuses)[number];

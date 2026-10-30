@@ -42,7 +42,7 @@ export function PatientSpecialties({ customerId, enabled, initial }: { customerI
   );
 }
 
-type Writing = { kind: 'record'; form: MedicalForm; caseId?: string; nextSession?: number } | { kind: 'consent'; caseId?: string } | { kind: 'case' } | { kind: 'return'; formKey: string; date: string; professionalId: string | null };
+type Writing = { kind: 'record'; form: MedicalForm; caseId?: string; nextSession?: number; amends?: MedicalEntry } | { kind: 'consent'; caseId?: string } | { kind: 'case' } | { kind: 'return'; formKey: string; date: string; professionalId: string | null };
 
 function SpecialtyPanel({ customerId, specialty }: { customerId: string; specialty: SpecialtyKey }) {
   const data = usePatientSpecialties(customerId);
@@ -103,13 +103,14 @@ function SpecialtyPanel({ customerId, specialty }: { customerId: string; special
                   <SpecialtyEntryCard
                     entry={e}
                     form={formOf(e.formKey)}
+                    onAmend={canWrite && formOf(e.formKey) && e.formKey !== 'aesthetics.consent' ? () => setWriting({ kind: 'record', form: formOf(e.formKey)!, amends: e }) : undefined}
                     onSchedule={canSchedule && returnService[e.formKey] ? (date, professionalId) => setWriting({ kind: 'return', formKey: e.formKey, date, professionalId }) : undefined}
                   />
                 </li>
               ))}
             </ol>
           )}
-          <p className="text-xs text-fg-muted">Para corrigir uma ficha, use "Retificar" no prontuário completo: o original continua guardado.</p>
+          <p className="text-xs text-fg-muted">Para corrigir uma ficha, use "Retificar": o original continua guardado, e o uso do lote e o estoque são corrigidos com um estorno.</p>
         </>
       )}
       {section === 'cases' && (
@@ -126,7 +127,13 @@ function SpecialtyPanel({ customerId, specialty }: { customerId: string; special
           ) : (
             <div className="space-y-3">
               {cases.map((c) => (
-                <CaseCard key={c.id} item={c} onRecord={(caseId) => setWriting({ kind: 'record', form: sessionForm, caseId, nextSession: nextSession(c) })} />
+                <CaseCard
+                  key={c.id}
+                  item={c}
+                  forms={specialtyForms[specialty]}
+                  onRecord={(caseId, form) => setWriting({ kind: 'record', form: form ?? sessionForm, caseId, nextSession: sessionForms.includes((form ?? sessionForm).key) ? nextSession(c) : undefined })}
+                  onConsent={(caseId) => setWriting({ kind: 'consent', caseId })}
+                />
               ))}
             </div>
           )}
@@ -135,7 +142,7 @@ function SpecialtyPanel({ customerId, specialty }: { customerId: string; special
       {section === 'photos' && <PhotoBoard customerId={customerId} specialty={specialty} photos={photos} cases={cases} canWrite={canWrite} />}
 
       {writing?.kind === 'record' && (
-        <SpecialtyRecordForm customerId={customerId} specialty={specialty} form={writing.form} cases={cases} caseId={writing.caseId} nextSession={writing.nextSession} onClose={() => setWriting(null)} />
+        <SpecialtyRecordForm customerId={customerId} specialty={specialty} form={writing.form} cases={cases} caseId={writing.caseId} nextSession={writing.nextSession} amends={writing.amends} onClose={() => setWriting(null)} />
       )}
       {writing?.kind === 'consent' && <ConsentForm customerId={customerId} customerName={customer.data?.name ?? ''} specialty={specialty} cases={cases} caseId={writing.caseId} onClose={() => setWriting(null)} />}
       {writing?.kind === 'case' && <NewCaseForm customerId={customerId} specialty={specialty} onClose={() => setWriting(null)} />}

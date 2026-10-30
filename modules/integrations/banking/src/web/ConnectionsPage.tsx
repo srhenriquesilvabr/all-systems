@@ -45,7 +45,7 @@ export function ConnectionsPage() {
   return (
     <>
       <PageHeader
-        title="Bancos e administradoras"
+        title="Bancos e financeiras"
         description="Instituições usadas na simulação, no envio de propostas e na adesão de consórcio. Cada integração real depende de contrato com a instituição."
         actions={
           <>
@@ -294,7 +294,8 @@ function ConnectionForm({
     name: connection?.name ?? entry?.name ?? '',
     mode: (connection?.mode ?? 'simulated') as ConnectionMode,
     adapter: (connection?.adapter ?? 'generic_rest') as ConnectionAdapter,
-    products: connection?.products ?? (entry ? entry.creditProducts.filter((p) => p === 'consortium') : (['vehicle_financing'] as CreditProduct[])),
+    // Do catálogo vêm todos os produtos que a instituição costuma oferecer; a tela deixa desmarcar.
+    products: connection?.products ?? (entry ? [...entry.creditProducts] : (['vehicle_financing'] as CreditProduct[])),
     baseUrl: connection?.baseUrl ?? '',
     clientId: connection?.clientId ?? '',
     clientSecret: '',
@@ -307,7 +308,7 @@ function ConnectionForm({
   const [plans, setPlans] = useState<PlanDraft[]>(connection?.manualPlans.map(toDraft) ?? []);
   // O catálogo chega depois: completa nome e produtos de uma conexão nova.
   useEffect(() => {
-    if (!connection && entry && !form.name) setForm((f) => ({ ...f, name: entry.name, products: entry.creditProducts.filter((p) => p === 'consortium') }));
+    if (!connection && entry && !form.name) setForm((f) => ({ ...f, name: entry.name, products: [...entry.creditProducts] }));
   }, [entry]); // eslint-disable-line react-hooks/exhaustive-deps
   const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
   const save = useMutation({

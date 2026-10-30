@@ -1,5 +1,5 @@
 import { api, type ImportRow, type ImportSpec } from '@all/module-sdk/web';
-import type { Employer } from '../contracts';
+import { employeeCategories, employeeCategoryLabel, type Employer } from '../contracts';
 
 const text = (row: ImportRow, k: string) => (row[k] === null || row[k] === undefined ? undefined : String(row[k]));
 const plain = (s: string) =>
@@ -13,9 +13,14 @@ const plain = (s: string) =>
 /**
  * Empresa da coluna "Empresa (CNPJ ou nome)": CNPJ (com ou sem pontuação) ou o nome exato do cliente
  * empresa, sem diferenciar maiúsculas e acentos. Vazio = `fallback` (a empresa do filtro da tela).
+ * Com o filtro em Todas (`fallback` undefined), vazio é recusado: a linha não cai sem aviso na
+ * própria consultoria, porque a folha dela lança salários no financeiro.
  */
-export function resolveEmployer(value: string | undefined, employers: Employer[], fallback: string | null): string | null {
-  if (!value?.trim()) return fallback;
+export function resolveEmployer(value: string | undefined, employers: Employer[], fallback: string | null | undefined): string | null {
+  if (!value?.trim()) {
+    if (fallback === undefined) throw new Error('Coluna Empresa vazia com o filtro em Todas as empresas: preencha o CNPJ, o nome ou "Própria empresa", ou escolha a empresa no filtro da tela');
+    return fallback;
+  }
   const digits = value.replace(/\D/g, '');
   if (digits.length === 14) {
     const byDoc = employers.find((e) => e.document === digits);
@@ -33,8 +38,9 @@ export function resolveEmployer(value: string | undefined, employers: Employer[]
 /**
  * Planilha de colaboradores: mesmos campos da admissão manual. Com empresas-clientes (consultoria
  * de RH), ganha a coluna "Empresa (CNPJ ou nome)"; vazia, vale a empresa escolhida no filtro da tela.
+ * `fallback`: id da empresa do filtro, null para a própria empresa, undefined para Todas (sem padrão).
  */
-export function employeeImportSpec(employers: { list: Employer[]; fallback: string | null } | null = null): ImportSpec {
+export function employeeImportSpec(employers: { list: Employer[]; fallback: string | null | undefined } | null = null): ImportSpec {
   return {
     entity: 'colaboradores',
     fileName: 'colaboradores',
@@ -42,7 +48,7 @@ export function employeeImportSpec(employers: { list: Employer[]; fallback: stri
       { key: 'name', label: 'Nome completo', required: true, example: 'Maria Souza' },
       { key: 'cpf', label: 'CPF', required: true, example: '123.456.789-09', hint: 'Com ou sem pontuação (11 dígitos)' },
       ...(employers
-        ? [{ key: 'employer', label: 'Empresa (CNPJ ou nome)', example: '12.345.678/0001-95', hint: 'Cliente do tipo empresa. Vazio = a empresa do filtro da tela (ou a própria empresa)' }]
+        ? [{ key: 'employer', label: 'Empresa (CNPJ ou nome)', example: '12.345.678/0001-95', hint: 'Cliente do tipo empresa ou "Própria empresa". Vazio = a empresa do filtro da tela; com o filtro em Todas, a linha é recusada' }]
         : []),
       { key: 'birthDate', label: 'Nascimento', type: 'date', example: '15/04/1990' },
       { key: 'position', label: 'Cargo', required: true, example: 'Auxiliar administrativo' },
@@ -51,6 +57,15 @@ export function employeeImportSpec(employers: { list: Employer[]; fallback: stri
       { key: 'salary', label: 'Salário (R$)', required: true, type: 'money', example: '2.500,00' },
       { key: 'weeklyHours', label: 'Jornada semanal (h)', type: 'integer', example: 44, hint: 'De 1 a 44 (vazio = 44)' },
       { key: 'dependents', label: 'Dependentes para IR', type: 'integer', example: 0, hint: 'Número inteiro (vazio = 0)' },
+      {
+        key: 'category',
+        label: 'Categoria',
+        type: 'enum',
+        options: employeeCategories.map((c) => ({ value: c, label: employeeCategoryLabel[c] })),
+        example: employeeCategoryLabel.employee,
+        hint: 'Empregado ou Jovem aprendiz, que recolhe FGTS de 2% (vazio = Empregado)',
+      },
+      { key: 'experienceEnd', label: 'Fim da experiência', type: 'date', example: '30/05/2024', hint: 'dd/mm/aaaa; vazio se não houver contrato de experiência' },
       { key: 'email', label: 'E-mail', type: 'email', example: 'maria@exemplo.com' },
       { key: 'phone', label: 'Telefone', example: '(11) 98765-4321' },
       { key: 'pixKey', label: 'Chave Pix (salário)', example: 'maria@exemplo.com' },
@@ -71,6 +86,8 @@ export function employeeImportSpec(employers: { list: Employer[]; fallback: stri
           salary: row.salary,
           weeklyHours: row.weeklyHours ?? 44,
           dependents: row.dependents ?? 0,
+          category: row.category ?? 'employee',
+          experienceEnd: row.experienceEnd ?? null,
           email: text(row, 'email') ?? null,
           phone: text(row, 'phone') ?? null,
           pixKey: text(row, 'pixKey') ?? null,

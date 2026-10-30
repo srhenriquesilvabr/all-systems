@@ -132,12 +132,25 @@ export const consortiumManifest = defineModule({
       },
     },
     {
+      key: 'consortium.contemplation_reverted',
+      label: 'Correção de contemplação',
+      variables: ['cota.grupo', 'cota.numero', 'assembleia.data'],
+      email: {
+        subject: 'Correção: sua cota não foi contemplada',
+        body: 'Olá, {{cliente.nome}}!\n\nCorrigimos o resultado da assembleia de {{assembleia.data}}: a cota {{cota.numero}} do grupo {{cota.grupo}} não foi contemplada. Por favor, desconsidere o aviso anterior. A cota continua ativa e segue concorrendo. Pedimos desculpas pelo engano.\n\n{{empresa.nome}}',
+      },
+      whatsapp: {
+        body: 'Olá, {{cliente.nome}}! Correção: a cota {{cota.numero}} (grupo {{cota.grupo}}) não foi contemplada na assembleia de {{assembleia.data}}. Desconsidere o aviso anterior. Pedimos desculpas. — {{empresa.nome}}',
+        meta: { name: 'consorcio_contemplacao_corrigida', params: ['cliente.nome', 'cota.numero', 'cota.grupo', 'assembleia.data'] },
+      },
+    },
+    {
       key: 'consortium.installment_late',
       label: 'Parcela em atraso',
       variables: ['cota.grupo', 'cota.numero', 'parcela.numero', 'parcela.valor', 'parcela.vencimento', 'parcela.dias', 'parcela.atrasadas'],
       email: {
         subject: 'Parcela do consórcio em atraso',
-        body: 'Olá, {{cliente.nome}}!\n\nConsta em aberto a parcela {{parcela.numero}} da sua cota {{cota.numero}} (grupo {{cota.grupo}}), de {{parcela.valor}}, vencida em {{parcela.vencimento}} (há {{parcela.dias}} dias). Parcelas em atraso: {{parcela.atrasadas}}.\n\nO pagamento é feito direto à administradora. Se já pagou, desconsidere e nos envie o comprovante: cota em atraso não concorre nas assembleias.\n\n{{empresa.nome}}',
+        body: 'Olá, {{cliente.nome}}!\n\nConsta em aberto a parcela {{parcela.numero}} da sua cota {{cota.numero}} (grupo {{cota.grupo}}), de {{parcela.valor}}, vencida em {{parcela.vencimento}} (há {{parcela.dias}} dias). Parcelas em atraso: {{parcela.atrasadas}}.\n\nO pagamento é feito direto à administradora. Se já pagou, desconsidere e nos envie o comprovante. Pelas regras do grupo, atraso pode impedir a cota de concorrer nas assembleias: confirme a situação com a administradora.\n\n{{empresa.nome}}',
       },
       whatsapp: {
         body: 'Olá, {{cliente.nome}}! A parcela {{parcela.numero}} da sua cota {{cota.numero}} (grupo {{cota.grupo}}), de {{parcela.valor}}, venceu em {{parcela.vencimento}} e consta em aberto há {{parcela.dias}} dias. Se já pagou, envie o comprovante por aqui. — {{empresa.nome}}',

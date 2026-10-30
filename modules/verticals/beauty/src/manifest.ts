@@ -19,7 +19,8 @@ export const beautyManifest = defineModule({
   optionalDependsOn: ['integration.whatsapp', 'integration.payments'],
   permissions: [
     { key: 'beauty.commissions.read', label: 'Ver comissões de todos os profissionais' },
-    { key: 'beauty.commissions.manage', label: 'Definir percentuais de comissão' },
+    { key: 'beauty.commissions.manage', label: 'Definir percentuais e lançar comissões no financeiro' },
+    { key: 'beauty.commissions.own', label: 'Ver a própria comissão' },
   ],
   defaultRoles: [
     {
@@ -35,8 +36,11 @@ export const beautyManifest = defineModule({
     {
       key: 'beauty.professional',
       label: 'Profissional',
-      permissions: [agenda.read, agenda.status, 'core.customers.read'],
+      permissions: [agenda.read, agenda.status, 'beauty.commissions.own', 'core.customers.read'],
     },
   ],
-  menu: [{ label: 'Comissões', path: '/salao/comissoes', icon: 'percent', permission: 'beauty.commissions.read' }],
+  menu: [
+    { label: 'Comissões', path: '/salao/comissoes', icon: 'percent', permission: 'beauty.commissions.read' },
+    { label: 'Minha comissão', path: '/salao/minha-comissao', icon: 'percent', permission: 'beauty.commissions.own' },
+  ],
 });

@@ -10,7 +10,7 @@ const columns: ImportColumn[] = [
   { key: 'price', label: 'Preço (R$)', type: 'money', required: true, example: '80,00' },
   { key: 'description', label: 'Descrição', example: 'Lavagem, corte e finalização', hint: 'Aparece no agendamento online' },
   { key: 'resources', label: 'Quem faz', example: 'Ana; Bruno', hint: 'Nomes dos profissionais separados por ; (vazio = qualquer profissional)' },
-  { key: 'online', label: 'Pode ser marcado online', type: 'boolean', example: 'Sim', hint: 'Sim ou Não (vazio = Sim)' },
+  { key: 'online', label: 'Pode ser marcado online', type: 'boolean', example: 'Sim', hint: 'Sim ou Não (vazio = Não: só entra no link quem a empresa liberar)' },
   { key: 'active', label: 'Ativo', type: 'boolean', example: 'Sim', hint: 'Sim ou Não (vazio = Sim)' },
 ];
 
@@ -33,7 +33,7 @@ export function serviceImportSpec(): ImportSpec {
           bufferMin: row.bufferMin ?? 0,
           price: row.price,
           description: text('description'),
-          online: row.online ?? true,
+          online: row.online ?? false,
           active: row.active ?? true,
           resourceIds,
         },

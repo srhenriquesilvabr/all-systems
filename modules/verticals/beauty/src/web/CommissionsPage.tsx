@@ -1,27 +1,14 @@
-import { api, ApiError, formatDate, formatMoney, parseMoney, today, useCan } from '@all/module-sdk/web';
+import { api, ApiError, formatDate, formatMoney, parseMoney, useCan } from '@all/module-sdk/web';
 import { useResources, useServices } from '@all/scheduling/web';
-import { Alert, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th } from '@all/ui';
+import { Alert, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Spinner, Table, Td, Th } from '@all/ui';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import type { CommissionReport, CommissionRules } from '../contracts';
-
-const periods = [
-  { key: 'month', label: 'Este mês' },
-  { key: 'last', label: 'Mês passado' },
-  { key: '15d', label: 'Últimos 15 dias' },
-] as const;
-
-function rangeOf(key: (typeof periods)[number]['key']) {
-  const now = new Date();
-  const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  if (key === 'month') return { from: iso(new Date(now.getFullYear(), now.getMonth(), 1)), to: today() };
-  if (key === 'last') return { from: iso(new Date(now.getFullYear(), now.getMonth() - 1, 1)), to: iso(new Date(now.getFullYear(), now.getMonth(), 0)) };
-  return { from: iso(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 14)), to: today() };
-}
+import { PayoutsCard, PeriodSelect, rangeOf, type PeriodKey } from './CommissionsExtra';
 
 export function CommissionsPage() {
   const canManage = useCan('beauty.commissions.manage');
-  const [periodKey, setPeriodKey] = useState<(typeof periods)[number]['key']>('month');
+  const [periodKey, setPeriodKey] = useState<PeriodKey>('month');
   const range = rangeOf(periodKey);
   const report = useQuery({
     queryKey: ['beauty', 'commissions', range],
@@ -37,16 +24,8 @@ export function CommissionsPage() {
     <>
       <PageHeader
         title="Comissões"
-        description="Sobre os atendimentos concluídos no período, pelo valor de cada serviço."
-        actions={
-          <Select aria-label="Período" value={periodKey} onChange={(e) => setPeriodKey(e.target.value as typeof periodKey)}>
-            {periods.map((p) => (
-              <option key={p.key} value={p.key}>
-                {p.label}
-              </option>
-            ))}
-          </Select>
-        }
+        description="Sobre os atendimentos concluídos no período, pelo valor cobrado de cada serviço. O percentual fica gravado quando o atendimento é concluído."
+        actions={<PeriodSelect value={periodKey} onChange={setPeriodKey} />}
       />
       <Card>
         {report.isPending || resources.isPending ? (
@@ -96,6 +75,7 @@ export function CommissionsPage() {
           </Table>
         )}
       </Card>
+      <PayoutsCard range={range} report={report.data} />
 
       {open && report.data && (
         <Modal open title={`Comissões — ${report.data.professionals.find((p) => p.resourceId === open)?.name}`} onClose={() => setOpen(null)}>

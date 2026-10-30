@@ -76,8 +76,8 @@ export const serviceInput = z.object({
   /** Intervalo depois do serviço (limpeza, preparo da sala). */
   bufferMin: z.coerce.number().int().min(0).max(240).default(0),
   price: z.coerce.number().min(0).max(1_000_000).multipleOf(0.01),
-  /** Aparece no agendamento online. */
-  online: z.boolean().default(true),
+  /** Aparece no agendamento online. Desligado até a empresa liberar. */
+  online: z.boolean().default(false),
   active: z.boolean().default(true),
   description: z.string().trim().max(500).nullish(),
   /** Precisa de uma sala/equipamento livre (entre as ligadas ao serviço, ou qualquer uma). */
@@ -86,6 +86,9 @@ export const serviceInput = z.object({
   resourceIds: z.array(z.string().uuid()).optional(),
 });
 export type ServiceInput = z.infer<typeof serviceInput>;
+
+/** Quais serviços ficam liberados no link de agendamento online (os demais saem dele). */
+export const onlineServicesInput = z.object({ serviceIds: z.array(z.string().uuid()).max(500) });
 
 export const appointmentInput = z.object({
   customerId: z.string().uuid('Escolha o cliente'),
@@ -97,8 +100,30 @@ export const appointmentInput = z.object({
   subject: z.object({ type: z.string().max(40), id: z.string().max(100), label: z.string().max(120) }).nullish(),
   /** Sala/equipamento reservado junto com o profissional. */
   roomId: z.string().uuid().nullish(),
+  /** "Marcar mesmo assim": fora do expediente ou em folga, só com shared.scheduling.manage. */
+  overrideSchedule: z.boolean().optional(),
 });
 export type AppointmentInput = z.infer<typeof appointmentInput>;
+
+const lineMoney = z.coerce.number().min(0).max(1_000_000).multipleOf(0.01);
+
+/**
+ * Alteração de um horário já marcado, no mesmo início. Ausente = fica como está. Em `services`, a
+ * lista é a nova (o que sair é removido); `price` é o valor de tabela da linha e `discount`, o
+ * desconto em reais: o que se cobra é a diferença. Mudar valores exige shared.scheduling.payments.
+ */
+export const appointmentEditInput = z.object({
+  resourceId: z.string().uuid().optional(),
+  roomId: z.string().uuid().nullish(),
+  services: z
+    .array(z.object({ serviceId: z.string().uuid(), price: lineMoney.optional(), discount: lineMoney.optional() }))
+    .min(1, 'Escolha ao menos um serviço')
+    .max(10)
+    .optional(),
+  notes: z.string().trim().max(1000).nullish(),
+  overrideSchedule: z.boolean().optional(),
+});
+export type AppointmentEditInput = z.infer<typeof appointmentEditInput>;
 
 /**
  * Repetição: toda semana, a cada 2 semanas ou todo mês no mesmo dia do mês (meses sem esse dia,
@@ -134,6 +159,8 @@ export const rescheduleInput = z.object({
    * null = sem sala (não vale se algum serviço exige sala).
    */
   roomId: z.string().uuid().nullish(),
+  /** "Marcar mesmo assim": fora do expediente ou em folga, só com shared.scheduling.manage. */
+  overrideSchedule: z.boolean().optional(),
 });
 /** Define, troca (id) ou remove (null) a sala/equipamento de um atendimento já marcado. */
 export const appointmentRoomInput = z.object({ roomId: z.string().uuid().nullable() });
@@ -153,8 +180,12 @@ export const paymentMethods = ['cash', 'pix', 'credit_card', 'debit_card', 'tran
 export const appointmentPaymentInput = z.object({
   amount: z.coerce.number().positive().max(1_000_000).multipleOf(0.01),
   method: z.enum(paymentMethods),
-  accountId: z.string().uuid(),
-  paidAt: isoDate,
+  /** Conta do financeiro. Sem ela, a conta Caixa; dinheiro que entra num caixa aberto vai sempre para a Caixa. */
+  accountId: z.string().uuid().nullish(),
+  /** Dia do recebimento: padrão hoje, nunca no futuro (conferido no servidor, no fuso da empresa). */
+  paidAt: isoDate.optional(),
+  /** Caixa do PDV: com sessão aberta, o recebimento entra na conferência dela (sem novo lançamento). */
+  registerId: z.string().uuid().nullish(),
 });
 
 export const onlineBookingInput = z.object({
@@ -225,7 +256,8 @@ export interface Appointment {
   source: 'admin' | 'online' | 'whatsapp';
   notes: string | null;
   subject: { type: string; id: string; label: string } | null;
-  services: { serviceId: string | null; name: string; durationMin: number; price: number }[];
+  /** `price` é o valor cobrado (já sem o desconto); `covered`: coberto por pacote ou tratamento. */
+  services: { serviceId: string | null; name: string; durationMin: number; price: number; discount: number; covered: boolean }[];
   total: number;
   paidAmount: number;
   paymentStatus: 'pending' | 'partial' | 'paid';

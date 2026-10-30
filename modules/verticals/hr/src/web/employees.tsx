@@ -1,5 +1,5 @@
 import { api, ApiError, AuthImage, formatDate, formatDocument, formatMoney, formatPhone, parseMoney, SpreadsheetImport, teamKey, TeamLinks, TeamMemberPicker, useCan, useTeamMember, type TeamMemberDetail } from '@all/module-sdk/web';
-import { Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th, Textarea } from '@all/ui';
+import { Alert, Badge, Button, Card, Checkbox, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
@@ -35,7 +35,8 @@ export function EmployeesPage() {
   const [employer, setEmployer] = useEmployerParam();
   const filter = multi ? employer || undefined : undefined;
   const list = useQuery({ queryKey: [...hrKey, 'employees', status, filter ?? ''], queryFn: () => api<Employee[]>('/hr/employees', { query: { status: status || undefined, employer: filter } }) });
-  const importSpec = useMemo(() => employeeImportSpec(multi ? { list: employers.data?.items ?? [], fallback: employerIdOf(employer) } : null), [multi, employers.data, employer]);
+  // Filtro em Todas: a planilha não tem padrão, e a coluna Empresa vazia é recusada linha a linha.
+  const importSpec = useMemo(() => employeeImportSpec(multi ? { list: employers.data?.items ?? [], fallback: employer ? employerIdOf(employer) : undefined } : null), [multi, employers.data, employer]);
   return (
     <>
       <PageHeader
@@ -58,6 +59,7 @@ export function EmployeesPage() {
           <option value="">Todos</option>
         </Select>
         {multi && <EmployerSelect allowAll aria-label="Empresa" className="max-w-80" value={employer} onChange={setEmployer} />}
+        {multi && !employer && canManage && <p className="self-center text-xs text-fg-muted">Na planilha, com Todas as empresas, a coluna Empresa é obrigatória em cada linha.</p>}
       </div>
       <Card>
         {list.isPending ? (
@@ -77,6 +79,7 @@ export function EmployeesPage() {
                 <Th>Cargo</Th>
                 <Th>Admissão</Th>
                 <Th className="text-right">Salário</Th>
+                <Th>Situação</Th>
                 <Th>Férias</Th>
               </tr>
             </thead>
@@ -91,6 +94,9 @@ export function EmployeesPage() {
                   </Td>
                   <Td className="tabular-nums">{formatDate(e.admissionDate)}</Td>
                   <Td className="text-right tabular-nums">{formatMoney(e.salary)}</Td>
+                  <Td>
+                    <StatusBadge employee={e} />
+                  </Td>
                   <Td>{e.overdueVacation ? <Badge tone="danger">Vencidas</Badge> : e.vacationBalance > 0 ? <Badge tone="warning">{e.vacationBalance} dias</Badge> : <span className="text-fg-subtle">—</span>}</Td>
                 </tr>
               ))}
@@ -102,6 +108,48 @@ export function EmployeesPage() {
         <EmployeeModal employee={null} defaultEmployer={employer} initialPersonId={admitPersonId} onClose={closeCreating} onSaved={(id) => navigate(`/rh/colaboradores/${id}`)} />
       )}
     </>
+  );
+}
+
+function StatusBadge({ employee: e }: { employee: Employee }) {
+  if (e.terminatedWithoutTerm) return <Badge tone="danger">Desligado sem termo</Badge>;
+  if (e.status === 'active') return <Badge tone="success">Ativo</Badge>;
+  return (
+    <Badge tone={e.status === 'terminated' ? 'neutral' : 'warning'}>
+      {employeeStatusLabel[e.status]}
+      {e.currentLeave && ` até ${formatDate(e.currentLeave.endOn)}`}
+    </Badge>
+  );
+}
+
+/** Motivo e confirmação, na própria ficha, para reativar sem termo e desfazer rescisão. */
+function ReversalPanel({ title, description, action, path, onDone, onClose }: { title: string; description: ReactNode; action: string; path: string; onDone?: (r: unknown) => void; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [reason, setReason] = useState('');
+  const run = useMutation({
+    mutationFn: () => api(path, { method: 'POST', body: { reason } }),
+    onSuccess: (r) => {
+      queryClient.invalidateQueries({ queryKey: hrKey });
+      queryClient.invalidateQueries({ queryKey: teamKey });
+      onDone?.(r);
+      onClose();
+    },
+  });
+  return (
+    <Card className="mb-4 space-y-3 p-5 text-sm">
+      <h2 className="font-medium">{title}</h2>
+      <div className="text-fg-muted">{description}</div>
+      {run.error && <Alert>{run.error instanceof ApiError ? run.error.message : 'Não foi possível concluir'}</Alert>}
+      <Field label="Motivo">{(id) => <Textarea id={id} rows={2} value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />}</Field>
+      <div className="flex justify-end gap-2">
+        <Button variant="secondary" onClick={onClose}>
+          Voltar
+        </Button>
+        <Button variant="danger" loading={run.isPending} disabled={reason.trim().length < 3} onClick={() => run.mutate()}>
+          {action}
+        </Button>
+      </div>
+    </Card>
   );
 }
 
@@ -118,6 +166,8 @@ export function EmployeePage() {
   const [addingLeave, setAddingLeave] = useState(false);
   const [terminating, setTerminating] = useState(false);
   const [showTermination, setShowTermination] = useState(false);
+  const [reversal, setReversal] = useState<'undo' | 'reactivate' | null>(null);
+  const [undone, setUndone] = useState<{ cancelledVacations: { startOn: string; days: number }[] } | null>(null);
   const removeLeave = useMutation({ mutationFn: (lid: string) => api(`/hr/leaves/${lid}`, { method: 'DELETE' }), onSuccess: () => queryClient.invalidateQueries({ queryKey: hrKey }) });
   const cancel = useMutation({ mutationFn: (vid: string) => api(`/hr/vacations/${vid}/cancel`, { method: 'POST' }), onSuccess: () => queryClient.invalidateQueries({ queryKey: hrKey }) });
   if (emp.isPending) return <Spinner />;
@@ -128,7 +178,7 @@ export function EmployeePage() {
       <div className="print:hidden">
       <PageHeader
         title={e.name}
-        description={`${e.position}${e.department ? ` · ${e.department}` : ''} · ${employeeStatusLabel[e.status]}${e.category === 'apprentice' ? ' · aprendiz' : ''}`}
+        description={`${e.position}${e.department ? ` · ${e.department}` : ''} · ${employeeStatusLabel[e.status]}${e.currentLeave ? ` até ${formatDate(e.currentLeave.endOn)} (${leaveTypeLabel[e.currentLeave.type]})` : ''}${e.category === 'apprentice' ? ' · aprendiz' : ''}`}
         actions={
           <div className="flex gap-2">
             {e.termination && (
@@ -136,7 +186,12 @@ export function EmployeePage() {
                 Termo de rescisão
               </Button>
             )}
-            {canPayroll && !e.termination && e.status !== 'terminated' && (
+            {canPayroll && e.termination && (
+              <Button variant="secondary" onClick={() => setReversal('undo')}>
+                Desfazer rescisão
+              </Button>
+            )}
+            {canPayroll && !e.termination && (
               <Button variant="danger" onClick={() => setTerminating(true)}>
                 Rescindir
               </Button>
@@ -149,6 +204,47 @@ export function EmployeePage() {
           </div>
         }
       />
+      {e.terminatedWithoutTerm && (
+        <div className="mb-4">
+          <Alert>
+            Este colaborador foi marcado como Desligado{e.terminationDate ? ` em ${formatDate(e.terminationDate)}` : ''} sem termo de rescisão: não há verbas calculadas nem lançamentos, e ele está fora da folha e do 13º. Use Rescindir para gerar o termo ou reative, se foi engano.
+            {canManage && (
+              <div className="mt-2">
+                <Button size="sm" variant="secondary" onClick={() => setReversal('reactivate')}>
+                  Reativar
+                </Button>
+              </div>
+            )}
+          </Alert>
+        </div>
+      )}
+      {reversal === 'undo' && (
+        <ReversalPanel
+          title="Desfazer rescisão"
+          description="Só é possível enquanto nada do termo foi pago e nenhuma folha fechou sem este colaborador. O termo fica guardado como desfeito, os lançamentos em aberto são cancelados e ele volta a ativo."
+          action="Desfazer rescisão"
+          path={`/hr/employees/${e.id}/termination/undo`}
+          onDone={(r) => setUndone(r as { cancelledVacations: { startOn: string; days: number }[] })}
+          onClose={() => setReversal(null)}
+        />
+      )}
+      {reversal === 'reactivate' && (
+        <ReversalPanel
+          title="Reativar colaborador"
+          description="A data de desligamento sai do cadastro, e o colaborador volta para as folhas. O motivo fica na auditoria."
+          action="Reativar"
+          path={`/hr/employees/${e.id}/reactivate`}
+          onClose={() => setReversal(null)}
+        />
+      )}
+      {undone && (
+        <div className="mb-4">
+          <Alert tone="info">
+            Rescisão desfeita. Falta conferir à mão: incluir o colaborador nas folhas em aberto (na folha, em Faltam nesta folha) e, se ele atende na agenda, reativar o profissional.
+            {undone.cancelledVacations.length > 0 && ` A rescisão cancelou férias que não voltam sozinhas: ${undone.cancelledVacations.map((v) => `${v.days} dias a partir de ${formatDate(v.startOn)}`).join('; ')}. Marque de novo, se for o caso.`}
+          </Alert>
+        </div>
+      )}
       <div className="grid gap-6 lg:grid-cols-[18rem_1fr]">
         <Card className="h-fit space-y-2 p-5 text-sm">
           <PersonInfo teamMemberId={e.teamMemberId} employeeId={e.id} />
@@ -174,6 +270,12 @@ export function EmployeePage() {
           {e.email && <Info label="E-mail">{e.email}</Info>}
           {e.phone && <Info label="Telefone">{formatPhone(e.phone)}</Info>}
           {e.pixKey && <Info label="Chave Pix">{e.pixKey}</Info>}
+          {e.cancelledTerminations.map((t) => (
+            <Info key={t.id} label="Rescisão desfeita">
+              Saída em {formatDate(t.terminationDate)}, desfeita em {formatDate(t.cancelledAt.slice(0, 10))}
+              {t.reason && <span className="text-fg-muted"> · {t.reason}</span>}
+            </Info>
+          ))}
         </Card>
         <div className="space-y-4">
           <Card>
@@ -357,7 +459,8 @@ function EmployeeModal({
     dependents: String(employee?.dependents ?? 0),
     category: employee?.category ?? 'employee',
     experienceEnd: employee?.experienceEnd ?? '',
-    status: employee?.status ?? 'active',
+    // Guardado, não o exibido: um afastamento com datas some sozinho quando termina.
+    status: (employee?.status === 'terminated' ? 'terminated' : employee?.manualLeave ? 'on_leave' : 'active') as 'active' | 'on_leave' | 'terminated',
     terminationDate: employee?.terminationDate ?? '',
     pixKey: employee?.pixKey ?? '',
     notes: employee?.notes ?? '',
@@ -504,20 +607,16 @@ function EmployeeModal({
           <Field label="E-mail">{(id) => <Input id={id} type="email" value={form.email} onChange={(e) => set({ email: e.target.value })} />}</Field>
           <Field label="Telefone">{(id) => <Input id={id} value={form.phone} onChange={(e) => set({ phone: e.target.value })} />}</Field>
           <Field label="Chave Pix (salário)">{(id) => <Input id={id} value={form.pixKey} onChange={(e) => set({ pixKey: e.target.value })} />}</Field>
-          {employee && (
-            <Field label="Situação">
-              {(id) => (
-                <Select id={id} value={form.status} onChange={(e) => set({ status: e.target.value as typeof form.status })}>
-                  {Object.entries(employeeStatusLabel).map(([k, l]) => (
-                    <option key={k} value={k}>
-                      {l}
-                    </option>
-                  ))}
-                </Select>
-              )}
-            </Field>
+          {employee && form.status !== 'terminated' && (
+            <div className="sm:col-span-2">
+              <Checkbox
+                label="Afastado por outro motivo, sem período em Afastamentos"
+                checked={form.status === 'on_leave'}
+                onChange={(e) => set({ status: e.target.checked ? 'on_leave' : 'active' })}
+              />
+              <p className="mt-1 text-xs text-fg-muted">Doença e licença-maternidade: use Registrar afastamento, e a Situação acompanha as datas. Para desligar, use Rescindir na ficha: isso gera o termo e os lançamentos.</p>
+            </div>
           )}
-          {form.status === 'terminated' && <Field label="Data do desligamento">{(id) => <Input id={id} type="date" required value={form.terminationDate} onChange={(e) => set({ terminationDate: e.target.value })} />}</Field>}
         </div>
         <Field label="Observações">{(id) => <Textarea id={id} rows={2} value={form.notes} onChange={(e) => set({ notes: e.target.value })} />}</Field>
       </form>
@@ -632,7 +731,7 @@ function LeaveModal({ employee, onClose }: { employee: Employee; onClose: () => 
           {form.type === 'sick'
             ? 'Doença: a empresa paga os primeiros 15 dias; do 16º em diante paga o INSS e os dias saem da folha.'
             : 'Maternidade: a empresa paga o salário-maternidade na folha e deduz o valor das contribuições (informativo na folha).'}{' '}
-          A folha do mês considera o afastamento ao ser aberta ou recalculada.
+          A folha do mês considera o afastamento ao ser aberta ou recalculada. Enquanto as datas cobrirem o dia de hoje, a Situação fica como Afastado.
         </p>
       </form>
     </Modal>

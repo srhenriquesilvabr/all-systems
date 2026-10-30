@@ -1,5 +1,6 @@
 import { api, ApiError, formatDate, formatDateTime, formatMoney, parseMoney, today, useCan } from '@all/module-sdk/web';
 import type { Appointment } from '@all/scheduling';
+import { appointmentStatusLabel, statusTone as appointmentTone } from '@all/scheduling/web';
 import { Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Tabs, Textarea } from '@all/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent, type ReactNode } from 'react';
@@ -131,18 +132,84 @@ function UpdatesTab({ caseId }: { caseId: string }) {
         <ol className="space-y-2">
           {updates.data.map((u) => (
             <li key={u.id}>
-              <Card className="p-4 text-sm">
-                <div className="flex justify-between gap-3 text-xs text-fg-muted">
-                  <span className="font-medium tabular-nums text-fg">{formatDate(u.occurredOn)}</span>
-                  <span>{u.author ?? ''}</span>
-                </div>
-                <p className="mt-1 whitespace-pre-line">{u.description}</p>
-              </Card>
+              <UpdateCard update={u} canWrite={canWrite} />
             </li>
           ))}
         </ol>
       )}
     </div>
+  );
+}
+
+/** Andamento: o lançado à mão pode ser corrigido ou excluído, no próprio cartão; o do sistema, não. */
+function UpdateCard({ update: u, canWrite }: { update: CaseUpdate; canWrite: boolean }) {
+  const queryClient = useQueryClient();
+  const [mode, setMode] = useState<'view' | 'edit' | 'delete'>('view');
+  const [occurredOn, setOccurredOn] = useState(u.occurredOn);
+  const [description, setDescription] = useState(u.description);
+  const [reason, setReason] = useState('');
+  const done = () => {
+    queryClient.invalidateQueries({ queryKey: legalKey });
+    setMode('view');
+  };
+  const edit = useMutation({ mutationFn: () => api(`/legal/updates/${u.id}`, { method: 'PATCH', body: { occurredOn, description } }), onSuccess: done });
+  const remove = useMutation({ mutationFn: () => api(`/legal/updates/${u.id}/delete`, { method: 'POST', body: { reason } }), onSuccess: done });
+  const error = edit.error ?? remove.error;
+  return (
+    <Card className="p-4 text-sm">
+      <div className="flex justify-between gap-3 text-xs text-fg-muted">
+        <span className="font-medium tabular-nums text-fg">{formatDate(u.occurredOn)}</span>
+        <span>
+          {u.author ?? ''}
+          {u.auto && ' · automático'}
+          {u.editedAt && ` · corrigido em ${formatDateTime(u.editedAt)}`}
+        </span>
+      </div>
+      {error && <Alert>{error instanceof ApiError ? error.message : 'Erro ao salvar'}</Alert>}
+      {mode === 'edit' ? (
+        <div className="mt-2 space-y-3">
+          <div className="grid gap-3 sm:grid-cols-[10rem_1fr]">
+            <Field label="Data">{(id) => <Input id={id} type="date" required value={occurredOn} onChange={(e) => setOccurredOn(e.target.value)} />}</Field>
+            <Field label="Andamento">{(id) => <Textarea id={id} rows={2} required minLength={3} value={description} onChange={(e) => setDescription(e.target.value)} />}</Field>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="ghost" onClick={() => setMode('view')}>
+              Voltar
+            </Button>
+            <Button size="sm" loading={edit.isPending} disabled={description.trim().length < 3 || !occurredOn} onClick={() => edit.mutate()}>
+              Salvar andamento
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <p className="mt-1 whitespace-pre-line">{u.description}</p>
+      )}
+      {mode === 'delete' && (
+        <div className="mt-2 space-y-3">
+          <Field label="Por que excluir este andamento?" hint="Ele sai do histórico do processo. O texto e o motivo ficam na auditoria.">
+            {(id) => <Input id={id} value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />}
+          </Field>
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="ghost" onClick={() => setMode('view')}>
+              Voltar
+            </Button>
+            <Button size="sm" variant="danger" loading={remove.isPending} disabled={reason.trim().length < 3} onClick={() => remove.mutate()}>
+              Excluir andamento
+            </Button>
+          </div>
+        </div>
+      )}
+      {canWrite && !u.auto && mode === 'view' && (
+        <div className="mt-2 flex justify-end gap-1">
+          <Button size="sm" variant="ghost" onClick={() => setMode('edit')}>
+            Editar
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setMode('delete')}>
+            Excluir
+          </Button>
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -248,12 +315,16 @@ function HearingsTab({ legalCase }: { legalCase: LegalCase }) {
       ) : (
         <ul className="divide-y divide-line text-sm">
           {mine.map((a) => (
-            <li key={a.id} className="flex justify-between gap-3 px-4 py-3">
+            <li key={a.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
               <span>
-                <span className="font-medium">{a.services.map((s) => s.name).join(', ')}</span>
+                <span className={a.status === 'cancelled' ? 'font-medium text-fg-subtle line-through' : 'font-medium'}>{a.services.map((s) => s.name).join(', ')}</span>
                 <span className="text-fg-muted"> · {a.resourceName}</span>
+                {a.cancelReason && <span className="block text-xs text-fg-muted">Motivo: {a.cancelReason}</span>}
               </span>
-              <span className="tabular-nums">{formatDateTime(a.startsAt)}</span>
+              <span className="flex items-center gap-2">
+                <Badge tone={appointmentTone[a.status]}>{appointmentStatusLabel[a.status]}</Badge>
+                <span className="tabular-nums">{formatDateTime(a.startsAt)}</span>
+              </span>
             </li>
           ))}
         </ul>
@@ -268,9 +339,14 @@ function FeesTab({ caseId }: { caseId: string }) {
   const fees = useQuery({ queryKey: [...legalKey, 'fees', caseId], queryFn: () => api<Fee[]>(`/legal/cases/${caseId}/fees`) });
   const [adding, setAdding] = useState(false);
   const [success, setSuccess] = useState<Fee | null>(null);
+  // Cancelar pede confirmação, no próprio cartão: as parcelas em aberto caem junto.
+  const [confirming, setConfirming] = useState<string | null>(null);
   const cancel = useMutation({
     mutationFn: (id: string) => api(`/legal/fees/${id}/cancel`, { method: 'POST' }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: legalKey }),
+    onSuccess: () => {
+      setConfirming(null);
+      queryClient.invalidateQueries({ queryKey: legalKey });
+    },
   });
   return (
     <div className="space-y-3">
@@ -311,12 +387,27 @@ function FeesTab({ caseId }: { caseId: string }) {
                   Registrar êxito
                 </Button>
               )}
-              {canManage && f.status !== 'cancelled' && (
-                <Button size="sm" variant="ghost" loading={cancel.isPending && cancel.variables === f.id} onClick={() => cancel.mutate(f.id)}>
+              {canManage && f.status !== 'cancelled' && confirming !== f.id && (
+                <Button size="sm" variant="ghost" onClick={() => setConfirming(f.id)}>
                   Cancelar
                 </Button>
               )}
             </div>
+            {confirming === f.id && (
+              <div className="w-full space-y-2 border-t border-line pt-3">
+                <p>
+                  Cancelar este honorário? {formatMoney(f.receivable.open)} em parcelas em aberto {f.receivable.open > 0 ? 'serão canceladas' : '(nada a cancelar)'}. O que já foi recebido ({formatMoney(f.receivable.paid)}) continua no financeiro.
+                </p>
+                <div className="flex justify-end gap-2">
+                  <Button size="sm" variant="ghost" onClick={() => setConfirming(null)}>
+                    Voltar
+                  </Button>
+                  <Button size="sm" variant="danger" loading={cancel.isPending && cancel.variables === f.id} onClick={() => cancel.mutate(f.id)}>
+                    Cancelar honorário
+                  </Button>
+                </div>
+              </div>
+            )}
           </Card>
         ))
       )}

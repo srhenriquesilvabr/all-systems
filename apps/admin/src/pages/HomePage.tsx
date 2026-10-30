@@ -76,7 +76,20 @@ export function HomePage() {
         )}
       </Section>
 
-      <Section icon={LayoutGrid} title="Módulos contratados" aside={contracted.length > 0 && <Badge tone="brand">{contracted.length} ativo(s)</Badge>}>
+      <Section
+        icon={LayoutGrid}
+        title="Módulos contratados"
+        aside={
+          <span className="flex items-center gap-3">
+            {session.isOwner && (
+              <Link to="/configuracoes/modulos" className="text-sm text-brand-700 hover:underline">
+                Gerenciar
+              </Link>
+            )}
+            {contracted.length > 0 && <Badge tone="brand">{contracted.length} ativo(s)</Badge>}
+          </span>
+        }
+      >
         {contracted.length ? (
           <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {contracted.map((m) => (

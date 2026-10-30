@@ -34,7 +34,8 @@ export const schServices = pgTable(
     durationMin: integer('duration_min').notNull(),
     bufferMin: integer('buffer_min').notNull().default(0),
     price: money('price').notNull(),
-    online: boolean('online').notNull().default(true),
+    /** Aparece no agendamento online. Desligado até a empresa decidir liberar. */
+    online: boolean('online').notNull().default(false),
     active: boolean('active').notNull().default(true),
     description: text('description'),
     /** Só pode ser marcado com uma sala/equipamento livre. */
@@ -149,7 +150,11 @@ export const schAppointments = pgTable(
   ],
 );
 
-/** Serviços do atendimento, com nome, duração e preço do momento da marcação. */
+/**
+ * Serviços do atendimento, com nome, duração e preço do momento da marcação. `price` é o valor
+ * cobrado, já sem o desconto (preço de tabela = price + discount). `covered`: coberto por pacote ou
+ * tratamento (um ServicePricer definiu o valor), então preço e desconto não mudam à mão.
+ */
 export const schAppointmentServices = pgTable(
   'sch_appointment_services',
   {
@@ -162,6 +167,8 @@ export const schAppointmentServices = pgTable(
     name: text('name').notNull(),
     durationMin: integer('duration_min').notNull(),
     price: money('price').notNull(),
+    discount: money('discount').notNull().default('0'),
+    covered: boolean('covered').notNull().default(false),
   },
   (t) => [index('sch_appointment_services_appt_idx').on(t.appointmentId), tenantIsolation()],
 );
@@ -178,6 +185,8 @@ export const schPayments = pgTable(
     method: text('method').notNull(),
     paidAt: date('paid_at', { mode: 'string' }).notNull(),
     finEntryId: uuid('fin_entry_id'),
+    /** Sessão de caixa (shared.sales) em que o recebimento entrou; sem FK: o caixa é opcional. */
+    registerSessionId: uuid('register_session_id'),
     userId: uuid('user_id'),
     createdAt: ts('created_at').notNull().defaultNow(),
   },

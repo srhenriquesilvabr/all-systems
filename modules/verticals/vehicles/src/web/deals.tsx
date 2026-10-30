@@ -189,6 +189,15 @@ export function DealPage() {
     },
   });
   const loseReady = reasonKey !== '' && (reasonKey !== 'other' || reason.trim().length >= 3);
+  const [plate, setPlate] = useState('');
+  const fixPlate = useMutation({
+    mutationFn: () => api(`/vehicles/deals/${id}/trade-plate`, { method: 'PATCH', body: { plate } }),
+    onSuccess: () => {
+      setPlate('');
+      close.reset();
+      queryClient.invalidateQueries({ queryKey: key });
+    },
+  });
 
   if (deal.isPending) return <Spinner />;
   if (deal.isError) return <Alert>{deal.error.message}</Alert>;
@@ -196,6 +205,8 @@ export function DealPage() {
   const open = d.status !== 'closed' && d.status !== 'lost';
   const net = d.price - d.discount;
   const canClose = open && (d.paymentType === 'cash' || d.status === 'credit_approved');
+  const contracted = proposals.data?.some((p) => p.status === 'contracted') ?? false;
+  const plateTaken = close.error instanceof ApiError && close.error.code === 'TRADE_PLATE_TAKEN';
 
   return (
     <>
@@ -206,7 +217,7 @@ export function DealPage() {
           canWrite &&
           open && (
             <div className="flex gap-2">
-              <Button variant="ghost" onClick={() => setLosing(true)}>
+              <Button variant="ghost" disabled={contracted} title={contracted ? 'Registre o distrato na proposta contratada antes' : undefined} onClick={() => setLosing(true)}>
                 Perdida
               </Button>
               {['negotiating', 'credit_rejected'].includes(d.status) && (
@@ -223,6 +234,16 @@ export function DealPage() {
       />
       {close.error && <Alert>{close.error instanceof ApiError ? close.error.message : 'Erro ao fechar'}</Alert>}
       {lose.error && <Alert>{lose.error instanceof ApiError ? lose.error.message : 'Erro'}</Alert>}
+      {open && contracted && <Alert tone="info">Há contrato de financiamento assinado. Para marcar como perdida, combine o distrato com o banco e clique em "Registrar distrato" na proposta.</Alert>}
+      {plateTaken && canWrite && (
+        <Card className="mb-4 flex flex-wrap items-end gap-3 p-4">
+          <Field label="Placa correta do carro da troca">{(fid) => <Input id={fid} value={plate} onChange={(e) => setPlate(e.target.value.toUpperCase())} placeholder="ABC1D23" />}</Field>
+          <Button variant="secondary" disabled={!plate} loading={fixPlate.isPending} onClick={() => fixPlate.mutate()}>
+            Corrigir placa
+          </Button>
+          {fixPlate.error && <Alert>{fixPlate.error instanceof ApiError ? fixPlate.error.message : 'Erro ao salvar'}</Alert>}
+        </Card>
+      )}
       <div className="grid gap-6 lg:grid-cols-[20rem_1fr]">
         <Card className="h-fit space-y-2 p-5 text-sm">
           <Badge tone={dealTone[d.status]}>{dealStatusLabel[d.status]}</Badge>
@@ -244,7 +265,7 @@ export function DealPage() {
             {formatMoney(net)}
           </Line>
           {d.tradeIn && (
-            <Line label={`Troca: ${d.tradeIn.brand} ${d.tradeIn.model} ${d.tradeIn.yearModel}`}>-{formatMoney(d.tradeIn.value)}</Line>
+            <Line label={`Troca: ${d.tradeIn.brand} ${d.tradeIn.model} ${d.tradeIn.yearModel}${d.tradeIn.plate ? `, ${d.tradeIn.plate}` : ''}`}>-{formatMoney(d.tradeIn.value)}</Line>
           )}
           {d.paymentType === 'financing' ? (
             <>
@@ -280,7 +301,7 @@ export function DealPage() {
                 disabled={d.status === 'credit_analysis' || d.status === 'credit_approved'}
               />
             ) : (
-              <ProposalList proposals={proposals.data} loading={proposals.isPending} />
+              <ProposalList proposals={proposals.data} loading={proposals.isPending} readOnly />
             )
           ) : (
             <Card className="p-5 text-sm text-fg-muted">Venda à vista: sem financiamento. Para financiar, altere a forma de pagamento.</Card>
