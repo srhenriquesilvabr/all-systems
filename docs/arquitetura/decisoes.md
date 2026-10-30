@@ -98,7 +98,7 @@ Formato curto: contexto → decisão → consequências. Novas decisões entram 
 ### ADR-023 — Produção no Cloudflare Workers + Supabase (substitui ADR-008)
 - **Contexto:** queremos publicar a cada push no GitHub, sem servidores nem infraestrutura para manter.
 - **Decisão:** um Worker `palmer-systems` serve o admin (assets estáticos) e a mesma API Nest em `/api/*`, sobre o servidor HTTP do Node que o runtime emula (`nodejs_compat`). O Postgres é o Supabase, acessado pelo Hyperdrive com cache desligado. Fotos e documentos ficam no R2, e-mails saem pelo Resend. O Cron Trigger, a cada minuto, faz o papel do processo worker: drena o outbox e roda os jobs vencidos. Após cada requisição que altera dados, o outbox também é drenado em segundo plano.
-- **Consequências:** a conexão com o banco é aberta a cada requisição, porque o runtime não deixa reaproveitar sockets entre requisições. Não há módulos nativos, por isso o argon2id passou para JS puro, no mesmo formato de hash. O Supabase expõe o schema `public` pela Data API; a migration 0015 tira o acesso dos papéis `anon` e `authenticated`. O projeto do Supabase está na AWS us-west-2 (Oregon): os dados ficam fora do Brasil e cada consulta tem mais latência que em sa-east-1. O Hyperdrive reduz o custo de abrir a conexão, não a ida e volta de cada consulta. A sincronização dos manifestos sai do boot (cada isolate sobe sozinho) e roda no deploy. O caminho Node (`pnpm dev`, worker, CLI e testes) continua valendo para desenvolvimento.
+- **Consequências:** a conexão com o banco é aberta a cada requisição, porque o runtime não deixa reaproveitar sockets entre requisições. Não há módulos nativos, por isso o argon2id passou para JS puro, no mesmo formato de hash. O Supabase expõe o schema `public` pela Data API; a migration 0015 tira o acesso dos papéis `anon` e `authenticated`. O projeto do Supabase nasceu na AWS us-west-2 (Oregon), com os dados fora do Brasil e mais latência; foi movido para sa-east-1 em 30/10/2026 (ADR-036). O Hyperdrive reduz o custo de abrir a conexão, não a ida e volta de cada consulta. A sincronização dos manifestos sai do boot (cada isolate sobe sozinho) e roda no deploy. O caminho Node (`pnpm dev`, worker, CLI e testes) continua valendo para desenvolvimento.
 
 ### ADR-024 — Sessão de caixa no PDV
 - **Contexto:** o PDV só vendia; faltava abertura com troco, sangria/suprimento e fechamento conferido por caixa (terminal).
@@ -154,7 +154,12 @@ Formato curto: contexto → decisão → consequências. Novas decisões entram 
 ### ADR-035 — Worker na região do banco e limite de requisições sem timer
 - **Contexto:** com `placement: smart`, o Worker ficava em São Paulo e o banco em us-west-2: 17 ms de CPU e cerca de 2 s de espera em toda chamada com banco. E o `ThrottlerStorageService` amarra um timer à requisição que inicia o Nest (`AsyncResource.bind`): no Workers, chamá-lo de outra requisição dá erro, o que causava 500 em toda a instância, inclusive no login.
 - **Decisão:** `placement` fixo em `aws:us-west-2` e `IsolateThrottlerStorage`, sem timer, com a limpeza feita durante as chamadas.
-- **Consequências:** chamadas com banco caíram para cerca de 410 ms. Se o banco mudar de região, o `placement` muda junto; um banco em São Paulo reduziria ainda mais o tempo para usuários no Brasil. O limite continua por instância, não global.
+- **Consequências:** chamadas com banco caíram para cerca de 410 ms. Se o banco mudar de região, o `placement` muda junto. O limite continua por instância, não global.
+
+### ADR-036 — Banco em São Paulo (sa-east-1)
+- **Contexto:** os clientes estão no Brasil, e mesmo com o Worker ao lado do banco em Oregon cada chamada atravessava o continente.
+- **Decisão:** projeto novo no Supabase em sa-east-1 (região não muda em projeto existente), Worker fixo em `aws:sa-east-1` e Hyperdrive apontado para ele. Cópia do schema `public` com o `app_user` de Oregon em somente leitura, conferida por contagem e hash de cada tabela.
+- **Consequências:** chamadas com banco caíram para cerca de 145 ms, e os dados ficam no Brasil. O projeto de Oregon fica congelado para voltar atrás; ao apagá-lo, somem as variáveis `OLD_*` do `.env.production`.
 
 ## Pendentes
 

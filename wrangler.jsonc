@@ -33,13 +33,13 @@
       "bucket_name": "palmer-systems-files"
     }
   ],
-  // O banco está em us-west-2 e uma requisição faz várias consultas: rodar o Worker perto do
-  // banco custa menos que rodar perto do usuário. Os assets do admin continuam saindo da borda.
-  // Região fixa: o modo "smart" deixou o Worker em São Paulo (cf-placement: local-GRU), e cada
-  // chamada gastava ~2 s só nas idas e voltas até o banco. Se o banco mudar de região, mude aqui.
+  // O banco está em sa-east-1 e uma requisição faz várias consultas: o Worker roda junto dele.
+  // Os assets do admin continuam saindo da borda. Região fixa porque o modo "smart" não moveu o
+  // Worker para perto do banco e cada chamada gastava ~2 s nas idas e voltas (ADR-035). Se o banco
+  // mudar de região, mude aqui.
   "placement": {
     "mode": "targeted",
-    "region": "aws:us-west-2"
+    "region": "aws:sa-east-1"
   },
   // Boot do Nest num isolate novo e argon2id em JS puro passam de centenas de ms de CPU.
   // Exige o Workers Paid: no plano grátis o deploy recusa esta opção.

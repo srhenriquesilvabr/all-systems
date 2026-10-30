@@ -35,7 +35,8 @@ Não são segredos, mas ajudam em suporte e configuração.
 | Cloudflare: bucket de arquivos | `palmer-systems-files` |
 | Cloudflare: Hyperdrive | `palmer-systems-db` (`ebd3bfe71f1a413d80fc2295aebfe59b`) |
 | Supabase: organização | `ozsnyvidpjkdvdhuhaff` |
-| Supabase: projeto | `palmer-systems` (`rethhluanzblovkiccna`), região us-west-2 (Oregon) |
+| Supabase: projeto em uso | `palmer-systems-sp` (`swephdloeplmgbnwvxoi`), região sa-east-1 (São Paulo), plano Free |
+| Supabase: projeto antigo | `palmer-systems` (`rethhluanzblovkiccna`), região us-west-2 (Oregon), somente leitura desde 30/10/2026; guardado para voltar atrás e ocupa uma das 2 vagas do plano Free |
 | Git: autor dos commits | `srhenriquesilvabr <114965455+srhenriquesilvabr@users.noreply.github.com>` |
 
 A conta Cloudflare também guarda o bucket `rekrutar-consultoria-media`, que não faz parte deste sistema.
@@ -44,8 +45,7 @@ A conta Cloudflare também guarda o bucket `rekrutar-consultoria-media`, que nã
 
 | Onde | O que guarda |
 |---|---|
-| `.env.production`, na raiz do projeto, só nesta máquina | Token do Supabase, senhas do banco, chaves do sistema, senha do dono e token de leitura dos registros do Cloudflare |
-| `.env.production.sp`, na raiz do projeto, só nesta máquina | Dados do projeto novo em São Paulo (migração em andamento) |
+| `.env.production`, na raiz do projeto, só nesta máquina | Token do Supabase, senhas do banco (as de Oregon como `OLD_*`), chaves do sistema, senha do dono e token de leitura dos registros do Cloudflare |
 | Segredos do Worker, no painel do Cloudflare | `JWT_SECRET` e `SETTINGS_ENCRYPTION_KEY` |
 | Dentro do sistema, cifrados | Credenciais que cada empresa cadastra (ex.: certificado A1, tokens de integração) |
 
