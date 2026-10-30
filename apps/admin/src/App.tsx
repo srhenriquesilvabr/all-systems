@@ -1,14 +1,11 @@
 import { SessionContext, useSession } from '@all/module-sdk/web';
-import { PublicBookingPage } from '@all/scheduling/web';
-import { PublicJobsPage } from '@all/recruiting/web';
-import { PublicSimulatorPage } from '@all/consortium/web';
-import { PublicStorePage } from '@all/store/web';
-import { Spinner } from '@all/ui';
-import { useContext, type ComponentType } from 'react';
+import { Alert, Button, Spinner } from '@all/ui';
+import { useQuery } from '@tanstack/react-query';
+import { lazy, Suspense, useContext, type ComponentType, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router';
 import { useAuth } from './auth/auth';
 import { AppLayout } from './layout/AppLayout';
-import { webModules } from './modules';
+import { useWebModules } from './modules';
 import { AuditPage } from './pages/AuditPage';
 import { CompanyPage } from './pages/CompanyPage';
 import { EditCustomerPage, NewCustomerPage } from './pages/customers/CustomerFormPage';
@@ -24,41 +21,59 @@ import { HomePage } from './pages/HomePage';
 import { LoginPage } from './pages/LoginPage';
 import { RolesPage } from './pages/RolesPage';
 import { SetPasswordPage } from './pages/SetPasswordPage';
+import { SignupPage } from './pages/SignupPage';
 import { Forbidden, NotFound } from './pages/StatusPages';
 import { UsersPage } from './pages/UsersPage';
 import { TeamPage } from './pages/team/TeamPage';
+
+// Páginas públicas: cada visitante baixa só a página que abriu.
+const PublicBookingPage = lazy(() => import('@all/scheduling/web').then((m) => ({ default: m.PublicBookingPage })));
+const PublicJobsPage = lazy(() => import('@all/recruiting/web').then((m) => ({ default: m.PublicJobsPage })));
+const PublicSimulatorPage = lazy(() => import('@all/consortium/web').then((m) => ({ default: m.PublicSimulatorPage })));
+const PublicStorePage = lazy(() => import('@all/store/web').then((m) => ({ default: m.PublicStorePage })));
 
 /**
  * Primeiro trecho dos caminhos do consórcio no admin (cotas, leads…). Qualquer outro em
  * /consorcio/<trecho> é o simulador público de uma empresa (o trecho é o slug dela).
  */
-const consortiumAdminSegments = new Set(
-  webModules
-    .flatMap((m) => m.routes.map((r) => r.path))
-    .filter((p) => p.startsWith('consorcio/'))
-    .map((p) => p.split('/')[1]!),
-);
+async function loadConsortiumAdminSegments() {
+  const { consortiumWeb } = await import('@all/consortium/web');
+  return consortiumWeb.routes.map((r) => r.path).filter((p) => p.startsWith('consorcio/')).map((p) => p.split('/')[1]!);
+}
+
+function FullScreenSpinner({ label }: { label?: string }) {
+  return (
+    <div className="flex min-h-screen items-center justify-center">
+      <Spinner label={label} />
+    </div>
+  );
+}
+
+const PublicPage = ({ children }: { children: ReactNode }) => <Suspense fallback={<FullScreenSpinner />}>{children}</Suspense>;
 
 export function App() {
   const { status } = useAuth();
   const session = useContext(SessionContext);
   const location = useLocation();
+  const webModules = useWebModules();
+  const consortiumSlug = /^\/consorcio\/([^/]+)\/?$/.exec(location.pathname)?.[1];
+  const consortiumAdmin = useQuery({ queryKey: ['consortium-admin-segments'], queryFn: loadConsortiumAdminSegments, enabled: !!consortiumSlug, staleTime: Infinity });
 
   // Agendamento online: página pública, não depende de sessão.
   if (location.pathname.startsWith('/agendar/')) {
     return (
       <Routes>
-        <Route path="/agendar/:slug" element={<PublicBookingPage />} />
+        <Route path="/agendar/:slug" element={<PublicPage><PublicBookingPage /></PublicPage>} />
       </Routes>
     );
   }
 
   // Simulador de consórcio da empresa: página pública, não depende de sessão.
-  const consortiumSlug = /^\/consorcio\/([^/]+)\/?$/.exec(location.pathname)?.[1];
-  if (consortiumSlug && !consortiumAdminSegments.has(consortiumSlug)) {
+  if (consortiumSlug && consortiumAdmin.isPending) return <FullScreenSpinner />;
+  if (consortiumSlug && !consortiumAdmin.data?.includes(consortiumSlug)) {
     return (
       <Routes>
-        <Route path="/consorcio/:slug" element={<PublicSimulatorPage />} />
+        <Route path="/consorcio/:slug" element={<PublicPage><PublicSimulatorPage /></PublicPage>} />
       </Routes>
     );
   }
@@ -67,8 +82,8 @@ export function App() {
   if (location.pathname.startsWith('/vagas/')) {
     return (
       <Routes>
-        <Route path="/vagas/:slug" element={<PublicJobsPage />} />
-        <Route path="/vagas/:slug/:jobId" element={<PublicJobsPage />} />
+        <Route path="/vagas/:slug" element={<PublicPage><PublicJobsPage /></PublicPage>} />
+        <Route path="/vagas/:slug/:jobId" element={<PublicPage><PublicJobsPage /></PublicPage>} />
       </Routes>
     );
   }
@@ -77,25 +92,34 @@ export function App() {
   if (location.pathname.startsWith('/loja/')) {
     return (
       <Routes>
-        <Route path="/loja/:slug" element={<PublicStorePage />} />
-        <Route path="/loja/:slug/produto/:productId" element={<PublicStorePage />} />
-        <Route path="/loja/:slug/carrinho" element={<PublicStorePage />} />
-        <Route path="/loja/:slug/finalizar" element={<PublicStorePage />} />
+        <Route path="/loja/:slug" element={<PublicPage><PublicStorePage /></PublicPage>} />
+        <Route path="/loja/:slug/produto/:productId" element={<PublicPage><PublicStorePage /></PublicPage>} />
+        <Route path="/loja/:slug/carrinho" element={<PublicPage><PublicStorePage /></PublicPage>} />
+        <Route path="/loja/:slug/finalizar" element={<PublicPage><PublicStorePage /></PublicPage>} />
       </Routes>
     );
   }
 
   if (status === 'loading') {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <Spinner label="Abrindo sua sessão…" />
-      </div>
-    );
+    return <FullScreenSpinner label="Abrindo sua sessão…" />;
+  }
+
+  // Telas do ramo e dos módulos da empresa: baixadas depois do login, só as que ela usa.
+  if (status === 'authenticated' && !webModules.data) {
+    if (webModules.isError) {
+      return (
+        <div className="mx-auto max-w-md space-y-4 p-8">
+          <Alert>Não foi possível carregar as telas. Verifique sua conexão.</Alert>
+          <Button onClick={() => window.location.reload()}>Tentar de novo</Button>
+        </div>
+      );
+    }
+    return <FullScreenSpinner label="Abrindo sua empresa…" />;
   }
 
   // Só os módulos ativos no tenant viram rotas; os demais simplesmente não existem no admin.
   const activeModules = new Set(session?.modules.map((m) => m.key));
-  const moduleRoutes = webModules
+  const moduleRoutes = (webModules.data ?? [])
     .filter((m) => activeModules.has(m.key))
     .flatMap((m) =>
       m.routes.map((r) => (
@@ -107,6 +131,7 @@ export function App() {
     <Routes>
       <Route path="/esqueci-senha" element={<ForgotPasswordPage />} />
       <Route path="/definir-senha" element={<SetPasswordPage />} />
+      <Route path="/contratar" element={status === 'anonymous' ? <SignupPage /> : <Navigate to="/" replace />} />
       {status === 'anonymous' ? (
         <>
           <Route path="/entrar" element={<LoginPage />} />

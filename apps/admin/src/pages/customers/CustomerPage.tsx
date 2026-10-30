@@ -3,7 +3,7 @@ import { Alert, Badge, Button, Card, Checkbox, EmptyState, PageHeader, Spinner, 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { webModules } from '../../modules';
+import { useWebModules } from '../../modules';
 import { CustomerSegment } from '../segmentation/SegmentsPage';
 import { useCustomFields } from './CustomerForm';
 import { formatDocument, formatPhone } from './format';
@@ -33,7 +33,8 @@ export function CustomerPage() {
 
   // Abas que os módulos ativos acrescentam à ficha (ex.: "Ordens de serviço").
   const active = new Set(session.modules.map((m) => m.key));
-  const moduleTabs = webModules
+  const webModules = useWebModules();
+  const moduleTabs = (webModules.data ?? [])
     .filter((m) => active.has(m.key))
     .flatMap((m) => m.customerTabs ?? [])
     .filter((t) => !t.permission || session.permissions.includes(t.permission));

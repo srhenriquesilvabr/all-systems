@@ -47,7 +47,8 @@ describe('isolamento entre tenants (RLS)', () => {
           'whatsapp_numbers', -- o webhook da Meta chega sem tenant: número → empresa
           'whatsapp_inbound',  -- idem: deduplicação das mensagens recebidas
           'bank_webhook_routes', -- o webhook do banco chega sem tenant: conexão → empresa
-          'cons_lead_routes' -- os webhooks de leads (Meta/Google) chegam sem tenant: canal/página → empresa
+          'cons_lead_routes', -- os webhooks de leads (Meta/Google) chegam sem tenant: canal/página → empresa
+          'tenant_signups' -- o cadastro público chega sem tenant; guarda só o hash do IP e o consentimento
         )
     `);
     expect(rows.length).toBeGreaterThan(5);

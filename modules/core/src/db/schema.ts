@@ -66,6 +66,24 @@ export const tenants = pgTable(
   () => [check('tenants_brand_color_chk', sql`brand_color ~ '^#[0-9a-f]{6}$'`)],
 );
 
+/**
+ * Cadastros pelo site público: prova do consentimento e base do limite por IP. O cadastro chega
+ * sem tenant no contexto, então a tabela fica fora do RLS (só a guarda o hash do IP, nunca o IP).
+ */
+export const tenantSignups = pgTable(
+  'tenant_signups',
+  {
+    id: id(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    ipHash: text('ip_hash'),
+    consentVersion: text('consent_version').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('tenant_signups_ip_idx').on(t.ipHash, t.createdAt), index('tenant_signups_created_idx').on(t.createdAt)],
+);
+
 /** Espelho dos manifestos instalados; sincronizado no boot da API. */
 export const modules = pgTable('modules', {
   key: text('key').primaryKey(),

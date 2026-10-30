@@ -9,6 +9,8 @@ const envSchema = z.object({
   MAIL_FROM: z.string().default('Palmer Tech <nao-responda@palmertech.local>'),
   /** Envio de e-mail pela API do Resend (produção). Sem ela, usa o SMTP_URL. */
   RESEND_API_KEY: z.string().optional(),
+  /** Teto de empresas novas por dia pelo cadastro público; 0 fecha o cadastro. */
+  SIGNUP_DAILY_LIMIT: z.coerce.number().int().min(0).default(50),
   /** Arquivos enviados (fotos), em disco. Em produção (Cloudflare) o storage é o R2. */
   STORAGE_DIR: z.string().default('.storage'),
   /** Chave (32 bytes, base64) para cifrar segredos das configurações. Obrigatória em produção. */
@@ -20,6 +22,7 @@ export class CoreConfig {
   nodeEnv!: 'development' | 'test' | 'production';
   databaseUrl!: string;
   jwtSecret!: string;
+  signupDailyLimit!: number;
   adminUrl!: string;
   smtpUrl!: string;
   mailFrom!: string;
@@ -45,6 +48,7 @@ export function loadConfig(env: Record<string, string | undefined>): CoreConfig 
     nodeEnv: e.NODE_ENV,
     databaseUrl: e.DATABASE_URL,
     jwtSecret: e.JWT_SECRET,
+    signupDailyLimit: e.SIGNUP_DAILY_LIMIT,
     adminUrl: e.ADMIN_URL,
     smtpUrl: e.SMTP_URL,
     mailFrom: e.MAIL_FROM,

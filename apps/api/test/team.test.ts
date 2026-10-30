@@ -275,7 +275,8 @@ describe('pessoas da equipe', () => {
       const { body: catalog } = await s.as('get', '/modules/catalog').expect(200);
       const keys = catalog.map((m: { key: string }) => m.key);
       expect(keys).toContain('hr');
-      expect(keys).not.toContain('hr_consulting');
+      expect(keys).toContain('hr_consulting');
+      expect(keys).not.toContain('core.team');
     });
   });
 });

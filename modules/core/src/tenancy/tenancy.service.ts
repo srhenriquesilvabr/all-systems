@@ -1,6 +1,6 @@
 import { uuidv7, type Tx } from '@all/db';
 import { ModuleRegistry } from '@all/module-sdk';
-import { BadRequestException, Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { hashPassword as hash } from '../common/password';
 import { and, eq, ne, sql } from 'drizzle-orm';
 import { AuditService } from '../audit/audit.service';
@@ -20,6 +20,9 @@ export interface CreateTenantInput {
   legalName?: string;
   document?: string;
   packageKey?: string;
+  status?: 'trial' | 'active';
+  /** Cadastro público: e-mail ainda não confirmado, e a conta não pode pegar carona em usuário existente. */
+  selfService?: boolean;
   /** Módulos contratados (além do core). Dependências são ativadas automaticamente. */
   modules: string[];
   owner: { email: string; name: string; /** Só para seed/testes; o normal é o dono criar a senha pelo convite. */ password?: string };
@@ -138,6 +141,7 @@ export class TenancyService implements OnApplicationBootstrap {
         legalName: input.legalName,
         document: input.document,
         packageKey: input.packageKey,
+        status: input.status ?? 'active',
         slug: await this.uniqueSlug(tx, input.name),
       });
 
@@ -150,10 +154,11 @@ export class TenancyService implements OnApplicationBootstrap {
         .returning();
 
       let [user] = await tx.select().from(users).where(eq(users.email, email));
+      if (user && input.selfService) throw new ConflictException({ code: 'EMAIL_IN_USE', message: 'Este e-mail já tem uma conta. Entre com ele ou use outro e-mail.' });
       user ??= (
         await tx
           .insert(users)
-          .values({ email, name: input.owner.name, passwordHash, emailVerifiedAt: passwordHash ? new Date() : null })
+          .values({ email, name: input.owner.name, passwordHash, emailVerifiedAt: passwordHash && !input.selfService ? new Date() : null })
           .returning()
       )[0]!;
 

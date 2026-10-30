@@ -40,3 +40,5 @@ export { coreManifests, OWNER_ROLE } from './manifests';
 export * as coreSchema from './db/schema';
 export * as customersSchema from './customers/schema';
 export * as financeSchema from './finance/schema';
+
+export { IsolateThrottlerStorage } from './common/isolate-throttler-storage';

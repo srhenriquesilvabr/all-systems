@@ -1,20 +1,15 @@
-import { api, useSession, type ModuleSummary } from '@all/module-sdk/web';
-import { Badge, Card, cn } from '@all/ui';
+import { api, ApiError, useSession, type ModuleSummary } from '@all/module-sdk/web';
+import { Alert, Badge, Button, Card, cn } from '@all/ui';
 import { useQuery } from '@tanstack/react-query';
-import { Building2, CircleCheck, LayoutGrid, MessageCircle, Puzzle, Zap, type LucideIcon } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { Building2, CircleCheck, LayoutGrid, Puzzle, Store, Zap, type LucideIcon } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
+import { useAuth } from '../auth/auth';
 import { iconFor } from '../layout/icons';
 
 /** Ramo da empresa = a vertical (lavanderia, advocacia…). Módulo = o que se acrescenta a ele (integrações e recursos). */
-const layerLabel: Record<string, string> = { integration: 'Integração', shared: 'Módulo' };
+const layerLabel: Record<string, string> = { vertical: 'Ramo', integration: 'Integração', shared: 'Módulo' };
 const isModule = (m: ModuleSummary) => m.layer === 'integration' || m.layer === 'shared';
-
-/**
- * WhatsApp comercial da Palmer Tech (ex.: "https://wa.me/5511999999999"). Enquanto não for
- * definido, o botão aparece mas não leva a lugar nenhum.
- */
-const SALES_WHATSAPP_URL: string | null = null;
 
 export function HomePage() {
   const session = useSession();
@@ -32,6 +27,8 @@ export function HomePage() {
     staleTime: Infinity,
   });
   const available = (catalog.data ?? []).filter((m) => !active.has(m.key));
+  const availableBranches = available.filter((m) => m.layer === 'vertical');
+  const availableModules = available.filter(isModule);
 
   return (
     <div className="space-y-8">
@@ -93,22 +90,8 @@ export function HomePage() {
         )}
       </Section>
 
-      {session.isOwner && available.length > 0 && (
-        <Section icon={Puzzle} title="Disponíveis para contratar" description="Fale com a Palmer Tech pelo WhatsApp para ativar um módulo nesta empresa.">
-          <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {available.map((m) => (
-              <li key={m.key}>
-                <ModuleCard
-                  module={m}
-                  muted
-                  status={<Badge>{layerLabel[m.layer] ?? m.layer}</Badge>}
-                  action={<HireButton module={m.name} tenant={session.tenant.name} />}
-                />
-              </li>
-            ))}
-          </ul>
-        </Section>
-      )}
+      {session.isOwner && <HireSection icon={Store} title="Ramos disponíveis para contratar" description="Um ramo adicional traz as telas daquele negócio para esta empresa." items={availableBranches} />}
+      {session.isOwner && <HireSection icon={Puzzle} title="Módulos disponíveis para contratar" description="Recursos que se somam ao que a empresa já usa." items={availableModules} />}
     </div>
   );
 }
@@ -155,26 +138,59 @@ function ModuleCard({ module: m, status, muted, action }: { module: ModuleSummar
   );
 }
 
-function HireButton({ module, tenant }: { module: string; tenant: string }) {
-  const className =
-    'inline-flex h-8 items-center gap-1.5 rounded-full bg-[#25d366] px-3.5 text-sm font-medium text-[#0b3d20] transition-colors hover:bg-[#1fbe5b]';
-  const content = (
-    <>
-      <MessageCircle className="size-4" aria-hidden />
-      Contratar pelo WhatsApp
-    </>
+function HireSection({ icon, title, description, items }: { icon: LucideIcon; title: string; description: string; items: ModuleSummary[] }) {
+  if (!items.length) return null;
+  return (
+    <Section icon={icon} title={title} description={description}>
+      <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {items.map((m) => (
+          <li key={m.key}>
+            <ModuleCard module={m} muted status={<Badge>{layerLabel[m.layer] ?? m.layer}</Badge>} action={<HireButton module={m} />} />
+          </li>
+        ))}
+      </ul>
+    </Section>
   );
-  if (!SALES_WHATSAPP_URL) {
+}
+
+/** Contratação em dois passos, na própria página: ativa na hora e o menu já traz as telas novas. */
+function HireButton({ module }: { module: ModuleSummary }) {
+  const { reloadSession } = useAuth();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function hire() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/modules/${encodeURIComponent(module.key)}/activate`, { method: 'POST' });
+      await reloadSession();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Não foi possível contratar. Tente novamente.');
+      setBusy(false);
+    }
+  }
+
+  if (!confirming) {
     return (
-      <button type="button" className={className} title="Em breve">
-        {content}
-      </button>
+      <Button size="sm" onClick={() => setConfirming(true)}>
+        Contratar
+      </Button>
     );
   }
-  const text = `Olá! Quero contratar o módulo ${module} para a empresa ${tenant}.`;
   return (
-    <a href={`${SALES_WHATSAPP_URL}?text=${encodeURIComponent(text)}`} target="_blank" rel="noreferrer" className={className}>
-      {content}
-    </a>
+    <div className="space-y-2">
+      {error && <Alert>{error}</Alert>}
+      <p className="text-sm">Ativar {module.name} nesta empresa agora?</p>
+      <div className="flex gap-2">
+        <Button size="sm" loading={busy} onClick={hire}>
+          Confirmar
+        </Button>
+        <Button size="sm" variant="secondary" disabled={busy} onClick={() => setConfirming(false)}>
+          Cancelar
+        </Button>
+      </div>
+    </div>
   );
 }

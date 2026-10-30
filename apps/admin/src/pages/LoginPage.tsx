@@ -71,6 +71,12 @@ export function LoginPage() {
             Esqueci minha senha
           </Link>
         </p>
+        <p className="text-center text-sm text-fg-muted">
+          Ainda não é cliente?{' '}
+          <Link to="/contratar" className="text-brand-700 hover:underline">
+            Contratar a Palmer
+          </Link>
+        </p>
       </form>
     </AuthShell>
   );

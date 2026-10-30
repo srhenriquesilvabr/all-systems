@@ -169,6 +169,13 @@
       "when": 1793209485155,
       "tag": "0023_lojinha_consorcio_captacao_fiscal",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1793362974390,
+      "tag": "0024_cadastro_publico",
+      "breakpoints": true
     }
   ]
 }

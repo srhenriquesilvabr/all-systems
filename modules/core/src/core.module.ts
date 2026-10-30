@@ -3,6 +3,7 @@ import { DynamicModule, Global, INestApplication, Module } from '@nestjs/common'
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { IsolateThrottlerStorage } from './common/isolate-throttler-storage';
 import cookieParser from 'cookie-parser';
 import type { NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';
@@ -35,6 +36,7 @@ import { SegmentationController } from './segmentation/segmentation.controller';
 import { SegmentationService } from './segmentation/segmentation.service';
 import { ModuleSettingsService } from './tenancy/module-settings.service';
 import { ModulesController } from './tenancy/modules.controller';
+import { SignupController } from './tenancy/signup.controller';
 import { TenantDb } from './db/tenant-db';
 import { MailService } from './mail/mail.service';
 import { ModuleHooks } from './tenancy/module-hooks';
@@ -73,6 +75,7 @@ export class CoreModule {
         JwtModule.register({ secret: config.jwtSecret }),
         ThrottlerModule.forRoot({
           throttlers: [{ ttl: 60_000, limit: 300 }],
+          storage: new IsolateThrottlerStorage(),
           skipIf: () => config.nodeEnv === 'test',
         }),
       ],
@@ -89,6 +92,7 @@ export class CoreModule {
         FinanceController,
         FilesController,
         ModulesController,
+        SignupController,
         SegmentationController,
         TeamController,
         CepController,
